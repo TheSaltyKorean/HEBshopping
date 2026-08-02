@@ -67,3 +67,9 @@ Thumbs.db
 infra/build/
 infra/.terraform/
 infra/terraform.tfvars
+# Saved plans embed sensitive state — including random_password.mcp_token.result, the
+# only credential protecting the public MCP URL. The scanner cannot recognise it either:
+# it is a bare random string with no Bearer prefix and no recognisable shape.
+tfplan
+*.tfplan
+*.tfplan.*

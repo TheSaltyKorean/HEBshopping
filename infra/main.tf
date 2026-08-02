@@ -198,11 +198,15 @@ resource "aws_lambda_function" "mcp" {
   timeout     = 15 # no Alexa ceiling here; an agent can wait a little longer
   memory_size = 512
 
-  # Anyone can reach a Function URL, and every request resolves the SSM token before the
-  # bearer check can reject it — so an unauthenticated caller could otherwise scale cold
-  # containers, burn SSM throughput, and consume the account's unreserved concurrency.
-  # A household's MCP usage is one request at a time; five is generous.
-  reserved_concurrent_executions = var.enable_mcp_url ? 5 : -1
+  # One at a time, deliberately.
+  #
+  # Two jobs. It stops an unauthenticated caller scaling cold containers and burning SSM
+  # throughput — every request resolves the token before the bearer check can reject it.
+  # And it makes the in-process throttle mean something: `HebClient` caps concurrency and
+  # spaces requests *within* an invocation, so N parallel Lambdas would be N independent
+  # throttles and the politeness guarantee toward Imperva would quietly become N times
+  # weaker. A household's MCP usage is one request at a time anyway.
+  reserved_concurrent_executions = var.enable_mcp_url ? 1 : -1
 
   environment {
     variables = {
@@ -306,6 +310,26 @@ resource "aws_sns_topic_subscription" "email" {
 resource "aws_cloudwatch_log_metric_filter" "session_expired" {
   name           = "${local.name}-session-expired"
   log_group_name = aws_cloudwatch_log_group.alexa.name
+  pattern        = "\"HebError SESSION_EXPIRED\""
+
+  metric_transformation {
+    name          = "SessionExpired"
+    namespace     = "HebShoppingList"
+    value         = "1"
+    default_value = "0"
+  }
+}
+
+/**
+ * The same signal from the MCP endpoint.
+ *
+ * A metric filter watches one log group, so watching only Alexa's meant an MCP-only
+ * deployment got no expiry alert at all — the tool returns an error result, which Lambda
+ * still records as a successful invocation, so neither alarm would ever fire.
+ */
+resource "aws_cloudwatch_log_metric_filter" "session_expired_mcp" {
+  name           = "${local.name}-session-expired-mcp"
+  log_group_name = aws_cloudwatch_log_group.mcp.name
   pattern        = "\"HebError SESSION_EXPIRED\""
 
   metric_transformation {

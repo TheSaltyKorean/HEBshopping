@@ -38,6 +38,15 @@ function describeItem(item: ListItem): string {
  * say so rather than implying a retry might work.
  */
 function toErrorText(error: unknown): TextResult {
+  if (isHebError(error)) {
+    // The code only — never the message or details, which carry list contents. This exact
+    // string is what the CloudWatch metric filter matches, so an expired session raises
+    // the same alert from the MCP endpoint as from Alexa. Without it, an MCP-only
+    // deployment gets no expiry notification at all: the tool returns `isError`, which
+    // Lambda still counts as a successful invocation.
+    console.error(`HebError ${error.code}`);
+  }
+
   if (!isHebError(error)) {
     return text(`Unexpected error: ${error instanceof Error ? error.message : String(error)}`, true);
   }

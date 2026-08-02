@@ -102,6 +102,12 @@ const MEASURE_WORDS = new Set([
   // is one carton — the number belongs to the product name, exactly as in "two percent
   // milk". Getting these wrong multiplies a whole shop.
   'pack', 'packs', 'pk', 'count', 'ct', 'case', 'cases', 'dozen', 'roll', 'rolls',
+  // Abbreviated metric and volume units. Alexa transcribes "2 L soda" and "500 ml water"
+  // exactly like that, and without these the size becomes the quantity — two litres of
+  // soda turns into two of whatever "soda" matched.
+  'l', 'ml', 'g', 'kg', 'gram', 'grams', 'kilogram', 'kilograms',
+  'milliliter', 'milliliters', 'millilitre', 'millilitres', 'litre', 'liters', 'litres',
+  'gal', 'qt', 'pt', 'pint', 'pints', 'quarts', 'gallons', 'fl',
 ]);
 
 /**

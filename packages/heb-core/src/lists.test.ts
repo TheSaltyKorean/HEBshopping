@@ -231,3 +231,21 @@ describe('removal reconciliation', () => {
     await expect(ops.removeItem({ lineId: 'line-1' })).resolves.toBeUndefined();
   });
 });
+
+describe('sole-line removal needs the head noun', () => {
+  it('does not delete "organic chocolate milk" for "organic chocolate cake"', async () => {
+    // Two of three tokens match, comfortably over the coverage floor — but "cake" is what
+    // names the thing, and the shortcut deletes without confirmation.
+    const ranked = await opsWithList('H-E-B Organic Chocolate Milk, 1/2 gal').rankLines(
+      'organic chocolate cake',
+    );
+    expect(ranked[0]?.confident ?? false).toBe(false);
+  });
+
+  it('still short-circuits when the head noun agrees', async () => {
+    const ranked = await opsWithList('H-E-B Organic Chocolate Milk, 1/2 gal').rankLines(
+      'chocolate milk',
+    );
+    expect(ranked[0]?.confident).toBe(true);
+  });
+});

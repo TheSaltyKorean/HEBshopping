@@ -417,3 +417,18 @@ describe('package sizes survive tokenisation', () => {
     expect(tokenize('Oatly, 1/2 gal.')).toEqual(['oatly', '1/2', 'gal']);
   });
 });
+
+describe('abbreviated units are sizes, not counts', () => {
+  it.each(['2 l soda', '500 ml water', '5 kg rice', '2 qt cream'])(
+    '"%s" is one item',
+    (phrase) => {
+      // Alexa transcribes package sizes exactly like this; read as a count, "2 L soda"
+      // orders two of whatever "soda" happened to match.
+      expect(parseSpokenRequest(phrase).quantity).toBe(1);
+    },
+  );
+
+  it('still counts plain items', () => {
+    expect(parseSpokenRequest('5 bananas')).toEqual({ quantity: 5, query: 'bananas' });
+  });
+});

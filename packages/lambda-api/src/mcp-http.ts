@@ -121,6 +121,11 @@ function unauthorized(): FunctionUrlResult {
 }
 
 export const handler = async (event: FunctionUrlEvent): Promise<FunctionUrlResult> => {
+  // Budget from the moment the invocation starts, not from when the HEB client is built.
+  // Authentication can spend up to its own timeout first, and the function's hard limit is
+  // 15s — so a slow-but-successful SSM lookup followed by a full HEB budget could still
+  // reach the Lambda timeout and return no JSON-RPC response at all.
+  const startedAt = Date.now();
   // Authenticate before parsing anything. An unauthenticated caller should not be able to
   // reach the JSON-RPC layer at all, let alone the HEB session behind it.
   const presented = (event.headers?.['authorization'] ?? '').replace(/^Bearer\s+/i, '');
@@ -147,7 +152,10 @@ export const handler = async (event: FunctionUrlEvent): Promise<FunctionUrlResul
   const server = createHebMcpServer({
     createListOps: () =>
       new HebListOps({
-        client: new HebClient({ store, budgetMs: MCP_BUDGET_MS }),
+        client: new HebClient({
+          store,
+          budgetMs: Math.max(1_000, MCP_BUDGET_MS - (Date.now() - startedAt)),
+        }),
         ...(pinnedList === undefined ? {} : { listId: pinnedList }),
       }),
   });

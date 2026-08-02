@@ -142,7 +142,7 @@ export class HebListOps implements ListOps {
     // A refused read returns a different union member carrying only `__typename`, and the
     // `?? []` below would turn that into "this account has no shopping lists" — a
     // confident, wrong, and unactionable answer to a question we never got to ask.
-    assertUnion(data.getShoppingListsV2, 'ShoppingListsWithHeaderPageV2', 'list your lists');
+    assertReadableList(data.getShoppingListsV2);
 
     return (data.getShoppingListsV2.lists ?? []).map((list) => ({
       listId: list.id,
@@ -428,7 +428,22 @@ export class HebListOps implements ListOps {
       // before the response was lost. A bare failure makes the surface say "try again",
       // and the retry finds that line and *increments* it — so "add milk" twice leaves
       // two. Look before inviting a retry.
-      added = (await this.getList(listId)).items.find((item) => item.product?.id === productId);
+      // If the reconciliation read *also* fails — most likely because the first timeout
+      // exhausted the invocation budget — we genuinely do not know what happened. Saying
+      // "try again" is the one answer that can make it worse, since a committed line gets
+      // incremented by the retry.
+      let current: HebList;
+      try {
+        current = await this.getList(listId);
+      } catch {
+        throw new HebError(
+          'UPSTREAM_ERROR',
+          'HEB did not confirm the add. Check the list before asking again — it may have worked.',
+          { cause: error, retryable: false, details: { indeterminate: true } },
+        );
+      }
+
+      added = current.items.find((item) => item.product?.id === productId);
       if (added === undefined) throw error;
       // Deliberately falls through rather than returning: the mutation only ever creates
       // one unit, so "add five avocados" still needs the quantity step below. Returning
@@ -582,9 +597,17 @@ export class HebListOps implements ListOps {
     // "remove chocolate cake" against a list holding only "chocolate milk" into a silent
     // deletion of the milk. The shortcut therefore still requires the request to be
     // substantially accounted for by the line.
+    // Coverage alone is not enough. "Organic chocolate cake" against a list holding only
+    // "organic chocolate milk" covers two of three tokens — comfortably over the floor —
+    // and the shortcut would delete the milk without asking. The *head* token is what
+    // names the thing, so it has to match as well.
+    const spokenTokens = meaningfulTokens(spoken);
+    const head = spokenTokens.at(-1);
     const soleLine =
       list.items.length === 1 &&
-      coverage(meaningfulTokens(spoken), match.product) >= SOLE_LINE_COVERAGE;
+      coverage(spokenTokens, match.product) >= SOLE_LINE_COVERAGE &&
+      head !== undefined &&
+      coverage([head], match.product) === 1;
 
     const confident = soleLine || isConfident(match);
     const byLineId = new Map(list.items.map((item) => [item.lineId, item] as const));
@@ -617,6 +640,28 @@ const MUTATION_SUCCESS_TYPENAME = 'ShoppingListV2';
  * results, an empty shopping list — which is worse than an error, because the user stops
  * looking for the problem.
  */
+/**
+ * A refused list read is almost always a dead session — say so.
+ *
+ * Classifying it as a generic upstream failure has three consequences that all point the
+ * wrong way: Alexa suggests retrying something no retry can fix, the CloudWatch expiry
+ * filter never sees `SESSION_EXPIRED` so no alert is sent, and MCP withholds the
+ * login-and-upload guidance that is the actual remedy.
+ */
+function assertReadableList(payload: { __typename?: string } | undefined): void {
+  const typename = payload?.__typename;
+  if (typename === undefined || typename === 'ShoppingListsWithHeaderPageV2') return;
+
+  if (/auth|unauthori|forbidden|session|login|denied/i.test(typename)) {
+    throw new HebError('SESSION_EXPIRED', 'HEB rejected the stored session.', {
+      details: { returned: typename },
+    });
+  }
+  throw new HebError('UPSTREAM_ERROR', 'HEB refused to list your lists.', {
+    details: { returned: typename },
+  });
+}
+
 function assertUnion(
   payload: { __typename?: string } | undefined,
   expected: string,

@@ -399,7 +399,8 @@ function sessionEndedHandler(): RequestHandler {
  */
 const SPEECH_BY_CODE: Readonly<Record<HebErrorCode, string>> = {
   SESSION_EXPIRED:
-    'My H-E-B login has expired. Someone needs to run the login tool on the computer to fix it.',
+    'My H-E-B login has expired. Someone needs to run the login tool on the computer, and ' +
+    'then upload the new session, before I can reach your list again.',
   BOT_CHALLENGE: 'H-E-B is asking me to prove I am not a robot. Please try again in a minute.',
   PRODUCT_NOT_FOUND:
     'I could not find that at your H-E-B. Try naming a brand, since many products here are ' +

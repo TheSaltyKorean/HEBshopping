@@ -80,4 +80,26 @@ describe('rankLines — the sole-line shortcut', () => {
   it('reports nothing on the list when no word matches at all', async () => {
     expect(await opsWithList('H-E-B Chocolate Milk, 1 gal').rankLines('motorcycle tyres')).toEqual([]);
   });
+
+  it('ignores filler when judging whether the sole line was described', async () => {
+    // "the milk" is one meaningful token, not two. Computing coverage from raw tokens
+    // halved the ratio and made a one-item list ask a question it had no business asking.
+    const ranked = await opsWithList('H-E-B Chocolate Milk, 1 gal').rankLines('the milk');
+    expect(ranked[0]?.confident).toBe(true);
+  });
+});
+
+describe('rankLines — removal candidates', () => {
+  it('never offers a line that shares nothing with the request', async () => {
+    // The dialog walks these one at a time and a "yes" deletes. Offering an unrelated line
+    // as the third option means a distracted user can delete their bread by agreeing.
+    const ranked = await opsWithList(
+      'H-E-B Chocolate Milk, 1 gal',
+      'H-E-B Whole Milk, 1 gal',
+      'H-E-B White Bread, 20 oz',
+    ).rankLines('milk');
+
+    expect(ranked.length).toBeGreaterThan(1);
+    for (const entry of ranked) expect(entry.item.text.toLowerCase()).toContain('milk');
+  });
 });

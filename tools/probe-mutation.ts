@@ -92,62 +92,77 @@ async function main(): Promise<void> {
   const lineId = added.item.lineId;
   console.log(`Added throwaway line: ${added.item.text}`);
 
-  const listId = list.listId;
+  // Whatever any attempt returns — success, a refusal union member, or a throw — the
+  // throwaway line must not survive this probe. Attempts B and C run precisely when A
+  // failed to delete it, so falling through without cleanup leaves test data on a real
+  // household list.
+  try {
+    const listId = list.listId;
 
-  console.log('\n══ Attempt A: enums UNQUOTED (proper GraphQL literal syntax) ══');
-  const unquoted = await rawGraphql(session, {
-    operationName: 'DeleteItems',
-    query: `mutation DeleteItems {
-      deleteShoppingListItemsV2(input: {
-        itemIds: ["${lineId}"]
-        listId: "${listId}"
-        page: { sort: CATEGORY, sortDirection: ASC }
-      }) { __typename ... on ShoppingListV2 { id totalItemCount } }
-    }`,
-    variables: {},
-  });
-  console.log(JSON.stringify(unquoted).slice(0, 500));
+    console.log('\n══ Attempt A: enums UNQUOTED (proper GraphQL literal syntax) ══');
+    const unquoted = await rawGraphql(session, {
+      operationName: 'DeleteItems',
+      query: `mutation DeleteItems {
+        deleteShoppingListItemsV2(input: {
+          itemIds: ["${lineId}"]
+          listId: "${listId}"
+          page: { sort: CATEGORY, sortDirection: ASC }
+        }) { __typename ... on ShoppingListV2 { id totalItemCount } }
+      }`,
+      variables: {},
+    });
+    console.log(JSON.stringify(unquoted).slice(0, 500));
 
-  // A refusal is still a truthy object carrying only its __typename, so "we got a payload"
-  // is not "the delete happened" — and returning here would also skip the cleanup below,
-  // leaving the throwaway line on the list.
-  if (unquoted?.data?.deleteShoppingListItemsV2?.__typename === 'ShoppingListV2') {
-    console.log('\n✅ Hand-written mutation WORKS with unquoted enums.');
-    console.log('   → We can stop depending on the persisted-query cache entirely.');
-    return;
+    // A refusal is still a truthy object carrying only its __typename, so "we got a payload"
+    // is not "the delete happened" — and returning here would also skip the cleanup below,
+    // leaving the throwaway line on the list.
+    if (unquoted?.data?.deleteShoppingListItemsV2?.__typename === 'ShoppingListV2') {
+      console.log('\n✅ Hand-written mutation WORKS with unquoted enums.');
+      console.log('   → We can stop depending on the persisted-query cache entirely.');
+      return;
+    }
+
+    console.log('\n══ Attempt B: field name without the V2 suffix ══');
+    const noV2 = await rawGraphql(session, {
+      operationName: 'DeleteItems',
+      query: `mutation DeleteItems {
+        deleteShoppingListItems(input: {
+          itemIds: ["${lineId}"]
+          listId: "${listId}"
+          page: { sort: CATEGORY, sortDirection: ASC }
+        }) { id totalItemCount }
+      }`,
+      variables: {},
+    });
+    console.log(JSON.stringify(noV2).slice(0, 500));
+
+    console.log('\n══ Attempt C: minimal input (no page argument) ══');
+    const minimal = await rawGraphql(session, {
+      operationName: 'DeleteItems',
+      query: `mutation DeleteItems {
+        deleteShoppingListItemsV2(input: {
+          itemIds: ["${lineId}"]
+          listId: "${listId}"
+        }) { id totalItemCount }
+      }`,
+      variables: {},
+    });
+    console.log(JSON.stringify(minimal).slice(0, 500));
+
+    console.log(
+      '\nIf an error names an expected input type, that type name unlocks proper variable\n' +
+        'declarations and we can hand-write every operation.',
+    );
+  } finally {
+    const stillThere = (await lists.getList()).items.some((item) => item.lineId === lineId);
+    if (stillThere) {
+      console.log('\n🧹 removing the throwaway line');
+      await lists.removeItem({ lineId }).catch((error: unknown) => {
+        console.error('⛔ CLEANUP FAILED — remove it by hand:', error);
+        process.exitCode = 1;
+      });
+    }
   }
-
-  console.log('\n══ Attempt B: field name without the V2 suffix ══');
-  const noV2 = await rawGraphql(session, {
-    operationName: 'DeleteItems',
-    query: `mutation DeleteItems {
-      deleteShoppingListItems(input: {
-        itemIds: ["${lineId}"]
-        listId: "${listId}"
-        page: { sort: CATEGORY, sortDirection: ASC }
-      }) { id totalItemCount }
-    }`,
-    variables: {},
-  });
-  console.log(JSON.stringify(noV2).slice(0, 500));
-
-  console.log('\n══ Attempt C: minimal input (no page argument) ══');
-  const minimal = await rawGraphql(session, {
-    operationName: 'DeleteItems',
-    query: `mutation DeleteItems {
-      deleteShoppingListItemsV2(input: {
-        itemIds: ["${lineId}"]
-        listId: "${listId}"
-      }) { id totalItemCount }
-    }`,
-    variables: {},
-  });
-  console.log(JSON.stringify(minimal).slice(0, 500));
-
-  console.log(
-    '\nIf an error names an expected input type, that type name unlocks proper variable\n' +
-      'declarations and we can hand-write every operation.',
-  );
 }
 
 main().catch((error: unknown) => {

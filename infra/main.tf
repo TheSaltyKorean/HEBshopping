@@ -78,7 +78,8 @@ resource "aws_dynamodb_table" "session" {
  * stranger and the household's shopping list.
  *
  * Generated here rather than supplied: a token nobody chose is a token nobody reuses from
- * somewhere else. Read `terraform output -raw mcp_token` to configure a client.
+ * somewhere else. Deliberately not a Terraform output — read it from SSM when needed; see
+ * the Security section of docs/deploy.md.
  */
 resource "random_password" "mcp_token" {
   length  = 48
@@ -232,6 +233,23 @@ resource "aws_lambda_function_url" "mcp" {
   authorization_type = "NONE"
 }
 
+/**
+ * `authorization_type = "NONE"` is not by itself permission to invoke.
+ *
+ * Without this statement AWS rejects every request before the function runs, so the
+ * bearer check never executes and the endpoint is simply dead. The two are independent
+ * layers: AWS decides whether the request reaches the function, and `mcp-http.ts` decides
+ * whether the caller is allowed — this grants only the former.
+ */
+resource "aws_lambda_permission" "mcp_url" {
+  count                  = var.enable_mcp_url ? 1 : 0
+  statement_id           = "AllowFunctionUrlInvoke"
+  action                 = "lambda:InvokeFunctionUrl"
+  function_name          = aws_lambda_function.mcp.function_name
+  principal              = "*"
+  function_url_auth_type = "NONE"
+}
+
 # ---------------------------------------------------------------------------
 # Alerting
 # ---------------------------------------------------------------------------
@@ -250,10 +268,43 @@ resource "aws_sns_topic_subscription" "email" {
 /**
  * The alarm that matters: the H-E-B session has expired and a human must log in again.
  *
- * Errors are the signal because `SESSION_EXPIRED` surfaces as a handled error rather than
- * a crash — the skill still speaks, so nobody would otherwise tell you. Without this the
- * first symptom is someone standing in a shop with an empty list.
+ * It cannot be built on the Lambda `Errors` metric. `SESSION_EXPIRED` is *handled* — the
+ * skill catches it, speaks an apology, and returns normally — so Lambda records a
+ * successful invocation and `Errors` stays at zero. An alarm on that metric would look
+ * healthy for exactly as long as the skill was broken.
+ *
+ * So the signal comes from the log line the error handler already writes. It logs the
+ * code and nothing else, which is both the privacy rule and, conveniently, a stable
+ * string to match.
  */
+resource "aws_cloudwatch_log_metric_filter" "session_expired" {
+  name           = "${local.name}-session-expired"
+  log_group_name = aws_cloudwatch_log_group.alexa.name
+  pattern        = "\"HebError SESSION_EXPIRED\""
+
+  metric_transformation {
+    name          = "SessionExpired"
+    namespace     = "HebShoppingList"
+    value         = "1"
+    default_value = "0"
+  }
+}
+
+resource "aws_cloudwatch_metric_alarm" "session_expired" {
+  alarm_name          = "${local.name}-session-expired"
+  comparison_operator = "GreaterThanThreshold"
+  evaluation_periods  = 1
+  metric_name         = aws_cloudwatch_log_metric_filter.session_expired.metric_transformation[0].name
+  namespace           = aws_cloudwatch_log_metric_filter.session_expired.metric_transformation[0].namespace
+  period              = 300
+  statistic           = "Sum"
+  threshold           = 0
+  alarm_description   = "The H-E-B login has expired. Run `npm run login`, then `npm run push:session`."
+  alarm_actions       = [aws_sns_topic.alerts.arn]
+  treat_missing_data  = "notBreaching"
+}
+
+/** Unhandled crashes, which are a different problem with a different remedy. */
 resource "aws_cloudwatch_metric_alarm" "alexa_errors" {
   alarm_name          = "${local.name}-alexa-errors"
   comparison_operator = "GreaterThanThreshold"
@@ -263,7 +314,7 @@ resource "aws_cloudwatch_metric_alarm" "alexa_errors" {
   period              = 300
   statistic           = "Sum"
   threshold           = 0
-  alarm_description   = "The Alexa skill errored — most often an expired H-E-B login. Run `npm run login` then `npm run push:session`."
+  alarm_description   = "The Alexa Lambda threw. Check /aws/lambda/${local.name}-alexa."
   alarm_actions       = [aws_sns_topic.alerts.arn]
   treat_missing_data  = "notBreaching"
 

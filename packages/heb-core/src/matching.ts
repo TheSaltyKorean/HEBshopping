@@ -57,6 +57,17 @@ const CANONICAL: Readonly<Record<string, string>> = {
   huevos: 'eggs', manteca: 'lard', jugo: 'juice', agua: 'water', cafe: 'coffee',
 };
 
+/**
+ * The tokens matching actually scores: normalised, with filler removed.
+ *
+ * Exported so callers that need to reason about coverage use the *same* tokens rather
+ * than raw `tokenize` output — "the milk" is one meaningful token, not two, and treating
+ * it as two silently halves every coverage ratio computed outside this module.
+ */
+export function meaningfulTokens(text: string): string[] {
+  return tokenize(text).filter((token) => !FILLER.has(token));
+}
+
 /** Fold a token onto its canonical form. Identity for anything not in the map. */
 export function canonical(token: string): string {
   return CANONICAL[token] ?? token;
@@ -389,7 +400,15 @@ export function matchProducts(
         best.semantic,
       ),
     ),
-    alternatives: ranked.slice(1, 5).map((entry) => entry.product),
+    // Only candidates the request actually touches. HEB's search returns a long tail, and
+    // `rankLines` feeds these straight into Alexa's sequential removal dialog — so an
+    // unfiltered slice means "remove milk" can walk down to "Did you mean bread?", and a
+    // "yes" then deletes a line sharing not one word with what was asked for.
+    alternatives: ranked
+      .slice(1)
+      .filter((entry) => coverage(queryTokens, entry.product) > 0)
+      .slice(0, 4)
+      .map((entry) => entry.product),
   };
 }
 

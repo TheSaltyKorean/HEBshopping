@@ -21,8 +21,8 @@ import {
   coverage,
   isConfident,
   matchProducts,
+  meaningfulTokens,
   mergeCandidates,
-  tokenize,
 } from './matching.js';
 import type {
   AddItemInput,
@@ -481,10 +481,7 @@ export class HebListOps implements ListOps {
     // substantially accounted for by the line.
     const soleLine =
       list.items.length === 1 &&
-      coverage(
-        tokenize(spoken).filter((token) => token.length > 0),
-        match.product,
-      ) >= SOLE_LINE_COVERAGE;
+      coverage(meaningfulTokens(spoken), match.product) >= SOLE_LINE_COVERAGE;
 
     const confident = soleLine || isConfident(match);
     const byLineId = new Map(list.items.map((item) => [item.lineId, item] as const));

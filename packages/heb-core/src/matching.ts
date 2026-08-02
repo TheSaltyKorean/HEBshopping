@@ -176,8 +176,22 @@ function tokensMatch(queryToken: string, productToken: string): boolean {
   const query = canonical(queryToken);
   const product = canonical(productToken);
   if (query === product) return true;
+
+  // Plural before length. The prefix rule below needs four characters to avoid nonsense
+  // like "oat" matching "oatmeal-flavoured-anything", but that guard also rejected
+  // "egg"/"eggs" — an entirely ordinary request that then reported the item missing from
+  // a list plainly containing it.
+  if (depluralise(query) === depluralise(product)) return true;
+
   if (query.length < 4 || product.length < 4) return false;
   return product.startsWith(query) || query.startsWith(product);
+}
+
+/** Crude, deliberately: "eggs"→"egg", but "grass" is left alone. */
+function depluralise(token: string): string {
+  return token.length > 3 && token.endsWith('s') && !token.endsWith('ss')
+    ? token.slice(0, -1)
+    : token;
 }
 
 /**

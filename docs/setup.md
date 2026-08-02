@@ -285,8 +285,18 @@ cookies run to a year. When it expires you'll get `SESSION_EXPIRED`.
 npm run login
 ```
 
-Same as Step 5. No restart needed — the session is read from disk on every request, so a
-running MCP client or Lambda picks up the new one on its next call.
+Same as Step 5. No restart needed for **local** clients — the session is read from disk on
+every request, so a running MCP server picks up the new one on its next call.
+
+> **If you have deployed to AWS, there is a second step.** The Lambda reads DynamoDB, not
+> your laptop, so a fresh login is invisible to it until you upload it:
+>
+> ```bash
+> npm run push:session -- --table heb-shopping-session --region us-east-1
+> ```
+>
+> Forgetting this is the most common deployment failure: local commands work while the
+> skill insists the login has expired. See [`deploy.md`](deploy.md).
 
 There is no way to automate this away: HEB's OTP and passkey options can't be replayed
 without a human. Roughly a two-minute chore, once a month.
@@ -316,7 +326,7 @@ Point `HEB_SESSION_PATH` at the same path in your MCP client config.
 
 | Symptom | Cause and fix |
 |---|---|
-| `SESSION_EXPIRED` | Cookies expired. `npm run login`. |
+| `SESSION_EXPIRED` | Cookies expired. `npm run login` — and if you have deployed, `npm run push:session` afterwards, or the Lambda keeps using the old jar. |
 | `npm run login` hangs at "Waiting for a usable session" | You aren't logged in yet in the browser window, or the login didn't finish. It waits 10 minutes, then gives up without writing anything. |
 | `browserType.launch: Executable doesn't exist` | You skipped Step 3. Run `npx playwright install chromium`. |
 | MCP client disconnects immediately | Either you skipped `npm run build`, or something wrote to stdout. Stdout is the protocol channel and must carry MCP messages only. |

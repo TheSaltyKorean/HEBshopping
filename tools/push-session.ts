@@ -13,7 +13,14 @@
  */
 
 import { resolve } from 'node:path';
-import { FileStore, checkSession } from '@heb/core';
+import {
+  FileStore,
+  HebClient,
+  checkSession,
+  getShoppingListsDocument,
+  type SessionState,
+  type Store,
+} from '@heb/core';
 import { DynamoDbStore } from '@heb/lambda-api/store';
 
 interface Options {
@@ -49,6 +56,23 @@ function parseArgs(argv: string[]): Options {
   };
 }
 
+/** Does this jar actually authenticate right now? Checked in memory; nothing is written. */
+async function worksAgainstHeb(candidate: SessionState): Promise<boolean> {
+  const memory: Store = {
+    getSession: async () => candidate,
+    putSession: async () => undefined,
+  };
+  try {
+    const data = await new HebClient({ store: memory }).execute<{
+      getShoppingListsV2?: { __typename?: string };
+    }>(getShoppingListsDocument());
+    // The union member matters: a refused read carries no envelope-level error.
+    return data.getShoppingListsV2?.__typename === 'ShoppingListsWithHeaderPageV2';
+  } catch {
+    return false;
+  }
+}
+
 async function main(): Promise<void> {
   const options = parseArgs(process.argv.slice(2));
   if (options.region !== undefined) process.env['AWS_REGION'] = options.region;
@@ -66,6 +90,17 @@ async function main(): Promise<void> {
   if (!health.usable) {
     console.error(`⛔ The local session is not usable (${health.reason ?? 'unknown'}).`);
     console.error('   Run `npm run login` and try again.');
+    process.exit(1);
+  }
+
+  // Expiry is a client-side claim. HEB can invalidate a jar server-side while every cookie
+  // still looks fresh, and uploading that overwrites a possibly-working deployed session
+  // with a dead one — turning a working skill into a broken one by way of a maintenance
+  // command. So prove it authenticates first.
+  console.log('Checking the local session against HEB …');
+  if (!(await worksAgainstHeb(local))) {
+    console.error('⛔ HEB rejects the local session even though its cookies look current.');
+    console.error('   Run `npm run login` and try again. Nothing was uploaded.');
     process.exit(1);
   }
 

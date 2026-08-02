@@ -18,7 +18,7 @@ import { SSMClient, GetParameterCommand } from '@aws-sdk/client-ssm';
 import { HebClient, HebListOps } from '@heb/core';
 import { WebStandardStreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js';
 import { createHebMcpServer } from '@heb/mcp-server';
-import { INVOCATION_BUDGET_MS, listId, resolveStore } from './config.js';
+import { MCP_BUDGET_MS, listId, resolveStore } from './config.js';
 
 interface FunctionUrlEvent {
   rawPath?: string;
@@ -39,14 +39,32 @@ const store = resolveStore();
 const pinnedList = listId();
 
 /**
- * The bearer token, fetched once per container.
+ * How long a fetched token may be reused.
  *
- * A cold start pays one SSM call; every warm invocation pays nothing. Deliberately not
- * cached across a failure — a transient SSM error should not permanently disable auth.
+ * Caching forever would mean rotation does not revoke anything: a warm container keeps
+ * honouring the *old* token — the one you rotated because it leaked — and rejects the new
+ * one, for as long as AWS keeps that container alive. Since this token is the only thing
+ * guarding a public URL, rotation has to take effect on a schedule we control rather than
+ * on Lambda's recycling whims. Five minutes costs at most a dozen SSM reads an hour.
+ */
+const TOKEN_TTL_MS = 5 * 60 * 1_000;
+
+/**
+ * The bearer token, fetched at most once per TTL per container.
+ *
+ * Deliberately not cached across a failure — a transient SSM error should not permanently
+ * disable authentication.
  */
 let cachedToken: Promise<string> | undefined;
+let cachedAt = 0;
 
 function bearerToken(): Promise<string> {
+  if (cachedToken !== undefined && Date.now() - cachedAt > TOKEN_TTL_MS) {
+    cachedToken = undefined;
+  }
+
+  if (cachedToken === undefined) cachedAt = Date.now();
+
   cachedToken ??= (async () => {
     const name = process.env['HEB_MCP_TOKEN_PARAM'];
     if (name === undefined || name.trim() === '') {
@@ -122,7 +140,7 @@ export const handler = async (event: FunctionUrlEvent): Promise<FunctionUrlResul
   const server = createHebMcpServer({
     createListOps: () =>
       new HebListOps({
-        client: new HebClient({ store, budgetMs: INVOCATION_BUDGET_MS }),
+        client: new HebClient({ store, budgetMs: MCP_BUDGET_MS }),
         ...(pinnedList === undefined ? {} : { listId: pinnedList }),
       }),
   });

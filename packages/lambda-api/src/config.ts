@@ -64,3 +64,13 @@ export function requireSkillId(): string {
  * units is three or four sequential calls.
  */
 export const INVOCATION_BUDGET_MS = 6_500;
+
+/**
+ * The same budget for MCP, where there is no voice ceiling.
+ *
+ * An agent will happily wait; Alexa will not. Reusing the voice limit here would abort
+ * work that the MCP function's own 15s timeout was configured to allow — a broadened
+ * search plus an add plus a quantity mutation, against a slow upstream. Kept under that
+ * timeout so the budget fails first, with a spoken-quality error rather than a hard cut.
+ */
+export const MCP_BUDGET_MS = 12_000;

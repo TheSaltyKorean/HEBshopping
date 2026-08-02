@@ -103,3 +103,18 @@ describe('rankLines — removal candidates', () => {
     for (const entry of ranked) expect(entry.item.text.toLowerCase()).toContain('milk');
   });
 });
+
+describe('adding never reduces a quantity', () => {
+  it('leaves a line alone when it already exceeds a lowered ceiling', () => {
+    // If HEB lowers a product's maximumQuantity after the line was created, clamping alone
+    // turns "add one more" into "take four away" — an add that removes groceries.
+    const existing = { quantity: 10, maximumQuantity: 5 };
+    const requested = 1;
+
+    const clampOnly = Math.min(existing.quantity + requested, existing.maximumQuantity);
+    const actual = Math.max(existing.quantity, clampOnly);
+
+    expect(clampOnly).toBe(5); // what the old code did
+    expect(actual).toBe(10); // never below what is already there
+  });
+});

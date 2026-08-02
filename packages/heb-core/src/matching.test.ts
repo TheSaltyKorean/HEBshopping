@@ -331,3 +331,20 @@ describe('numbers that belong to the product name', () => {
     expect(parseSpokenRequest('two avocados')).toEqual({ quantity: 2, query: 'avocados' });
   });
 });
+
+describe('singular and plural are the same grocery', () => {
+  it.each([
+    ['egg', 'H-E-B Grade AA Large White Eggs, 12 ct'],
+    ['banana', 'Fresh Bananas'],
+    ['tortilla', 'H-E-B Bakery Flour Tortillas, 10 ct'],
+  ])('"%s" matches "%s"', (query, name) => {
+    // The four-character guard on prefix matching also rejected "egg"/"eggs", so an
+    // ordinary request reported the item missing from a list plainly containing it.
+    const match = matchProducts(query, [p('1', name)]);
+    expect(match).not.toBeNull();
+  });
+
+  it('does not collapse words that merely end in s', () => {
+    expect(matchProducts('grass', [p('1', 'Fresh Bananas')])).toBeNull();
+  });
+});

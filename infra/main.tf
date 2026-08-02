@@ -250,6 +250,22 @@ resource "aws_lambda_permission" "mcp_url" {
   function_url_auth_type = "NONE"
 }
 
+/**
+ * The second half of the same grant.
+ *
+ * Function URLs created since October 2025 require `lambda:InvokeFunction` in addition to
+ * `lambda:InvokeFunctionUrl`. `function_url_auth_type` keeps it scoped to invocation
+ * *through the URL* — this does not make the function callable by any other route.
+ */
+resource "aws_lambda_permission" "mcp_url_invoke" {
+  count                  = var.enable_mcp_url ? 1 : 0
+  statement_id           = "AllowFunctionUrlInvokeFunction"
+  action                 = "lambda:InvokeFunction"
+  function_name          = aws_lambda_function.mcp.function_name
+  principal              = "*"
+  function_url_auth_type = "NONE"
+}
+
 # ---------------------------------------------------------------------------
 # Alerting
 # ---------------------------------------------------------------------------

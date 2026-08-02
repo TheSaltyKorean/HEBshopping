@@ -355,7 +355,10 @@ export class HebListOps implements ListOps {
 
     if (existing !== undefined) {
       const ceiling = existing.maximumQuantity ?? Number.POSITIVE_INFINITY;
-      const target = Math.min(existing.quantity + quantity, ceiling);
+      // Never below what is already there. If HEB lowers a product's ceiling after the
+      // line was created, clamping alone turns "add one more" into "take four away" —
+      // an add that silently removes groceries is the worst possible reading of the verb.
+      const target = Math.max(existing.quantity, Math.min(existing.quantity + quantity, ceiling));
       if (target !== existing.quantity) {
         await this.setQuantity(listId, existing.lineId, target);
       }

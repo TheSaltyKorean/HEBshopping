@@ -76,7 +76,24 @@ async function experimentHeadlessHttp(): Promise<void> {
   console.log(`   HTTP ${result.status}`);
   console.log(`   ${result.text.replace(/\n/g, ' ').slice(0, 300)}`);
 
-  if (result.status === 200 && result.text.includes('getShoppingListsV2')) {
+  // This experiment's answer is load-bearing for the whole architecture, so it must not
+  // rest on a substring. A rejected session returns
+  // {"data":{"getShoppingListsV2":null},"errors":[…]} — which *contains* the field name,
+  // and would have printed the definitive "cookies alone are enough" for a dead jar.
+  let succeeded = false;
+  try {
+    const envelope = JSON.parse(result.text) as {
+      data?: { getShoppingListsV2?: { __typename?: string } | null };
+      errors?: unknown[];
+    };
+    succeeded =
+      !envelope.errors?.length &&
+      envelope.data?.getShoppingListsV2?.__typename === 'ShoppingListsWithHeaderPageV2';
+  } catch {
+    succeeded = false;
+  }
+
+  if (result.status === 200 && succeeded) {
     console.log('\n   ✅ YES — cookies alone are enough. The browser-free request path works.');
   } else if (result.text.toLowerCase().includes('pardon our interruption')) {
     console.log('\n   ❌ NO — Imperva blocked it. The request path cannot be browser-free.');

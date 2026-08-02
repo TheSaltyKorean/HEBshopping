@@ -96,7 +96,7 @@ async function probe(): Promise<string> {
     // recording successes long after authentication stopped working. That would be a
     // measurement saying the opposite of the truth, which is worse than no measurement.
     let envelope: {
-      data?: { getShoppingListsV2?: unknown };
+      data?: { getShoppingListsV2?: { __typename?: string } | null };
       errors?: Array<{ message?: string }>;
     };
     try {
@@ -108,7 +108,15 @@ async function probe(): Promise<string> {
     if (envelope.errors?.length) {
       return `FAIL graphql=${(envelope.errors[0]?.message ?? 'unknown').slice(0, 80)}`;
     }
-    if (envelope.data?.getShoppingListsV2 == null) return 'FAIL no-data';
+    // Non-null is not success. A rejected session comes back as a *different* union
+    // member carrying only a __typename and no errors, so accepting any object would let
+    // the soak record OK indefinitely after authentication failed — a longevity
+    // measurement asserting the opposite of the truth.
+    const typename = (envelope.data?.getShoppingListsV2 as { __typename?: string } | null)
+      ?.__typename;
+    if (typename !== 'ShoppingListsWithHeaderPageV2') {
+      return `FAIL rejected=${typename ?? 'null'}`;
+    }
     return 'OK';
   } catch (error) {
     const aborted = error instanceof Error && error.name === 'AbortError';

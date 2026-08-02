@@ -45,6 +45,22 @@ import type {
  */
 const SOLE_LINE_COVERAGE = 0.6;
 
+/** How long the optional purchase-history signal may hold up a command. */
+const PREFERENCE_DEADLINE_MS = 900;
+
+/** Resolve to `fallback` if `work` has not finished in time. Never rejects. */
+async function withDeadline<T>(work: Promise<T>, ms: number, fallback: T): Promise<T> {
+  let timer: ReturnType<typeof setTimeout>;
+  const expiry = new Promise<T>((resolve) => {
+    timer = setTimeout(() => resolve(fallback), ms);
+  });
+  try {
+    return await Promise.race([work.catch(() => fallback), expiry]);
+  } finally {
+    clearTimeout(timer!);
+  }
+}
+
 // ---------------------------------------------------------------------------
 // HEB response shapes (only the fields we consume)
 // ---------------------------------------------------------------------------
@@ -278,7 +294,11 @@ export class HebListOps implements ListOps {
     // no extra wall-clock this way, which matters inside Alexa's ceiling.
     const [candidates, purchasedIds] = await Promise.all([
       this.searchProducts(query, listId),
-      this.purchasedIds(listId),
+      // Bounded separately, and much tighter. This is a *ranking* signal: waiting a full
+      // per-call timeout for it would spend a third of Alexa's whole budget on something
+      // that only reorders near-ties, and could turn a working add into a timeout because
+      // an optional carousel was slow.
+      withDeadline(this.purchasedIds(listId), PREFERENCE_DEADLINE_MS, new Set<string>()),
     ]);
     const match = matchProducts(query, candidates, { purchasedIds });
 
@@ -385,15 +405,27 @@ export class HebListOps implements ListOps {
       return { status: 'already_present', item: { ...existing, quantity: target } };
     }
 
-    const data = await this.client.execute<{ addShoppingListItemsV2: HebListPayload }>(
-      addItemsDocument(listId, [productId]),
-    );
+    this.cachedList = undefined; // the list is about to change underneath us
 
-    this.cachedList = undefined; // the list just changed underneath us
+    let payload: HebListPayload;
+    try {
+      const data = await this.client.execute<{ addShoppingListItemsV2: HebListPayload }>(
+        addItemsDocument(listId, [productId]),
+      );
+      payload = data.addShoppingListItemsV2;
+    } catch (error) {
+      // Indeterminate, exactly like the quantity update: HEB may have created the line
+      // before the response was lost. A bare failure makes the surface say "try again",
+      // and the retry finds that line and *increments* it — so "add milk" twice leaves
+      // two. Look before inviting a retry.
+      const committed = (await this.getList(listId)).items.find(
+        (item) => item.product?.id === productId,
+      );
+      if (committed === undefined) throw error;
+      return { status: 'added', item: committed };
+    }
 
-    const added = toHebList(data.addShoppingListItemsV2).items.find(
-      (item) => item.product?.id === productId,
-    );
+    const added = toHebList(payload).items.find((item) => item.product?.id === productId);
     if (added === undefined) {
       throw new HebError('UPSTREAM_ERROR', 'HEB accepted the add but did not return the item.');
     }
@@ -426,10 +458,16 @@ export class HebListOps implements ListOps {
   }
 
   private async setQuantity(listId: string, lineId: string, quantity: number): Promise<void> {
+    // Invalidated *before* the call, not after. A write whose response is lost has still
+    // very likely happened, so the cache is already wrong the moment the request leaves —
+    // and clearing only on success means any reconciliation afterwards re-reads the
+    // pre-mutation snapshot and concludes, wrongly, that nothing was committed.
+    this.cachedList = undefined;
+
     const data = await this.client.execute<{
       updateShoppingListItemV2?: { __typename?: string };
     }>(updateItemQuantityDocument(listId, lineId, quantity));
-    this.cachedList = undefined;
+
     assertMutationSucceeded(data.updateShoppingListItemV2, 'change the quantity');
   }
 

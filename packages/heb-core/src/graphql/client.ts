@@ -74,8 +74,15 @@ export class HebClient {
   private readonly budgetMs: number | undefined;
   private readonly createdAt: number;
 
-  /** Serialises bursts so we stay a polite guest on an API that never invited us. */
-  private queue: Promise<unknown> = Promise.resolve();
+  /**
+   * Callers waiting for a concurrency slot.
+   *
+   * A single "await the most recent request" promise is not equivalent: with two requests
+   * in flight, the *earlier* one finishing frees a slot that nobody is watching, so a
+   * queued caller idles until the slower request also completes. On the shared stdio
+   * client that delays one MCP tool behind an unrelated slow one for no reason.
+   */
+  private waiters: Array<() => void> = [];
   private active = 0;
   /** When the most recent request *started*, so spacing is measured start-to-start. */
   private lastStart = Number.NEGATIVE_INFINITY;
@@ -236,16 +243,19 @@ export class HebClient {
   private async throttled<T>(task: () => Promise<T>): Promise<T> {
     await this.acquire();
 
-    const run = (async () => {
-      try {
-        return await task();
-      } finally {
-        this.active -= 1;
-      }
-    })();
+    try {
+      return await task();
+    } finally {
+      this.active -= 1;
+      this.wake();
+    }
+  }
 
-    this.queue = run.catch(() => undefined);
-    return run;
+  /** Release everyone waiting; whoever the scheduler resumes first takes the slot. */
+  private wake(): void {
+    const waiting = this.waiters;
+    this.waiters = [];
+    for (const resolve of waiting) resolve();
   }
 
   /**
@@ -275,7 +285,7 @@ export class HebClient {
 
     try {
       while (this.active >= MAX_CONCURRENT_REQUESTS) {
-        await this.queue.catch(() => undefined);
+        await new Promise<void>((resolve) => this.waiters.push(resolve));
       }
       this.active += 1;
 

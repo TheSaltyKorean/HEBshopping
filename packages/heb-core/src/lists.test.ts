@@ -132,3 +132,55 @@ describe('prefix matches must not authorise a silent deletion', () => {
     expect(ranked[0]?.confident).toBe(true);
   });
 });
+
+describe('indeterminate writes are reconciled, not retried blindly', () => {
+  /** A client whose add mutation times out, but where the list shows the line afterwards. */
+  function opsWithLostAddResponse(): HebListOps {
+    let call = 0;
+    const line = {
+      __typename: 'ProductShoppingListItemV2',
+      id: 'line-new',
+      quantity: 1,
+      product: { __typename: 'Product', id: 'p-new', fullDisplayName: 'H-E-B Whole Milk, 1 gal' },
+    };
+
+    const fetchImpl = (async (_url: unknown, init: { body?: string }) => {
+      const body = String(init.body ?? '');
+      if (body.includes('addShoppingListItems')) {
+        call += 1;
+        throw Object.assign(new Error('aborted'), { name: 'AbortError' });
+      }
+      // The read *after* the failed add shows the line HEB committed anyway.
+      const items = call > 0 ? [line] : [];
+      return new Response(
+        JSON.stringify({
+          data: {
+            getShoppingListV2: {
+              __typename: 'ShoppingListV2',
+              id: 'list-1',
+              name: 'Shopping',
+              fulfillment: { store: { storeNumber: 1 } },
+              itemPage: { items },
+            },
+          },
+        }),
+        { status: 200 },
+      );
+    }) as unknown as typeof fetch;
+
+    return new HebListOps({
+      client: new HebClient({ store: storeWith(), fetchImpl, now: () => NOW, minDelayMs: 0 }),
+      listId: 'list-1',
+    });
+  }
+
+  it('reports the committed line instead of inviting a retry', async () => {
+    // The retry is what causes the damage: it finds the line HEB did create and increments
+    // it, so "add milk" once leaves two. Reconciling requires an *uncached* read, which is
+    // why the cache is now invalidated before the mutation rather than after it succeeds.
+    const result = await opsWithLostAddResponse().addItem({ productId: 'p-new' });
+
+    expect(result.status).toBe('added');
+    if (result.status === 'added') expect(result.item.lineId).toBe('line-new');
+  });
+});

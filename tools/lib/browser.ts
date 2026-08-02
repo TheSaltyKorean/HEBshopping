@@ -35,6 +35,14 @@ export interface Capture {
   /** Calls seen since the last `since()` reset — makes "what did that click do?" answerable. */
   since(): CapturedCall[];
   mark(): void;
+  /**
+   * Response handlers still reading their bodies.
+   *
+   * `page.on('response')` fires synchronously but `response.json()` is not, so saving
+   * immediately can omit the very last call — typically the mutation the run was
+   * investigating, and disproportionately the slow or failing ones.
+   */
+  readonly pending: ReadonlySet<Promise<void>>;
 }
 
 /**
@@ -55,10 +63,11 @@ export async function launchBrowser(): Promise<BrowserContext> {
 export function attachCapture(context: BrowserContext): Capture {
   const operations = new Map<string, CapturedCall>();
   const timeline: CapturedCall[] = [];
+  const pending = new Set<Promise<void>>();
   let markIndex = 0;
 
   context.on('response', (response) => {
-    void (async () => {
+    const handled = (async () => {
       const request = response.request();
       if (!isGraphqlUrl(request.url())) return;
 
@@ -98,11 +107,14 @@ export function attachCapture(context: BrowserContext): Capture {
         console.log(`${isNew ? 'NEW ' : '    '}${operation.operationName}${errors}`);
       }
     })();
+    pending.add(handled);
+    void handled.finally(() => pending.delete(handled));
   });
 
   return {
     operations,
     timeline,
+    pending,
     since: () => timeline.slice(markIndex),
     mark: () => {
       markIndex = timeline.length;
@@ -121,6 +133,11 @@ export async function saveCapture(
   capture: Capture,
   label = 'capture',
 ): Promise<void> {
+  if (capture.pending.size > 0) {
+    console.log(`Waiting for ${capture.pending.size} response(s) still being read …`);
+    await Promise.allSettled([...capture.pending]);
+  }
+
   await mkdir(CAPTURE_DIR, { recursive: true });
 
   try {

@@ -434,11 +434,11 @@ function errorHandler(): ErrorHandler {
         // would retain a household's shopping in CloudWatch indefinitely.
         console.error(`HebError ${error.code}`);
 
-        // A non-retryable upstream error means the command *partly* succeeded — most often
-        // a line was created but its quantity was refused. The generic copy says "please
-        // try again", and repeating "add five avocados" would then find that one-unit line
-        // and increment it by five, leaving six. Say what happened instead.
-        if (error.code === 'UPSTREAM_ERROR' && error.retryable === false) {
+        // Keyed on the specific marker, not on "non-retryable UPSTREAM_ERROR" — plenty of
+        // other failures are non-retryable (a refused removal, schema drift on a read),
+        // and telling someone their item was added when nothing was added is worse than
+        // the generic apology. The core sets `partialAdd` only where a line really exists.
+        if (error.details?.['partialAdd'] === true) {
           return input.responseBuilder
             .speak(
               'That went through only partly — the item is on your list, but H-E-B would ' +

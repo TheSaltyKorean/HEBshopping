@@ -49,6 +49,9 @@ const pinnedList = listId();
  */
 const TOKEN_TTL_MS = 5 * 60 * 1_000;
 
+/** No authentication lookup may outlive this; see the note in `bearerToken`. */
+const TOKEN_LOOKUP_TIMEOUT_MS = 3_000;
+
 /**
  * The bearer token, fetched at most once per TTL per container.
  *
@@ -70,8 +73,12 @@ function bearerToken(): Promise<string> {
     if (name === undefined || name.trim() === '') {
       throw new Error('HEB_MCP_TOKEN_PARAM is required: the Function URL is public.');
     }
+    // Bounded: this runs *before* any HebClient exists, so the invocation budget cannot
+    // cover it. An SSM stall would otherwise consume the function's whole 15s timeout and
+    // return no JSON-RPC response at all — a hang rather than an error.
     const result = await new SSMClient({}).send(
       new GetParameterCommand({ Name: name, WithDecryption: true }),
+      { abortSignal: AbortSignal.timeout(TOKEN_LOOKUP_TIMEOUT_MS) },
     );
     const value = result.Parameter?.Value;
     if (value === undefined || value.trim() === '') {

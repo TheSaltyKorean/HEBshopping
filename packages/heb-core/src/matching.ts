@@ -134,7 +134,12 @@ export function tokenize(text: string): string[] {
       // the most common one in this catalog — permanently unmatchable.
       // Multi-letter hyphenates like "select-a-size" are deliberately left alone.
       .replace(/\b[a-z](?:-[a-z])+\b/g, (match) => match.replaceAll('-', ''))
-      .replace(/[^a-z0-9%\s]/g, ' ')
+      // Keep decimals and fractions whole. Stripping the separator turns "1.5 lb ground
+      // beef" into the tokens 1, 5, lb — and the parser then reads 1 as a count and
+      // searches for "5 lb ground beef", which is a materially different package.
+      .replace(/[^a-z0-9%./\s]/g, ' ')
+      // ...but a dot or slash that is not *between* digits is punctuation, not a number.
+      .replace(/(?<!\d)[./]|[./](?!\d)/g, ' ')
       .split(/\s+/)
       .filter(Boolean)
   );

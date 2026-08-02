@@ -398,3 +398,22 @@ describe('packaging counts belong to the product, not the request', () => {
     expect(parseSpokenRequest('six avocados')).toEqual({ quantity: 6, query: 'avocados' });
   });
 });
+
+describe('package sizes survive tokenisation', () => {
+  it.each([
+    ['1.5 lb ground beef', 1, '1.5 lb ground beef'],
+    ['1/2 gallon milk', 1, '1/2 gallon milk'],
+  ])('"%s" keeps its size intact', (input, quantity, query) => {
+    // Splitting the separator turned "1.5 lb ground beef" into 1, 5, lb — the parser then
+    // read 1 as a count and searched "5 lb ground beef", a materially different package.
+    expect(parseSpokenRequest(input)).toEqual({ quantity, query });
+  });
+
+  it('still treats a whole leading number as a count', () => {
+    expect(parseSpokenRequest('12 eggs')).toEqual({ quantity: 12, query: 'eggs' });
+  });
+
+  it('does not keep punctuation that is not part of a number', () => {
+    expect(tokenize('Oatly, 1/2 gal.')).toEqual(['oatly', '1/2', 'gal']);
+  });
+});

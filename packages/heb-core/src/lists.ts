@@ -85,6 +85,7 @@ interface HebListItem {
 }
 
 interface HebListPayload {
+  __typename?: string;
   id: string;
   name: string;
   totalItemCount?: number;
@@ -412,6 +413,13 @@ export class HebListOps implements ListOps {
       const data = await this.client.execute<{ addShoppingListItemsV2: HebListPayload }>(
         addItemsDocument(listId, [productId]),
       );
+      // Same success-union check as the other mutations. A refused add — a confirmed
+      // productId gone stale, say — returns a different member with only a __typename,
+      // which would otherwise map to an empty list and surface as the *retryable*
+      // "accepted the add but did not return the item", inviting repeats of a mutation
+      // the server conclusively rejected.
+      assertMutationSucceeded(data.addShoppingListItemsV2, 'add the item');
+
       added = toHebList(data.addShoppingListItemsV2).items.find(
         (item) => item.product?.id === productId,
       );
@@ -454,7 +462,7 @@ export class HebListOps implements ListOps {
             'UPSTREAM_ERROR',
             `Added ${added.text}, but HEB refused to set the quantity to ${target}. ` +
               `The list has ${actual?.quantity ?? added.quantity}.`,
-            { cause: error, retryable: false },
+            { cause: error, retryable: false, details: { partialAdd: true } },
           );
         }
 

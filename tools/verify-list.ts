@@ -82,7 +82,21 @@ async function main(): Promise<void> {
 
   try {
     console.log(`\n── 2. add "${TERM}"`);
-    const result = await time('addItem', () => lists.addItem({ query: TERM }));
+
+    // Reconcile before rethrowing: a rejection does not mean nothing happened, and the
+    // `finally` below would otherwise report an untouched list while a test grocery — or
+    // an incremented real one — sits on it.
+    const result = await time('addItem', () =>
+      lists.addItem({ query: TERM }).catch(async (error: unknown) => {
+        const after = await lists.getList().catch(() => null);
+        const changed = after?.items.find((item) => {
+          const was = before.items.find((original) => original.lineId === item.lineId);
+          return was === undefined || item.quantity > was.quantity;
+        });
+        if (changed !== undefined) touchedLine = changed.lineId;
+        throw error;
+      }),
+    );
 
     let lineId: string;
     let addedName: string;

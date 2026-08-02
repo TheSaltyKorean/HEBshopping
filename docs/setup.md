@@ -272,7 +272,8 @@ cookies run to a year. When it expires you'll get `SESSION_EXPIRED`.
 npm run login
 ```
 
-Same as Step 5. Then restart your MCP client so it re-reads the file.
+Same as Step 5. No restart needed — the session is read from disk on every request, so a
+running MCP client or Lambda picks up the new one on its next call.
 
 There is no way to automate this away: HEB's OTP and passkey options can't be replayed
 without a human. Roughly a two-minute chore, once a month.

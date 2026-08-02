@@ -169,7 +169,10 @@ async function main(): Promise<void> {
     for (const list of data.getShoppingListsV2.lists) {
       console.log(`  ✅ "${list.name}" — ${list.totalItemCount} item(s)`);
     }
-    console.log('\nDone. Restart any MCP client so it picks up the new session.');
+    // No restart needed: the client reads the session through the `Store` on every
+    // request, and `FileStore` reads from disk each time, so a running MCP server or
+    // Lambda picks this up on its next call.
+    console.log('\nDone. Running clients pick this up on their next call — no restart needed.');
   } catch (error) {
     if (isHebError(error)) {
       console.error(`\n⛔ Session written but unusable — ${error.code}: ${error.message}`);

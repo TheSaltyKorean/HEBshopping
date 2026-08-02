@@ -55,8 +55,9 @@ Confirm it's sound before going further:
 npm test
 ```
 
-Expected: `Test Files 6 passed`, `Tests 108 passed`. These run entirely offline — if they
-pass, your install is good.
+Expected: every file passes and nothing is skipped — the counts grow as the project does,
+so match on `passed` rather than a number. These run entirely offline, so if they pass,
+your install is good.
 
 ---
 

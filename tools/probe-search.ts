@@ -11,7 +11,14 @@
 
 import { readFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
-import { HEB_GRAPHQL_URL, HEB_ORIGIN, type Cookie } from '@heb/core';
+import {
+  FileStore,
+  HebClient,
+  HebListOps,
+  HEB_GRAPHQL_URL,
+  HEB_ORIGIN,
+  type Cookie,
+} from '@heb/core';
 
 const raw = JSON.parse(
   await readFile(resolve('captures/storage-state.json'), 'utf8'),
@@ -53,6 +60,25 @@ async function probe(label: string, query: string): Promise<void> {
   }
 }
 
+/**
+ * The store to probe against, never committed.
+ *
+ * A store number identifies roughly where the account holder lives, which the repository's
+ * own policy puts in the same bucket as list ids — and `npm run scan` cannot help here,
+ * because a bare three-digit number has no shape to match. Taken from the account's own
+ * list, so nothing location-identifying is ever written down.
+ */
+const STORE_ID = Number(
+  (await new HebListOps({
+    client: new HebClient({ store: new FileStore(resolve('.session/session.json')) }),
+  }).getList()).storeId,
+);
+
+if (!Number.isFinite(STORE_ID)) {
+  console.error('⛔ Could not resolve a store from the list. Run `npm run login` first.');
+  process.exit(1);
+}
+
 // 1. No arguments at all — the validator lists whatever is required.
 await probe('no args', `query Probe { productSearchItems { __typename } }`);
 
@@ -60,7 +86,7 @@ await probe('no args', `query Probe { productSearchItems { __typename } }`);
 await probe(
   'params only',
   `query Probe {
-    productSearchItems(params: { query: "oat milk", storeId: 269 }) { __typename }
+    productSearchItems(params: { query: "oat milk", storeId: ${STORE_ID} }) { __typename }
   }`,
 );
 

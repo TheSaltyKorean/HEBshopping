@@ -388,9 +388,21 @@ export class HebListOps implements ListOps {
           // before the response was lost. Propagating a bare failure makes the surface say
           // "try again", and the retry reads the already-incremented line and increments it
           // a second time. So re-read and report what is actually there.
-          const actual = (await this.getList(listId)).items.find(
-            (item) => item.lineId === existing.lineId,
-          );
+          let current: HebList;
+          try {
+            current = await this.getList(listId);
+          } catch {
+            // The reconciliation read failed as well — likely because the first timeout
+            // spent the budget. Nothing is known, and "try again" is the one answer that
+            // can make it worse.
+            throw new HebError(
+              'UPSTREAM_ERROR',
+              'HEB did not confirm the change. Check the list before asking again — it may have worked.',
+              { cause: error, retryable: false, details: { indeterminate: true } },
+            );
+          }
+
+          const actual = current.items.find((item) => item.lineId === existing.lineId);
           if (actual !== undefined && actual.quantity === target) {
             return { status: 'already_present', item: actual };
           }

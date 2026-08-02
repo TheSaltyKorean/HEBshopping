@@ -176,6 +176,17 @@ resource "aws_lambda_function" "alexa" {
   timeout     = 10
   memory_size = 512
 
+  # Bounded, but not serialised.
+  #
+  # `HebClient` caps concurrency and spaces requests *within* an invocation, so parallel
+  # invocations are parallel throttles and the politeness guarantee weakens in proportion.
+  # One would restore it exactly — and would also throttle the second person to speak,
+  # turning "two Echoes at once" into a dropped command with no spoken response. Two keeps
+  # the worst case to four in-flight requests instead of an unbounded fan-out, which is
+  # the right trade for a household. Enforcing it exactly needs a shared limiter, which
+  # would cost more round trips than the problem is worth here.
+  reserved_concurrent_executions = 2
+
   environment {
     variables = {
       HEB_SESSION_TABLE = aws_dynamodb_table.session.name

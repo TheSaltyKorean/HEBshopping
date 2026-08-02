@@ -92,12 +92,25 @@ async function main(): Promise<void> {
     throw new Error('Every candidate product is already on the list; nothing safe to probe with.');
   }
 
-  const added = await lists.addItem({ productId: disposable.id });
-  if (added.status !== 'added') {
-    throw new Error(`expected a fresh line, got ${added.status}`);
+  // Enter the cleanup scope *before* mutating: a commit whose response is lost rejects
+  // here, and outside the try that failure would exit through the outer catch with the
+  // line still on a real household list.
+  let lineId: string | null = null;
+  try {
+    const added = await lists.addItem({ productId: disposable.id });
+    if (added.status !== 'added') {
+      throw new Error(`expected a fresh line, got ${added.status}`);
+    }
+    lineId = added.item.lineId;
+    console.log(`Added throwaway line: ${added.item.text}`);
+  } catch (error) {
+    const committed = (await lists.getList().catch(() => null))?.items.find(
+      (item) => item.product?.id === disposable.id,
+    );
+    if (committed === undefined) throw error;
+    lineId = committed.lineId;
+    console.log(`Add reported failure but committed line ${lineId}; will clean up.`);
   }
-  const lineId = added.item.lineId;
-  console.log(`Added throwaway line: ${added.item.text}`);
 
   // Whatever any attempt returns — success, a refusal union member, or a throw — the
   // throwaway line must not survive this probe. Attempts B and C run precisely when A
@@ -161,8 +174,9 @@ async function main(): Promise<void> {
         'declarations and we can hand-write every operation.',
     );
   } finally {
-    const stillThere = (await lists.getList()).items.some((item) => item.lineId === lineId);
-    if (stillThere) {
+    const stillThere =
+      lineId !== null && (await lists.getList()).items.some((item) => item.lineId === lineId);
+    if (stillThere && lineId !== null) {
       console.log('\n🧹 removing the throwaway line');
       await lists.removeItem({ lineId }).catch((error: unknown) => {
         console.error('⛔ CLEANUP FAILED — remove it by hand:', error);

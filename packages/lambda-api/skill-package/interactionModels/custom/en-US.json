@@ -1,0 +1,58 @@
+{
+  "interactionModel": {
+    "languageModel": {
+      "invocationName": "my grocery list",
+      "intents": [
+        {
+          "name": "AddItemIntent",
+          "slots": [{ "name": "item", "type": "AMAZON.SearchQuery" }],
+          "samples": [
+            "add {item}",
+            "add {item} to my list",
+            "add {item} to the list",
+            "put {item} on my list",
+            "put {item} on the list",
+            "I need {item}",
+            "we need {item}",
+            "we are out of {item}",
+            "buy {item}"
+          ]
+        },
+        {
+          "name": "ReadListIntent",
+          "slots": [],
+          "samples": [
+            "what is on my list",
+            "what's on my list",
+            "read my list",
+            "read the list",
+            "what do I need",
+            "what do we need",
+            "tell me my list",
+            "how many things are on my list"
+          ]
+        },
+        {
+          "name": "RemoveItemIntent",
+          "slots": [{ "name": "item", "type": "AMAZON.SearchQuery" }],
+          "samples": [
+            "remove {item}",
+            "remove {item} from my list",
+            "delete {item}",
+            "delete {item} from my list",
+            "take {item} off my list",
+            "take {item} off the list",
+            "we already have {item}"
+          ]
+        },
+        { "name": "AMAZON.YesIntent", "samples": [] },
+        { "name": "AMAZON.NoIntent", "samples": [] },
+        { "name": "AMAZON.HelpIntent", "samples": [] },
+        { "name": "AMAZON.StopIntent", "samples": [] },
+        { "name": "AMAZON.CancelIntent", "samples": [] },
+        { "name": "AMAZON.FallbackIntent", "samples": [] }
+      ],
+      "types": []
+    }
+  }
+}

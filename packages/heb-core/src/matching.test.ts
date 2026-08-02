@@ -1,0 +1,193 @@
+import { describe, expect, it } from 'vitest';
+import {
+  broadenQuery,
+  canonical,
+  isConfident,
+  matchProducts,
+  mergeCandidates,
+  parseSpokenRequest,
+} from './matching.js';
+import type { Product } from './types.js';
+
+/** Product names copied from real HEB search results, so the table tests reality. */
+const p = (id: string, name: string, brand?: string): Product =>
+  brand === undefined ? { id, name } : { id, name, brand };
+
+const CATALOG = {
+  oatMilk: [
+    p('1', 'Oatly The Original Oat Milk, 1/2 gal', 'Oatly'),
+    p('2', 'Planet Oat Original Oatmilk, 52 oz', 'Planet Oat'),
+    p('3', 'H-E-B Select Ingredients Whole Milk, 1 gal', 'H-E-B'),
+  ],
+  eggs: [
+    p('4', 'H-E-B Grade AA Large White Eggs, 12 ct', 'H-E-B'),
+    p('5', 'H-E-B Grade AA Cage Free Large Brown Eggs, 12 ct', 'H-E-B'),
+    p('6', 'Eggland’s Best Large White Eggs, 18 ct', "Eggland's Best"),
+  ],
+  twoPercent: [
+    p('7', 'H-E-B Select Ingredients 2% Reduced Fat Milk, 1 gal', 'H-E-B'),
+    p('8', 'H-E-B Select Ingredients Whole Milk, 1 gal', 'H-E-B'),
+  ],
+  tortillas: [
+    p('9', 'H-E-B Bakery Flour Tortillas, 10 ct', 'H-E-B'),
+    p('10', 'Mission Soft Taco Flour Tortillas, 10 ct', 'Mission'),
+  ],
+  bananas: [
+    p('11', 'Fresh Bananas', 'H-E-B'),
+    p('12', 'Organic Bananas', 'H-E-B'),
+    p('13', 'Banana Bread Baking Mix', 'Krusteaz'),
+  ],
+  paperTowels: [
+    p('14', 'Bounty Select-A-Size Paper Towels, 6 rolls', 'Bounty'),
+    p('15', 'H-E-B Ultra Strong Paper Towels, 8 rolls', 'H-E-B'),
+  ],
+};
+
+describe('parseSpokenRequest', () => {
+  it.each([
+    ['oat milk', 1, 'oat milk'],
+    ['bananas', 1, 'bananas'],
+    ['two avocados', 2, 'avocados'],
+    // "of" is filler, so it is stripped: "lemons" searches better than "of lemons".
+    ['three bags of chips', 3, 'bags chips'],
+    ['a dozen eggs', 1, 'dozen eggs'],
+    ['a couple of lemons', 2, 'lemons'],
+    ['12 eggs', 12, 'eggs'],
+  ])('%s → quantity %i, query "%s"', (input, quantity, query) => {
+    expect(parseSpokenRequest(input)).toEqual({ quantity, query });
+  });
+
+  it('does NOT read "two percent milk" as two milks', () => {
+    // The single most plausible way this feature embarrasses itself: a measure word after
+    // a number makes it a description, not a count.
+    expect(parseSpokenRequest('two percent milk')).toEqual({ quantity: 1, query: 'two percent milk' });
+  });
+
+  it('does not read a trailing-only number as a count', () => {
+    expect(parseSpokenRequest('milk')).toEqual({ quantity: 1, query: 'milk' });
+  });
+
+  it('survives an empty or filler-only phrase', () => {
+    expect(parseSpokenRequest('   ')).toEqual({ quantity: 1, query: '' });
+    expect(parseSpokenRequest('please add some')).toEqual({ quantity: 1, query: '' });
+  });
+});
+
+describe('matchProducts — ranking acceptance table', () => {
+  it.each([
+    ['oat milk', CATALOG.oatMilk, '1'],
+    ['dozen eggs', CATALOG.eggs, '4'],
+    ['two percent milk', CATALOG.twoPercent, '7'],
+    ['heb brand tortillas', CATALOG.tortillas, '9'],
+    ['bananas', CATALOG.bananas, '11'],
+    ['paper towels', CATALOG.paperTowels, '14'],
+  ])('"%s" ranks the right product first', (query, candidates, expectedId) => {
+    const match = matchProducts(query, candidates);
+    expect(match?.product.id).toBe(expectedId);
+  });
+
+  it('returns null when nothing matches, so callers can raise PRODUCT_NOT_FOUND', () => {
+    expect(matchProducts('motorcycle tyres', CATALOG.bananas)).toBeNull();
+    expect(matchProducts('', CATALOG.bananas)).toBeNull();
+    expect(matchProducts('milk', [])).toBeNull();
+  });
+
+  it('offers alternatives for a confirmation prompt', () => {
+    const match = matchProducts('eggs', CATALOG.eggs);
+    expect(match?.alternatives.length).toBeGreaterThan(0);
+    expect(match?.alternatives).not.toContainEqual(match?.product);
+  });
+});
+
+describe('matchProducts — confidence calibration', () => {
+  it('is confident when the query nearly names the product', () => {
+    const match = matchProducts('oatly original oat milk', CATALOG.oatMilk);
+    expect(isConfident(match!)).toBe(true);
+  });
+
+  it.each([
+    ['milk', CATALOG.twoPercent],
+    ['eggs', CATALOG.eggs],
+    ['tortillas', CATALOG.tortillas],
+  ])('asks rather than guessing for the under-specified "%s"', (query, candidates) => {
+    // These have several near-identical good answers. Adding an arbitrary one silently is
+    // the failure users actually notice, so the safe direction is to confirm.
+    const match = matchProducts(query, candidates);
+    expect(match).not.toBeNull();
+    expect(isConfident(match!)).toBe(false);
+  });
+
+  it('never reports confidence outside 0..1', () => {
+    for (const candidates of Object.values(CATALOG)) {
+      for (const query of ['milk', 'eggs', 'organic bananas', 'h-e-b paper towels']) {
+        const match = matchProducts(query, candidates);
+        if (match === null) continue;
+        expect(match.confidence).toBeGreaterThanOrEqual(0);
+        expect(match.confidence).toBeLessThanOrEqual(1);
+      }
+    }
+  });
+});
+
+describe('canonical — spelling and cross-language equivalence', () => {
+  it.each([
+    ['chile', 'chili'],
+    ['chilli', 'chili'],
+    ['verde', 'green'],
+    ['roja', 'red'],
+    ['salsa', 'sauce'],
+    ['queso', 'cheese'],
+  ])('folds "%s" onto "%s"', (token, expected) => {
+    expect(canonical(token)).toBe(expected);
+  });
+
+  it('leaves words with divergent meanings alone', () => {
+    // "pan" is bread in Spanish and cookware in English; "carne" is meat generally, not
+    // beef. Folding either would make wrong products look right.
+    expect(canonical('pan')).toBe('pan');
+    expect(canonical('carne')).toBe('carne');
+  });
+
+  it('matches an English request against a Spanish product name', () => {
+    // The real failure this was built for: HEB sells green enchilada sauce under a name
+    // that shares no English tokens with how anyone would ask for it out loud.
+    const spanish = [p('8764017', 'H-E-B Mi Tienda Salsa Verde Para Enchiladas, 16 oz', 'H-E-B')];
+    const match = matchProducts('green chili enchilada sauce', spanish);
+    expect(match).not.toBeNull();
+    expect(match!.product.id).toBe('8764017');
+  });
+});
+
+describe('broadenQuery — recovering from a too-narrow search', () => {
+  it.each([
+    ['green chili enchilada sauce', 'enchilada sauce'],
+    ['organic whole milk', 'whole milk'],
+  ])('broadens "%s" to "%s"', (query, expected) => {
+    expect(broadenQuery(query)).toBe(expected);
+  });
+
+  it.each(['oat milk', 'bananas', 'the milk'])('leaves "%s" alone', (query) => {
+    // Already at or below the head noun; broadening further would be a different query.
+    expect(broadenQuery(query)).toBeNull();
+  });
+});
+
+describe('mergeCandidates', () => {
+  const a = p('1', 'Hatch Mild Green Enchilada Sauce, 15 oz');
+  const b = p('2', 'Old El Paso Green Chile Enchilada Sauce, 10 oz');
+
+  it('drops duplicates by product id', () => {
+    expect(mergeCandidates([a, b], [b, a]).map((product) => product.id)).toEqual(['1', '2']);
+  });
+
+  it('keeps the first list ahead of later ones', () => {
+    // Order carries HEB's relevance ranking; the broadened retry adds reach without
+    // overriding the better-targeted query's judgement.
+    const c = p('3', 'Gebhardt Enchilada Sauce, 10 oz');
+    expect(mergeCandidates([a], [c, b]).map((product) => product.id)).toEqual(['1', '3', '2']);
+  });
+
+  it('is empty for no input', () => {
+    expect(mergeCandidates()).toEqual([]);
+  });
+});

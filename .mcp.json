@@ -1,0 +1,11 @@
+{
+  "mcpServers": {
+    "heb-shopping-list": {
+      "command": "node",
+      "args": ["packages/mcp-server/dist/stdio.js"],
+      "env": {
+        "HEB_SESSION_PATH": ".session/session.json"
+      }
+    }
+  }
+}

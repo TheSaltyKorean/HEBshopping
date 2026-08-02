@@ -1,0 +1,44 @@
+{
+  "name": "heb-shopping",
+  "version": "0.1.0",
+  "private": true,
+  "license": "MIT",
+  "type": "module",
+  "description": "Add, read, and remove items on an H-E-B shopping list by voice (Alexa) and by agent (MCP).",
+  "engines": {
+    "node": ">=20"
+  },
+  "workspaces": [
+    "packages/*"
+  ],
+  "scripts": {
+    "build": "tsc --build",
+    "clean": "tsc --build --clean",
+    "typecheck": "tsc --build && tsc -p tools/tsconfig.json",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "test:live": "HEB_LIVE=1 vitest run --testNamePattern=live",
+    "login": "tsx tools/login.ts",
+    "hashes": "tsx tools/hashes.ts",
+    "capture": "tsx tools/capture.ts",
+    "scan": "tsx tools/scan-secrets.ts",
+    "soak": "tsx tools/soak.ts",
+    "experiments": "tsx tools/experiments.ts",
+    "drive": "tsx tools/drive.ts",
+    "mcp": "node packages/mcp-server/dist/stdio.js",
+    "verify": "tsx tools/verify-list.ts",
+    "verify:session": "tsx tools/verify.ts",
+    "verify:mcp": "tsx tools/verify-mcp.ts",
+    "verify:alexa": "tsx tools/verify-alexa.ts"
+  },
+  "devDependencies": {
+    "@types/node": "^26.1.2",
+    "playwright": "^1.62.1",
+    "tsx": "^4.23.1",
+    "typescript": "^7.0.2",
+    "vitest": "^4.1.10"
+  },
+  "allowScripts": {
+    "esbuild@0.28.1": true
+  }
+}

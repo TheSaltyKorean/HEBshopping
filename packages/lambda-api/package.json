@@ -1,0 +1,15 @@
+{
+  "name": "@heb/lambda-api",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Alexa custom skill over the HEB shopping list. Invoked directly by the Alexa trigger.",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": { ".": { "types": "./dist/index.d.ts", "default": "./dist/index.js" } },
+  "scripts": { "build": "tsc --build", "clean": "tsc --build --clean" },
+  "dependencies": {
+    "@heb/core": "*",
+    "ask-sdk-core": "^2.14.0"
+  }
+}

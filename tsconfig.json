@@ -1,0 +1,14 @@
+{
+  "files": [],
+  "references": [
+    {
+      "path": "packages/heb-core"
+    },
+    {
+      "path": "packages/mcp-server"
+    },
+    {
+      "path": "packages/lambda-api"
+    }
+  ]
+}

@@ -1,0 +1,223 @@
+/**
+ * MCP server exposing the HEB shopping list.
+ *
+ * A thin adapter over `HebListOps` — all behaviour lives there so this surface and the
+ * Alexa one cannot drift. What *is* this layer's job: writing tool descriptions a model
+ * can act on correctly, since they are the only documentation it ever sees.
+ *
+ * Two rules the descriptions must convey:
+ *   - which tools write (add/remove) versus read (list/search);
+ *   - that a low-confidence add returns candidates instead of writing, and the way to
+ *     resolve it is a second call with `productId`.
+ */
+
+import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
+import { z } from 'zod';
+import { HebListOps, isHebError, type AddResult, type ListItem } from '@heb/core';
+
+export const SERVER_NAME = 'heb-shopping-list';
+export const SERVER_VERSION = '0.1.0';
+
+type TextResult = {
+  content: Array<{ type: 'text'; text: string }>;
+  isError?: boolean;
+};
+
+const text = (body: string, isError = false): TextResult =>
+  isError ? { content: [{ type: 'text', text: body }], isError: true } : { content: [{ type: 'text', text: body }] };
+
+function describeItem(item: ListItem): string {
+  return item.quantity > 1 ? `${item.quantity} × ${item.text}` : item.text;
+}
+
+/**
+ * Turn a failure into something a model can act on.
+ *
+ * Error codes carry a specific remedy each; a generic "something went wrong" would make
+ * the model retry the same doomed call. `SESSION_EXPIRED` in particular needs a human, so
+ * say so rather than implying a retry might work.
+ */
+function toErrorText(error: unknown): TextResult {
+  if (!isHebError(error)) {
+    return text(`Unexpected error: ${error instanceof Error ? error.message : String(error)}`, true);
+  }
+  const guidance: Partial<Record<string, string>> = {
+    SESSION_EXPIRED:
+      'The HEB session has expired. A human must re-run `npm run login` — this cannot be fixed automatically.',
+    BOT_CHALLENGE: 'HEB served a bot check. Wait a moment and try once more.',
+    PRODUCT_NOT_FOUND:
+      'No catalog product matched. HEB lists cannot hold free text, so try different wording.',
+    AMBIGUOUS_LIST: 'Several lists exist; ask the user which one to use.',
+    AMBIGUOUS_REMOVAL: 'Several list items match; ask the user which one they meant.',
+    ITEM_NOT_ON_LIST: 'That item is not on the list.',
+  };
+  const extra = guidance[error.code];
+  return text(`${error.code}: ${error.message}${extra ? `\n${extra}` : ''}`, true);
+}
+
+function describeAddResult(result: AddResult): TextResult {
+  switch (result.status) {
+    case 'added':
+      return text(`Added to the HEB list: ${describeItem(result.item)}`);
+    case 'already_present':
+      return text(
+        `Already on the list — quantity is now ${result.item.quantity}: ${result.item.text}`,
+      );
+    case 'needs_confirmation': {
+      // Candidates are returned inline precisely so the model does not need a separate
+      // search round trip before confirming.
+      const { product, alternatives, confidence } = result.match;
+      const options = [product, ...alternatives]
+        .map((candidate, index) => `  ${index + 1}. ${candidate.name}  [productId: ${candidate.id}]`)
+        .join('\n');
+      return text(
+        `NOT added — the request was ambiguous (confidence ${confidence.toFixed(2)}).\n` +
+          `Ask the user which they meant, then call heb_add_item again with that productId.\n\n` +
+          `Candidates:\n${options}`,
+      );
+    }
+  }
+}
+
+export interface CreateServerOptions {
+  listOps: HebListOps;
+}
+
+export function createHebMcpServer({ listOps }: CreateServerOptions): McpServer {
+  const server = new McpServer({ name: SERVER_NAME, version: SERVER_VERSION });
+
+  server.registerTool(
+    'heb_read_list',
+    {
+      title: 'Read the HEB shopping list',
+      description:
+        'Read every item currently on the H-E-B shopping list, with quantities. ' +
+        'Read-only. Call this before removing something, to get its lineId.',
+      inputSchema: {},
+    },
+    async (): Promise<TextResult> => {
+      try {
+        const list = await listOps.getList();
+        if (list.items.length === 0) return text(`The HEB list "${list.name}" is empty.`);
+        const lines = list.items
+          .map((item) => `• ${describeItem(item)}  [lineId: ${item.lineId}]`)
+          .join('\n');
+        return text(`HEB list "${list.name}" — ${list.items.length} item(s):\n${lines}`);
+      } catch (error) {
+        return toErrorText(error);
+      }
+    },
+  );
+
+  server.registerTool(
+    'heb_search_product',
+    {
+      title: 'Search the HEB catalog',
+      description:
+        'Search H-E-B for products matching a phrase, at the store the list belongs to. ' +
+        'Read-only; nothing is added. Use this to resolve a vague request into a specific ' +
+        'productId before calling heb_add_item.',
+      inputSchema: {
+        query: z.string().min(1).describe('What to search for, e.g. "oat milk" or "flour tortillas".'),
+        limit: z.number().int().min(1).max(25).optional().describe('Maximum results (default 10).'),
+      },
+    },
+    async ({ query, limit }): Promise<TextResult> => {
+      try {
+        const products = await listOps.searchProducts(query);
+        if (products.length === 0) return text(`No HEB products matched "${query}".`);
+        const shown = products.slice(0, limit ?? 10);
+        const lines = shown
+          .map((product) => `• ${product.name}  [productId: ${product.id}]`)
+          .join('\n');
+        return text(
+          `${products.length} match(es) for "${query}" (showing ${shown.length}):\n${lines}`,
+        );
+      } catch (error) {
+        return toErrorText(error);
+      }
+    },
+  );
+
+  server.registerTool(
+    'heb_add_item',
+    {
+      title: 'Add an item to the HEB shopping list',
+      description:
+        'WRITES to the H-E-B shopping list. Supply exactly one of `query` (free text to be ' +
+        'matched) or `productId` (an exact product, e.g. from heb_search_product). ' +
+        'If `query` is too vague, nothing is written and candidate products are returned — ' +
+        'ask the user which they meant and call again with that productId. ' +
+        'Adding something already on the list increases its quantity rather than duplicating it.',
+      inputSchema: {
+        query: z
+          .string()
+          .min(1)
+          .optional()
+          .describe('Free text to match, e.g. "oat milk". Mutually exclusive with productId.'),
+        productId: z
+          .string()
+          .min(1)
+          .optional()
+          .describe('Exact HEB product id. Mutually exclusive with query.'),
+        quantity: z.number().int().min(1).max(20).optional().describe('How many (default 1).'),
+      },
+    },
+    async ({ query, productId, quantity }): Promise<TextResult> => {
+      if ((query === undefined) === (productId === undefined)) {
+        return text('Provide exactly one of `query` or `productId`.', true);
+      }
+      try {
+        const result = await listOps.addItem({
+          ...(query === undefined ? {} : { query }),
+          ...(productId === undefined ? {} : { productId }),
+          ...(quantity === undefined ? {} : { quantity }),
+        });
+        return describeAddResult(result);
+      } catch (error) {
+        return toErrorText(error);
+      }
+    },
+  );
+
+  server.registerTool(
+    'heb_remove_item',
+    {
+      title: 'Remove an item from the HEB shopping list',
+      description:
+        'WRITES to the H-E-B shopping list, removing an item entirely. Supply either ' +
+        '`lineId` (exact, from heb_read_list) or `item` (free text matched against what is ' +
+        'actually on the list). If the text matches several items, nothing is removed and ' +
+        'you are told to disambiguate.',
+      inputSchema: {
+        lineId: z
+          .string()
+          .min(1)
+          .optional()
+          .describe('Exact list line id from heb_read_list. Mutually exclusive with item.'),
+        item: z
+          .string()
+          .min(1)
+          .optional()
+          .describe('Free text to match against list contents. Mutually exclusive with lineId.'),
+      },
+    },
+    async ({ lineId, item }): Promise<TextResult> => {
+      if ((lineId === undefined) === (item === undefined)) {
+        return text('Provide exactly one of `lineId` or `item`.', true);
+      }
+      try {
+        // Resolving free text against the list (not the whole catalog) is a much smaller
+        // problem, and findLine refuses to guess between equally plausible lines.
+        const target = lineId ?? (await listOps.findLine(item!)).lineId;
+        const label = lineId === undefined ? item : lineId;
+        await listOps.removeItem({ lineId: target });
+        return text(`Removed from the HEB list: ${label}`);
+      } catch (error) {
+        return toErrorText(error);
+      }
+    },
+  );
+
+  return server;
+}

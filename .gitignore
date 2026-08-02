@@ -1,0 +1,64 @@
+# ---------------------------------------------------------------------------
+# SECRETS — this project handles live session cookies for a real HEB account
+# with a saved payment method. Nothing authenticating may ever enter git.
+# These rules exist BEFORE the first capture does. Do not relax them.
+# ---------------------------------------------------------------------------
+
+# Browser session / auth state
+*storage-state*.json
+*storagestate*.json
+.session/
+.auth/
+cookies.json
+*.cookies.json
+
+# DevTools / proxy captures — a HAR contains full cookies and auth headers
+*.har
+
+# Raw, unscrubbed captures. Only scrubbed fixtures under fixtures/ are committed.
+captures/
+fixtures/raw/
+*.raw.json
+
+# Credentials
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+credentials.json
+
+# ---------------------------------------------------------------------------
+# Build & tooling
+# ---------------------------------------------------------------------------
+node_modules/
+dist/
+build/
+*.tsbuildinfo
+coverage/
+.vitest/
+
+# Terraform
+.terraform/
+.terraform.lock.hcl
+*.tfstate
+*.tfstate.*
+*.tfvars
+!*.tfvars.example
+crash.log
+crash.*.log
+
+# Playwright
+playwright-report/
+test-results/
+.playwright/
+# Persistent browser profile — contains a live logged-in HEB session
+.playwright-profile/
+
+# Editors / OS
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/*
+!.vscode/extensions.json
+*.swp

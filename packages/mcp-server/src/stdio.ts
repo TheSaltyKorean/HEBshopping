@@ -17,7 +17,12 @@ import { FileStore, HebClient, HebListOps } from '@heb/core';
 import { createHebMcpServer, SERVER_NAME, SERVER_VERSION } from './server.js';
 
 const sessionPath = resolve(process.env['HEB_SESSION_PATH'] ?? '.session/session.json');
-const listId = process.env['HEB_LIST_ID'];
+// Blank is not "pinned". An unset variable interpolated into a wrapper script arrives as
+// an empty string, and `resolveListId` would treat that as an explicit id — sending every
+// operation to a list that does not exist, instead of the documented sole-list fallback.
+const configuredListId = process.env['HEB_LIST_ID'];
+const listId =
+  configuredListId === undefined || configuredListId.trim() === '' ? undefined : configuredListId;
 
 // One client, many list-ops.
 //

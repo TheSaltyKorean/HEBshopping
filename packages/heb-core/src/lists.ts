@@ -313,7 +313,14 @@ export class HebListOps implements ListOps {
     const broader = broadenQuery(query);
     if (broader === null) return match;
 
-    const merged = mergeCandidates(candidates, await this.searchProducts(broader, listId));
+    // Best-effort. The broadened search exists to *add* reach; if it times out or is
+    // challenged, the candidates already in hand are still perfectly good — failing the
+    // whole add would turn every ambiguous multi-word query into an upstream error rather
+    // than the confirmation choices we already have.
+    const extra = await this.searchProducts(broader, listId).catch(() => []);
+    if (extra.length === 0) return match;
+
+    const merged = mergeCandidates(candidates, extra);
     if (merged.length === candidates.length) return match;
 
     // Re-score the union against the *original* wording — broadening was a way to find

@@ -14,7 +14,7 @@ import {
   HebListOps,
   checkSession,
   isHebError,
-  matchProducts,
+  broadenQuery,
   type HebList,
 } from '@heb/core';
 
@@ -60,6 +60,16 @@ async function restoreLine(
     await time('removeItem', () => lists.removeItem({ lineId }));
     return;
   }
+
+  // Restore only if the line still looks the way this run left it. Writing the opening
+  // quantity unconditionally would erase a change somebody made in the H-E-B app while
+  // the verification was running — undoing their edit in the name of cleaning up ours.
+  const now = (await lists.getList()).items.find((item) => item.lineId === lineId);
+  if (now === undefined || now.quantity <= preExisting.quantity) {
+    console.log(`   "${label}" is already at or below ${preExisting.quantity}; leaving it.`);
+    return;
+  }
+
   console.log(`   "${label}" pre-existed — restoring quantity ${preExisting.quantity}`);
   await time('restore quantity', () => lists.setItemQuantity(lineId, preExisting.quantity));
 }
@@ -90,22 +100,39 @@ async function main(): Promise<void> {
     // Reconcile against the product this call asked for, not "whatever changed". A
     // household member adding something mid-run also shows as a line absent from the
     // snapshot, and claiming it would have the cleanup delete their grocery.
-    const reconcile = async (productId: string | undefined, error: unknown): Promise<never> => {
-      if (productId !== undefined) {
+    const reconcile = async (
+      productIds: ReadonlySet<string>,
+      error: unknown,
+    ): Promise<never> => {
+      if (productIds.size > 0) {
         const after = await lists.getList().catch(() => null);
-        const mine = after?.items.find((item) => item.product?.id === productId);
+        const mine = after?.items.find(
+          (item) =>
+            item.product !== undefined &&
+            productIds.has(item.product.id) &&
+            !before.items.some((original) => original.lineId === item.lineId),
+        );
         if (mine !== undefined) touchedLine = mine.lineId;
       }
       throw error;
     };
 
-    // Resolve what the query form is *likely* to add before letting it write. Without an
-    // id, a committed-but-unacknowledged add cannot be reconciled and the cleanup would
-    // report an untouched list while the grocery sat there.
-    const likely = matchProducts(TERM, await lists.searchProducts(TERM))?.product.id;
+    // Everything the query could plausibly resolve to, not just the top match. `addItem`
+    // broadens the search and applies purchase-history ranking, so a single pre-computed
+    // "likely" id can easily be the wrong one — and reconciling against the wrong id is
+    // the same as not reconciling at all.
+    const plausible = new Set(
+      (await lists.searchProducts(TERM).catch(() => [])).map((product) => product.id),
+    );
+    const broader = broadenQuery(TERM);
+    if (broader !== null) {
+      for (const product of await lists.searchProducts(broader).catch(() => [])) {
+        plausible.add(product.id);
+      }
+    }
 
     const result = await time('addItem', () =>
-      lists.addItem({ query: TERM }).catch((error: unknown) => reconcile(likely, error)),
+      lists.addItem({ query: TERM }).catch((error: unknown) => reconcile(plausible, error)),
     );
 
     let lineId: string;
@@ -122,7 +149,9 @@ async function main(): Promise<void> {
       const confirmed = await time('addItem(productId)', () =>
         // Armed before the call: a committed add whose response is lost rejects here, and
         // the cleanup would otherwise report an untouched list.
-        lists.addItem({ productId: chosen }).catch((error: unknown) => reconcile(chosen, error)),
+        lists
+          .addItem({ productId: chosen })
+          .catch((error: unknown) => reconcile(new Set([chosen]), error)),
       );
       if (confirmed.status === 'needs_confirmation') throw new Error('unreachable');
       lineId = confirmed.item.lineId;

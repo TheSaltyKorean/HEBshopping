@@ -63,15 +63,21 @@ export function checkSession(
   let soonestExpiry: number | undefined;
 
   for (const name of REQUIRED_REQUEST_COOKIES) {
-    const cookie = session.cookies.find(
+    // All host-matching copies, not the first one. A browser jar legitimately holds the
+    // same name for `.heb.com` and `www.heb.com`, and `find` made session health depend on
+    // array order — an expired duplicate ahead of a live one forced a needless login while
+    // perfectly good credentials sat further down the array.
+    const copies = session.cookies.filter(
       (candidate) => candidate.name === name && cookieMatchesHost(candidate, 'www.heb.com'),
     );
 
-    if (cookie === undefined) {
+    if (copies.length === 0) {
       missing.push(name);
       continue;
     }
-    if (cookieIsExpired(cookie, nowMs)) {
+
+    const cookie = copies.find((candidate) => !cookieIsExpired(candidate, nowMs));
+    if (cookie === undefined) {
       expired.push(name);
       continue;
     }

@@ -273,3 +273,20 @@ describe('throttle under upstream slowdown', () => {
     }
   });
 });
+
+describe('session health with duplicate cookies', () => {
+  it('accepts a live copy even when an expired one comes first', async () => {
+    // Browser jars legitimately hold the same name for .heb.com and www.heb.com. Using
+    // `find` made health depend on array order, forcing a login while valid credentials
+    // sat further down the array.
+    const past = NOW / 1_000 - 3_600;
+    const base = session();
+    const stale = { ...base.cookies.find((c) => c.name === 'sat')!, domain: '.heb.com', expires: past };
+
+    const withDuplicate = session({ cookies: [stale, ...base.cookies] });
+    const fetchImpl = respond(JSON.stringify({ data: { ok: 1 } }));
+
+    await expect(client(fetchImpl, withDuplicate).execute(getShoppingListsDocument())).resolves
+      .toBeDefined();
+  });
+});

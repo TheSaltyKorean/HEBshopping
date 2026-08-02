@@ -172,7 +172,15 @@ async function cleanUp(): Promise<void> {
 
   // Increments are undone by restoring the old quantity, never by deleting the line: it
   // belongs to the household, not to this run.
+  const current = await listOps.getList().catch(() => null);
   for (const [lineId, previous] of raisedQuantities) {
+    // Only if the line still sits above where it started. Writing the opening quantity
+    // unconditionally would erase an edit somebody made in the H-E-B app during the run.
+    const now = current?.items.find((item) => item.lineId === lineId);
+    if (now === undefined || now.quantity <= previous) {
+      console.log(`\n🧹 line already at or below ${previous}; leaving it alone`);
+      continue;
+    }
     await listOps.setItemQuantity(lineId, previous);
     console.log(`\n🧹 restored quantity ${previous} on a pre-existing line`);
   }

@@ -12,12 +12,15 @@
  */
 
 import type { Page } from 'playwright';
-import { mkdir, readFile, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { dirname, resolve } from 'node:path';
 import { attachCapture, launchBrowser, saveCapture, type Capture } from './lib/browser.js';
 
 /** What `add` last put on the list, so the mutating commands can refuse anything else. */
 const THROWAWAY_PATH = resolve('captures/.drive-throwaway.json');
+
+/** How long a marker proves anything. Yesterday's says nothing about today's list. */
+const MARKER_TTL_MS = 60 * 60 * 1_000;
 
 /**
  * Is the first list line the item this exercise created?
@@ -30,8 +33,15 @@ async function isThrowawayLine(page: Page): Promise<boolean> {
   const marker = await readFile(THROWAWAY_PATH, 'utf8').catch(() => null);
   if (marker === null) return false;
 
-  const recorded = (JSON.parse(marker) as { label?: string }).label ?? '';
-  if (recorded === '') return false;
+  const { label = '', at = 0 } = JSON.parse(marker) as { label?: string; at?: number };
+  if (label === '') return false;
+
+  // Markers expire. One left over from yesterday says nothing about what is on the list
+  // today, and the whole claim being made is that *this* exercise created the line.
+  if (Date.now() - at > MARKER_TTL_MS) {
+    console.error('⛔ The throwaway marker is stale. Run `drive.ts add` again.');
+    return false;
+  }
 
   const selectLabel =
     (await page
@@ -39,13 +49,27 @@ async function isThrowawayLine(page: Page): Promise<boolean> {
       .first()
       .getAttribute('aria-label')) ?? '';
 
-  // Compare on shared product words: HEB phrases the add button ("Add X to list") and the
-  // row checkbox ("Select X") differently, so an exact match would never hold.
-  const words = (text: string): string[] =>
-    text.toLowerCase().replace(/[^a-z0-9\s]/g, ' ').split(/\s+/).filter((w) => w.length > 3);
+  // Exact product identity, not word overlap. Two words in common is not ownership: a
+  // marker for "Organic Whole Milk" would cheerfully accept "Organic Chocolate Milk", and
+  // both commands consulting this end up deleting the line.
+  //
+  // HEB phrases the two labels differently — "Add X to list" versus "Select X" — so the
+  // surrounding words are stripped and the product itself has to match exactly.
+  const product = (text: string): string =>
+    text
+      .toLowerCase()
+      .replace(/^\s*(add|select)\s+/, '')
+      .replace(/\s+to\s+(shopping\s+)?list\s*$/, '')
+      .replace(/[^a-z0-9]+/g, ' ')
+      .trim();
 
-  const recordedWords = new Set(words(recorded));
-  return words(selectLabel).filter((word) => recordedWords.has(word)).length >= 2;
+  const seen = product(selectLabel);
+  return seen !== '' && seen === product(label);
+}
+
+/** Forget the marker once the line it describes has been consumed. */
+async function clearThrowawayMarker(): Promise<void> {
+  await rm(THROWAWAY_PATH, { force: true });
 }
 
 const LIST_URL = 'https://www.heb.com/shopping-list';
@@ -293,6 +317,8 @@ async function exerciseQuantity(page: Page, capture: Capture): Promise<void> {
     }
   }
 
+  // The last decrement removes the line, so the marker no longer describes anything.
+  await clearThrowawayMarker();
   await page.screenshot({ path: 'captures/after-mutations.png', fullPage: true });
 }
 
@@ -369,6 +395,9 @@ async function removeItem(page: Page, capture: Capture): Promise<void> {
   } else {
     console.log('\n(no confirmation dialog appeared)');
   }
+
+  // The line is gone; the marker no longer describes anything on the list.
+  await clearThrowawayMarker();
 
   console.log('\n=== calls provoked by removal ===');
   for (const call of capture.since()) {

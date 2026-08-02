@@ -95,7 +95,14 @@ const NUMBER_WORDS: Readonly<Record<string, number>> = {
  * "two percent milk" means 2% milk — one carton — not two milks. Getting this wrong is
  * both easy and very visible, which is why it is data rather than a buried conditional.
  */
-const MEASURE_WORDS = new Set(['percent', '%', 'pound', 'pounds', 'lb', 'lbs', 'ounce', 'ounces', 'oz', 'liter', 'litre', 'gallon', 'quart', 'inch']);
+const MEASURE_WORDS = new Set([
+  'percent', '%', 'pound', 'pounds', 'lb', 'lbs', 'ounce', 'ounces', 'oz',
+  'liter', 'litre', 'gallon', 'quart', 'inch',
+  // Packaging counts. "Six pack soda" is one package, not six cases, and "12 count eggs"
+  // is one carton — the number belongs to the product name, exactly as in "two percent
+  // milk". Getting these wrong multiplies a whole shop.
+  'pack', 'packs', 'pk', 'count', 'ct', 'case', 'cases', 'dozen', 'roll', 'rolls',
+]);
 
 /**
  * Brand names that *begin* with a number word, where the number is part of the name.

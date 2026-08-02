@@ -5,7 +5,7 @@
  * between them beyond phrasing belongs here instead, or it will drift.
  */
 
-import { HebError } from './errors.js';
+import { HebError, isHebError } from './errors.js';
 import { HebClient } from './graphql/client.js';
 import {
   addItemsDocument,
@@ -436,7 +436,7 @@ export class HebListOps implements ListOps {
       try {
         await this.setQuantity(listId, added.lineId, target);
         return { status: 'added', item: { ...added, quantity: target } };
-      } catch {
+      } catch (error) {
         // The add already succeeded — a line exists — but whether the quantity bump landed
         // is unknown, and `setQuantity` invalidated the cache before writing so a read here
         // reaches HEB. Reporting the stale payload's quantity of one would understate what
@@ -444,6 +444,20 @@ export class HebListOps implements ListOps {
         const actual = (await this.getList(listId)).items.find(
           (item) => item.lineId === added.lineId,
         );
+
+        // A *definitive* refusal is not an indeterminate failure: there is nothing to
+        // reconcile, and reporting success would claim five units while one is on the
+        // list. Say what actually happened, and do not invite a retry — retrying the whole
+        // add would create a second line.
+        if (isHebError(error) && error.details?.['rejected'] === true) {
+          throw new HebError(
+            'UPSTREAM_ERROR',
+            `Added ${added.text}, but HEB refused to set the quantity to ${target}. ` +
+              `The list has ${actual?.quantity ?? added.quantity}.`,
+            { cause: error, retryable: false },
+          );
+        }
+
         return { status: 'added', item: actual ?? added };
       }
     }
@@ -620,8 +634,11 @@ function assertMutationSucceeded(
   // as success means confirming a deletion or a quantity change that never took place.
   if (payload?.__typename === MUTATION_SUCCESS_TYPENAME) return;
 
+  // `rejected` marks this as a *definitive* refusal rather than a lost response. Callers
+  // reconcile indeterminate failures by re-reading; a refusal has nothing to reconcile.
   throw new HebError('UPSTREAM_ERROR', `HEB refused to ${attempted}.`, {
-    details: { returned: payload?.__typename ?? 'null' },
+    retryable: false,
+    details: { returned: payload?.__typename ?? 'null', rejected: true },
   });
 }
 

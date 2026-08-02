@@ -381,3 +381,20 @@ describe('numeric brand spellings', () => {
     expect(parseSpokenRequest('7 bananas')).toEqual({ quantity: 7, query: 'bananas' });
   });
 });
+
+describe('packaging counts belong to the product, not the request', () => {
+  it.each([
+    'six pack soda',
+    '12 count eggs',
+    '2 ct paper towels',
+    'six rolls paper towels',
+  ])('"%s" is one package', (phrase) => {
+    // Same trap as "two percent milk", but the blast radius is larger: read as a count,
+    // "six pack soda" orders six cases.
+    expect(parseSpokenRequest(phrase).quantity).toBe(1);
+  });
+
+  it('still reads a plain leading count', () => {
+    expect(parseSpokenRequest('six avocados')).toEqual({ quantity: 6, query: 'avocados' });
+  });
+});

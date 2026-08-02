@@ -18,9 +18,44 @@ import { createSkill } from '@heb/lambda-api';
 const SESSION_PATH = resolve('.session/session.json');
 const store = new FileStore(SESSION_PATH);
 
-const skill = createSkill({
-  createListOps: () => new HebListOps({ client: new HebClient({ store }) }),
-});
+/** Lines this run created. Only these may be deleted. */
+const createdLines = new Set<string>();
+
+/**
+ * `HebListOps` that physically cannot delete a line this run did not create.
+ *
+ * Declining to answer "yes" is not protection: if `rankLines` finds an existing line
+ * confident, `RemoveItemIntent` deletes it immediately, before any confirmation. That is
+ * not hypothetical — an earlier run of this very script removed a real grocery that way.
+ * The removal path still needs exercising against live data, so it is fenced rather than
+ * skipped: a wrong deletion becomes a loud failure instead of silent data loss.
+ */
+function guardedListOps(): HebListOps {
+  const ops = new HebListOps({ client: new HebClient({ store }) });
+  const realAdd = ops.addItem.bind(ops);
+  const realRemove = ops.removeItem.bind(ops);
+
+  ops.addItem = async (input) => {
+    const result = await realAdd(input);
+    if (result.status === 'added') createdLines.add(result.item.lineId);
+    return result;
+  };
+
+  ops.removeItem = async (input) => {
+    if (!createdLines.has(input.lineId)) {
+      throw new Error(
+        `REFUSED: tried to delete a line this verification did not create (${input.lineId}). ` +
+          'That would remove a real grocery item.',
+      );
+    }
+    await realRemove(input);
+    createdLines.delete(input.lineId);
+  };
+
+  return ops;
+}
+
+const skill = createSkill({ createListOps: guardedListOps });
 
 let sessionAttributes: Record<string, unknown> = {};
 
@@ -135,16 +170,15 @@ async function main(): Promise<void> {
 
   await say('what is on my list', intent('ReadListIntent'));
 
-  // Exercise the spoken-removal path, but only far enough to see it engage. Answering
-  // "yes" here would delete whichever line the matcher offered first, which on a real
-  // household list is very likely to be something the owner put there. A verification
-  // tool must not gamble with the user's data, so the actual cleanup is done below by
-  // lineId — precisely, against the line this run created.
+  // Exercise spoken removal for real. `guardedListOps` refuses any line this run did not
+  // create, so a mis-ranked confident removal fails loudly instead of destroying data.
   const removal = await say('remove enchilada sauce', intent('RemoveItemIntent', 'enchilada sauce'));
-  if (!/Removed|Did you mean/.test(removal)) {
+  if (!/Removed|Did you mean|could not find/.test(removal)) {
     throw new Error(`removal did not engage, got: ${removal}`);
   }
-  await say('no', intent('AMAZON.NoIntent'));
+  if (removal.startsWith('Did you mean')) {
+    await say('no', intent('AMAZON.NoIntent'));
+  }
 
   await say('stop', intent('AMAZON.StopIntent'));
 

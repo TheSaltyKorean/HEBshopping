@@ -49,6 +49,11 @@ const call = async (name: string, args: Record<string, unknown> = {}): Promise<s
   return body;
 };
 
+/** Every lineId the list currently holds, parsed out of `heb_read_list` output. */
+function lineIdsIn(listing: string): Set<string> {
+  return new Set([...listing.matchAll(/lineId: ([0-9a-f-]{36})/g)].map((match) => match[1]!));
+}
+
 async function main(): Promise<void> {
   await client.connect(transport);
 
@@ -56,7 +61,12 @@ async function main(): Promise<void> {
   console.log(`Connected. ${tools.length} tools registered:`);
   for (const tool of tools) console.log(`  • ${tool.name} — ${tool.title ?? ''}`);
 
-  await call('heb_read_list');
+  // Snapshot BEFORE mutating. This runs against a real household list, so correctness
+  // claims have to be relative to its starting state — asserting an absolute item count
+  // would both fail spuriously and, worse, exit before cleanup and leave the item behind.
+  const initial = await call('heb_read_list');
+  const before = lineIdsIn(initial);
+
   await call('heb_search_product', { query: 'flour tortillas', limit: 3 });
 
   // A vague query must NOT write; it should hand back candidates.
@@ -70,13 +80,23 @@ async function main(): Promise<void> {
 
   await call('heb_add_item', { productId });
   const listed = await call('heb_read_list');
-  if (!/1 item\(s\)/.test(listed)) throw new Error('item did not appear on the list');
 
-  // Remove by free text, exercising the match-against-the-list path.
-  await call('heb_remove_item', { item: 'oat milk' });
+  const added = [...lineIdsIn(listed)].filter((lineId) => !before.has(lineId));
+  if (added.length !== 1) {
+    throw new Error(`expected exactly one new line, saw ${added.length}`);
+  }
+
+  // Remove by lineId, not by free text. Free-text removal against a real list can match a
+  // pre-existing grocery, and `verify:alexa` already covers that path behind a guard that
+  // refuses to delete anything it did not create.
+  await call('heb_remove_item', { lineId: added[0]! });
 
   const afterward = await call('heb_read_list');
-  if (!afterward.includes('is empty')) throw new Error('list was not restored to empty');
+  const remaining = lineIdsIn(afterward);
+  if (remaining.has(added[0]!)) throw new Error('the added item was not removed');
+  for (const lineId of before) {
+    if (!remaining.has(lineId)) throw new Error(`a pre-existing line was removed: ${lineId}`);
+  }
 
   // Guardrails: exactly one of the mutually exclusive arguments.
   const both = await call('heb_add_item', { query: 'milk', productId: '123' });

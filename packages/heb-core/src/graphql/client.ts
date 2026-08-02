@@ -106,17 +106,34 @@ export class HebClient {
         signal: controller.signal,
       });
     } catch (error) {
+      clearTimeout(timer);
       const aborted = error instanceof Error && error.name === 'AbortError';
       throw new HebError(
         'UPSTREAM_ERROR',
         aborted ? `HEB did not respond within ${this.timeoutMs}ms` : 'HEB request failed',
         { cause: error, retryable: true, details: { operation: document.operationName } },
       );
+    }
+
+    // The timer stays armed across the body read on purpose. `fetch` resolves on *headers*,
+    // so clearing it here would leave an upstream that trickles or stalls the body entirely
+    // unbounded — which is the failure the per-call timeout exists to prevent, and the one
+    // that would blow through Alexa's response ceiling.
+    let body: string;
+    try {
+      body = await response.text();
+    } catch (error) {
+      const aborted = error instanceof Error && error.name === 'AbortError';
+      throw new HebError(
+        'UPSTREAM_ERROR',
+        aborted
+          ? `HEB did not send a complete response within ${this.timeoutMs}ms`
+          : 'HEB response body could not be read',
+        { cause: error, retryable: true, details: { operation: document.operationName } },
+      );
     } finally {
       clearTimeout(timer);
     }
-
-    const body = await response.text();
 
     // Imperva serves an HTML interstitial rather than a GraphQL error, so this check must
     // come before any JSON parsing.

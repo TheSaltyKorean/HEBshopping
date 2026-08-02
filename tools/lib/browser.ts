@@ -11,6 +11,9 @@ import { mkdir, writeFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
 import { isGraphqlUrl, parseGraphqlPost } from '@heb/core';
 
+/** Owner-only: these files carry live cookies and raw request bodies. */
+const SECRET_FILE_MODE = 0o600;
+
 export const PROFILE_DIR = resolve('.playwright-profile');
 export const CAPTURE_DIR = resolve('captures');
 
@@ -120,6 +123,7 @@ export async function saveCapture(
     await writeFile(
       resolve(CAPTURE_DIR, 'storage-state.json'),
       JSON.stringify(storageState, null, 2),
+      { mode: SECRET_FILE_MODE },
     );
     const hosts = [...new Set(storageState.cookies.map((c) => c.domain))].sort();
     console.log(`\nSession saved. Cookie domains: ${hosts.join(', ')}`);
@@ -130,10 +134,12 @@ export async function saveCapture(
   await writeFile(
     resolve(CAPTURE_DIR, `${label}-operations.json`),
     JSON.stringify(Object.fromEntries(capture.operations), null, 2),
+    { mode: SECRET_FILE_MODE },
   );
   await writeFile(
     resolve(CAPTURE_DIR, `${label}-timeline.json`),
     JSON.stringify(capture.timeline, null, 2),
+    { mode: SECRET_FILE_MODE },
   );
 
   console.log(

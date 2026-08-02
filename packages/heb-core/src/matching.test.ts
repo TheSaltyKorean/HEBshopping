@@ -6,6 +6,8 @@ import {
   matchProducts,
   mergeCandidates,
   parseSpokenRequest,
+  separation,
+  tokenize,
 } from './matching.js';
 import type { Product } from './types.js';
 
@@ -189,5 +191,44 @@ describe('mergeCandidates', () => {
 
   it('is empty for no input', () => {
     expect(mergeCandidates()).toEqual([]);
+  });
+});
+
+describe('separation — the confidence input Codex flagged', () => {
+  it('is measured against the true runner-up, not list order', () => {
+    // Callers rank by an ordering that folds in HEB's own position, so the array handed to
+    // separation() is not necessarily sorted by semantic score. Comparing the best against
+    // a weaker *earlier* entry would invent a gap and push confidence over the threshold.
+    expect(separation([0.9, 0.4, 0.88])).toBeCloseTo(separation([0.9, 0.88, 0.4]));
+  });
+
+  it('treats a lone candidate as no evidence rather than perfect evidence', () => {
+    // A singleton set is often a symptom of an over-constrained query that filtered out
+    // better matches — exactly what the broadened retry exists to recover.
+    expect(separation([0.95])).toBe(0);
+  });
+
+  it('does not let a singleton search result auto-write', () => {
+    const only = [p('1', 'Hatch Mild Green Enchilada Sauce, 15 oz')];
+    const match = matchProducts('hatch mild green enchilada sauce', only);
+    expect(match).not.toBeNull();
+    expect(isConfident(match!)).toBe(false);
+  });
+});
+
+describe('diacritics fold to their base letters', () => {
+  it.each([
+    ['café', 'coffee'],
+    ['maíz', 'corn'],
+    ['azúcar', 'sugar'],
+  ])('%s canonicalises to %s', (word, expected) => {
+    // The ASCII filter used to delete the accent outright, yielding "caf" / "ma z", which
+    // could never reach the cafe/maiz/azucar entries in CANONICAL.
+    expect(canonical(tokenize(word)[0]!)).toBe(expected);
+  });
+
+  it('matches an accented product name against an unaccented request', () => {
+    const accented = [p('9', 'Café Bustelo Espresso Ground Coffee, 10 oz')];
+    expect(matchProducts('coffee', accented)).not.toBeNull();
   });
 });

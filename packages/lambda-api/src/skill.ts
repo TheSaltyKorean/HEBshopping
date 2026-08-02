@@ -13,7 +13,12 @@
  */
 
 import * as Alexa from 'ask-sdk-core';
-import type { HandlerInput, RequestHandler, ErrorHandler } from 'ask-sdk-core';
+import type {
+  HandlerInput,
+  RequestHandler,
+  RequestInterceptor,
+  ErrorHandler,
+} from 'ask-sdk-core';
 import type { Response } from 'ask-sdk-model';
 import {
   isHebError,
@@ -23,7 +28,14 @@ import {
   type Product,
 } from '@heb/core';
 import type { HebListOps } from '@heb/core';
-import { cardList, speakableJoin, speakableList, speakableProduct } from './speech.js';
+import {
+  cardList,
+  escapeSsml,
+  speakableJoin,
+  speakableList,
+  speakableOffers,
+  speakableProduct,
+} from './speech.js';
 import {
   MAX_OFFERS,
   clearPending,
@@ -60,18 +72,29 @@ export interface CreateSkillOptions {
 
 const REPROMPT = 'You can add something, ask what is on your list, or remove something.';
 
+/**
+ * Every candidate, not just the ones we will speak.
+ *
+ * `MAX_OFFERS` caps *questions*, not candidates — `nextOffer` enforces that. Truncating
+ * here instead would leave `giveUp` building its card from only the three options the user
+ * has just rejected, which is precisely the opposite of what the card is for.
+ */
 function offersFor(product: Product, alternatives: readonly Product[]): Offer[] {
-  return [product, ...alternatives].slice(0, MAX_OFFERS).map((candidate) => ({
+  const candidates = [product, ...alternatives];
+  const spoken = speakableOffers(candidates);
+
+  return candidates.map((candidate, index) => ({
     productId: candidate.id,
-    spoken: speakableProduct(candidate),
+    spoken: spoken[index]!,
     full: candidate.name,
   }));
 }
 
 function ask(input: HandlerInput, offer: Offer): Response {
+  const name = escapeSsml(offer.spoken);
   return input.responseBuilder
-    .speak(`Did you mean ${offer.spoken}?`)
-    .reprompt(`Did you mean ${offer.spoken}? You can say yes, no, or cancel.`)
+    .speak(`Did you mean ${name}?`)
+    .reprompt(`Did you mean ${name}? You can say yes, no, or cancel.`)
     .getResponse();
 }
 
@@ -87,7 +110,7 @@ function giveUp(input: HandlerInput, pending: PendingChoice): Response {
   return input.responseBuilder
     .speak(
       `Sorry, I could not tell which one you wanted. ` +
-        `I have put the choices for "${pending.spokenQuery}" in your Alexa app.`,
+        `I have put the choices for ${escapeSsml(pending.spokenQuery)} in your Alexa app.`,
     )
     .withSimpleCard(CARD_TITLE, `Did you mean one of these?\n\n${names.join('\n')}`)
     .getResponse();
@@ -96,7 +119,7 @@ function giveUp(input: HandlerInput, pending: PendingChoice): Response {
 function confirmAdded(input: HandlerInput, item: ListItem, wasPresent: boolean): Response {
   // Confirm with the *resolved* product name, never the spoken text: the whole point of
   // the dialog is that those two can differ, and echoing the request back would hide it.
-  const name = speakableProduct(item.product);
+  const name = escapeSsml(speakableProduct(item.product));
   const speech = wasPresent
     ? `${name} was already on your list. You now have ${item.quantity}.`
     : `Added ${item.quantity > 1 ? `${item.quantity} ` : ''}${name}.`;
@@ -167,7 +190,9 @@ function readListHandler(options: CreateSkillOptions): RequestHandler {
     canHandle: isIntent('ReadListIntent'),
     async handle(input) {
       const list = await options.createListOps().getList();
-      const builder = input.responseBuilder.speak(`${speakableList(list.items)} Anything else?`);
+      const builder = input.responseBuilder.speak(
+        `${escapeSsml(speakableList(list.items))} Anything else?`,
+      );
 
       // Only card the overflow case; a card for three items is noise in the app's history.
       if (list.items.length > 0) builder.withSimpleCard(CARD_TITLE, cardList(list.items));
@@ -193,7 +218,7 @@ function removeItemHandler(options: CreateSkillOptions): RequestHandler {
 
       if (ranked.length === 0) {
         return input.responseBuilder
-          .speak(`I could not find ${spoken} on your list. Anything else?`)
+          .speak(`I could not find ${escapeSsml(spoken)} on your list. Anything else?`)
           .reprompt(REPROMPT)
           .getResponse();
       }
@@ -202,7 +227,7 @@ function removeItemHandler(options: CreateSkillOptions): RequestHandler {
       if (best.confident) {
         await listOps.removeItem({ lineId: best.item.lineId });
         return input.responseBuilder
-          .speak(`Removed ${speakableProduct(best.item.product)}. Anything else?`)
+          .speak(`Removed ${escapeSsml(speakableProduct(best.item.product))}. Anything else?`)
           .reprompt(REPROMPT)
           .getResponse();
       }
@@ -211,11 +236,14 @@ function removeItemHandler(options: CreateSkillOptions): RequestHandler {
         kind: 'remove',
         spokenQuery: spoken,
         quantity: 1,
-        offers: ranked.slice(0, MAX_OFFERS).map((entry) => ({
-          lineId: entry.item.lineId,
-          spoken: speakableProduct(entry.item.product),
-          full: entry.item.product.name,
-        })),
+        offers: (() => {
+          const spoken = speakableOffers(ranked.map((entry) => entry.item.product));
+          return ranked.map((entry, index) => ({
+            lineId: entry.item.lineId,
+            spoken: spoken[index]!,
+            full: entry.item.product.name,
+          }));
+        })(),
         index: 0,
       };
       writePending(input, pending);
@@ -238,7 +266,7 @@ function yesHandler(options: CreateSkillOptions): RequestHandler {
       if (pending.kind === 'remove') {
         await listOps.removeItem({ lineId: offer.lineId! });
         return input.responseBuilder
-          .speak(`Removed ${offer.spoken}. Anything else?`)
+          .speak(`Removed ${escapeSsml(offer.spoken)}. Anything else?`)
           .reprompt(REPROMPT)
           .getResponse();
       }
@@ -304,11 +332,42 @@ function stopHandler(): RequestHandler {
 function fallbackHandler(): RequestHandler {
   return {
     canHandle: isIntent('AMAZON.FallbackIntent'),
-    handle: (input) =>
-      input.responseBuilder
+    handle(input) {
+      // Mid-dialog, a misheard word should not cost the question. Re-ask it rather than
+      // dropping to a generic prompt that a later "yes" could no longer be answering.
+      const pending = readPending(input);
+      if (pending !== null) {
+        const offer = currentOffer(pending);
+        if (offer !== undefined) return ask(input, offer);
+      }
+      return input.responseBuilder
         .speak(`Sorry, I did not catch that. ${REPROMPT}`)
         .reprompt(REPROMPT)
-        .getResponse(),
+        .getResponse();
+    },
+  };
+}
+
+/**
+ * Intents that are answering the pending question rather than replacing it.
+ *
+ * Everything else supersedes the dialog. Without this, an ambiguous removal followed by
+ * "what's on my list" would leave `pendingChoice` intact, and the next "yes" — meant for
+ * something else entirely — would delete the line offered several turns ago.
+ */
+const DIALOG_INTENTS = new Set([
+  'AMAZON.YesIntent',
+  'AMAZON.NoIntent',
+  'AMAZON.FallbackIntent',
+]);
+
+function clearSupersededPending(): RequestInterceptor {
+  return {
+    process(input) {
+      if (Alexa.getRequestType(input.requestEnvelope) !== 'IntentRequest') return;
+      if (DIALOG_INTENTS.has(Alexa.getIntentName(input.requestEnvelope))) return;
+      clearPending(input);
+    },
   };
 }
 
@@ -348,16 +407,18 @@ function errorHandler(): ErrorHandler {
     canHandle: () => true,
     handle(input, error) {
       if (isHebError(error)) {
-        // Codes and messages only. Never the details object: it can carry list contents,
-        // and CloudWatch is not the right home for someone's groceries.
-        console.error(`HebError ${error.code}: ${error.message}`);
+        // The CODE only. Not the message, and not `details`: PRODUCT_NOT_FOUND embeds the
+        // spoken grocery query and AMBIGUOUS_LIST embeds list names, so logging either
+        // would retain a household's shopping in CloudWatch indefinitely.
+        console.error(`HebError ${error.code}`);
         return input.responseBuilder
           .speak(SPEECH_BY_CODE[error.code])
           .withShouldEndSession(true)
           .getResponse();
       }
 
-      console.error('Unhandled error:', error instanceof Error ? error.message : 'unknown');
+      // Deliberately not the message: an upstream error can echo request content back.
+      console.error(`Unhandled error: ${error instanceof Error ? error.name : 'unknown'}`);
       return input.responseBuilder
         .speak('Something went wrong talking to H-E-B. Please try again.')
         .withShouldEndSession(true)
@@ -383,6 +444,7 @@ export function createSkill(options: CreateSkillOptions) {
     sessionEndedHandler(),
   );
 
+  builder.addRequestInterceptors(clearSupersededPending());
   builder.addErrorHandlers(errorHandler());
   if (options.skillId !== undefined) builder.withSkillId(options.skillId);
   return builder.create();

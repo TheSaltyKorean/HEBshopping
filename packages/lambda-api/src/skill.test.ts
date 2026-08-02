@@ -370,3 +370,80 @@ describe('built-in intents', () => {
     expect(turn.ended).toBe(false);
   });
 });
+
+describe('stale confirmation state cannot be answered later', () => {
+  const ambiguousRemoval = () =>
+    fakeOps({
+      rankLines: vi.fn(async () => [
+        { item: line('line-1', '1', 'H-E-B Whole Milk, 1 gal'), confident: false },
+        { item: line('line-2', '2', 'H-E-B 2% Reduced Fat Milk, 1 gal'), confident: false },
+      ]),
+    });
+
+  it('drops the pending question when another intent takes over', async () => {
+    const ops = ambiguousRemoval();
+    const say = conversation(ops);
+
+    await say(intent('RemoveItemIntent', { item: 'milk' }));
+    const listed = await say(intent('ReadListIntent'));
+    expect(listed.attributes['pendingChoice']).toBeUndefined();
+
+    // Without this, "yes" would delete the line offered two turns ago, for a question the
+    // user is no longer being asked.
+    await say(intent('AMAZON.YesIntent'));
+    expect(ops.removeItem).not.toHaveBeenCalled();
+  });
+
+  it('keeps the question across a misheard utterance and re-asks it', async () => {
+    const ops = ambiguousRemoval();
+    const say = conversation(ops);
+
+    const asked = await say(intent('RemoveItemIntent', { item: 'milk' }));
+    const fallback = await say(intent('AMAZON.FallbackIntent'));
+
+    // A misrecognition should not cost the dialog — but it must re-ask, so a later "yes"
+    // is answering a question that was actually posed.
+    expect(fallback.speech).toBe(asked.speech);
+
+    await say(intent('AMAZON.YesIntent'));
+    expect(ops.removeItem).toHaveBeenCalledWith({ lineId: 'line-1' });
+  });
+});
+
+describe('the give-up card shows more than what was rejected', () => {
+  it('keeps candidates beyond the three that were spoken', async () => {
+    const many = Array.from({ length: 5 }, (_, i) => product(`${i}`, `Candidate Number ${i} Sauce`));
+    const ops = fakeOps({
+      addItem: vi.fn(async () => ({
+        status: 'needs_confirmation' as const,
+        match: { product: many[0]!, confidence: 0.55, alternatives: many.slice(1) },
+      })),
+    });
+    const say = conversation(ops);
+
+    await say(intent('AddItemIntent', { item: 'sauce' }));
+    await say(intent('AMAZON.NoIntent'));
+    await say(intent('AMAZON.NoIntent'));
+    const surrender = await say(intent('AMAZON.NoIntent'));
+
+    // MAX_OFFERS caps spoken questions, not candidates: the card exists to show the ones
+    // there was no time to say.
+    expect(surrender.card).toContain('Candidate Number 4');
+  });
+});
+
+describe('speech is valid SSML', () => {
+  it('escapes an ampersand in a product name', async () => {
+    const ops = fakeOps({
+      addItem: vi.fn(async () => ({
+        status: 'added' as const,
+        item: line('l1', '1', 'H-E-B Half & Half, 32 oz'),
+      })),
+    });
+    const turn = await conversation(ops)(intent('AddItemIntent', { item: 'half and half' }));
+
+    // A raw & makes the SSML invalid and the response fails to speak at all.
+    expect(turn.speech).toContain('&amp;');
+    expect(turn.speech).not.toMatch(/&(?!amp;|lt;|gt;|quot;|apos;)/);
+  });
+});

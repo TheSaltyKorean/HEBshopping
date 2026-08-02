@@ -5,7 +5,15 @@
 
 import { describe, expect, it } from 'vitest';
 import type { ListItem } from '@heb/core';
-import { cardList, speakableJoin, speakableList, speakableProduct } from './speech.js';
+import {
+  cardList,
+  escapeSsml,
+  extractSize,
+  speakableJoin,
+  speakableList,
+  speakableOffers,
+  speakableProduct,
+} from './speech.js';
 
 const product = (name: string) => ({ id: '1', name });
 
@@ -120,5 +128,50 @@ describe('brand names survive shortening', () => {
     // Spanish articles look like filler and are not: stripping them turns "Old El Paso"
     // into "Old Paso", which is a different, nonexistent brand.
     expect(speakableProduct(product(name))).toContain(brand);
+  });
+});
+
+describe('SSML escaping', () => {
+  it.each([
+    ['H-E-B Half & Half', '&amp;'],
+    ['Ben & Jerry’s <Special>', '&lt;'],
+  ])('escapes XML-significant characters in %s', (name, expected) => {
+    // speak() emits SSML; a raw ampersand makes the whole response invalid, so the product
+    // simply fails to be spoken at all.
+    expect(escapeSsml(name)).toContain(expected);
+  });
+
+  it('leaves ordinary names untouched', () => {
+    expect(escapeSsml('Fresh Bananas')).toBe('Fresh Bananas');
+  });
+});
+
+describe('speakableOffers — offers must be distinguishable by ear', () => {
+  it('restores size when two candidates collapse to the same spoken name', () => {
+    // Otherwise the dialog asks an unanswerable question: identical words, different
+    // product ids, and "yes" picks a variant the user had no way to choose.
+    const spoken = speakableOffers([
+      product('Hill Country Fare Mild Enchilada Sauce, 10 oz'),
+      product('Hill Country Fare Mild Enchilada Sauce, 28 oz'),
+    ]);
+    expect(spoken[0]).not.toBe(spoken[1]);
+    expect(spoken[0]).toContain('10 oz');
+    expect(spoken[1]).toContain('28 oz');
+  });
+
+  it('leaves already-distinct names short', () => {
+    const spoken = speakableOffers([
+      product('Hatch Mild Green Enchilada Sauce, 15 oz'),
+      product('Old El Paso Red Enchilada Sauce, 10 oz'),
+    ]);
+    expect(spoken.every((name) => !/\d+\s*oz/.test(name))).toBe(true);
+  });
+
+  it.each([
+    ['Hatch Mild Green Enchilada Sauce, 15 oz', '15 oz'],
+    ['H-E-B Grade AA Large White Eggs, 12 ct', '12 ct'],
+    ['Oatly The Original Oat Milk, 1/2 gal', '1/2 gal'],
+  ])('extracts the size from %s', (name, expected) => {
+    expect(extractSize(name)).toBe(expected);
   });
 });

@@ -86,12 +86,31 @@ async function main(): Promise<void> {
     console.log(`   (${isHebError(error) ? error.code : 'error'}: ${(error as Error).message})`);
   }
 
-  console.log('\n── 5. remove (cleanup)');
-  await time('removeItem', () => lists.removeItem({ lineId }));
+  console.log('\n── 5. restore the list to how it was');
+
+  // The line may have existed before this run, in which case `addItem` incremented its
+  // quantity rather than creating anything. Deleting it would remove a real grocery — so
+  // the cleanup restores the previous quantity instead, and only deletes lines this run
+  // actually created.
+  const preExisting = before.items.find((item) => item.lineId === lineId);
+
+  if (preExisting === undefined) {
+    await time('removeItem', () => lists.removeItem({ lineId }));
+  } else {
+    console.log(`   "${addedName}" pre-existed — restoring quantity ${preExisting.quantity}`);
+    await time('restore quantity', () =>
+      lists.setItemQuantity(lineId, preExisting.quantity),
+    );
+  }
+
   const after = await time('getList', () => lists.getList());
-  const gone = !after.items.some((item) => item.lineId === lineId);
-  console.log(`   ${after.items.length} item(s); removed: ${gone ? 'yes' : 'NO'}`);
-  if (!gone) throw new Error('the item was still on the list after removal');
+  const restored =
+    preExisting === undefined
+      ? !after.items.some((item) => item.lineId === lineId)
+      : after.items.find((item) => item.lineId === lineId)?.quantity === preExisting.quantity;
+
+  console.log(`   ${after.items.length} item(s); restored: ${restored ? 'yes' : 'NO'}`);
+  if (!restored) throw new Error('the list was not restored to its original state');
 
   console.log(
     `\n✅ add → read → remove verified. List restored to ${after.items.length} item(s).`,

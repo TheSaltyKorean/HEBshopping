@@ -77,6 +77,8 @@ export class HebListOps implements ListOps {
    */
   private cachedList: HebList | undefined;
   private cachedStoreId: number | undefined;
+  /** Which list `cachedStoreId` belongs to — stores are per-list, not per-account. */
+  private cachedStoreListId: string | undefined;
 
   constructor(options: HebListOpsOptions) {
     this.client = options.client;
@@ -123,13 +125,22 @@ export class HebListOps implements ListOps {
   async getList(listId?: string): Promise<HebList> {
     const id = await this.resolveListId(listId);
 
+    // Serve the cache when it is for *this* list. Without this, a query-based add costs
+    // list + search + search + list + mutation rather than the documented search + search
+    // + mutation, because `resolveStoreId` already fetched the list a moment earlier. Two
+    // redundant round trips is a large fraction of Alexa's ~8s ceiling.
+    if (this.cachedList !== undefined && this.cachedList.listId === id) return this.cachedList;
+
     const data = await this.client.execute<{ getShoppingListV2: HebListPayload }>(
       getShoppingListDocument(id),
     );
 
     const list = toHebList(data.getShoppingListV2);
     this.cachedList = list;
-    if (list.storeId !== null) this.cachedStoreId = Number(list.storeId);
+    if (list.storeId !== null) {
+      this.cachedStoreId = Number(list.storeId);
+      this.cachedStoreListId = list.listId;
+    }
     return list;
   }
 
@@ -178,12 +189,26 @@ export class HebListOps implements ListOps {
     const retried = matchProducts(query, merged);
     if (retried === null) return match;
     if (match === null) return retried;
-    return retried.confidence > match.confidence ? retried : match;
+
+    // Ties go to the broadened result. It was scored against a strictly larger candidate
+    // set, so an equal confidence there is better supported — and if the top product
+    // changed, the merged set found something the narrow search had hidden, which is the
+    // entire reason for retrying.
+    return retried.confidence >= match.confidence ? retried : match;
   }
 
+  /**
+   * The store to search, for a specific list.
+   *
+   * Keyed by list id, not global. Lists carry their own store, so reusing list A's store
+   * for a later explicit call against list B would search the wrong location — returning
+   * products that cannot be bought where the mutation is actually writing.
+   */
   private async resolveStoreId(listId?: string): Promise<number> {
-    if (this.cachedStoreId !== undefined) return this.cachedStoreId;
     const list = await this.getList(listId);
+    if (this.cachedStoreId !== undefined && this.cachedStoreListId === list.listId) {
+      return this.cachedStoreId;
+    }
     if (list.storeId === null) {
       throw new HebError('UPSTREAM_ERROR', 'The HEB list has no store, so search is impossible.');
     }
@@ -253,15 +278,31 @@ export class HebListOps implements ListOps {
     return { status: 'added', item: added };
   }
 
+  /**
+   * Set a line's quantity outright.
+   *
+   * Exposed for callers that need to *restore* prior state rather than add to it — the
+   * verification tools use it to undo an increment against a line they did not create.
+   */
+  async setItemQuantity(lineId: string, quantity: number, listId?: string): Promise<void> {
+    await this.setQuantity(await this.resolveListId(listId), lineId, quantity);
+  }
+
   private async setQuantity(listId: string, lineId: string, quantity: number): Promise<void> {
-    await this.client.execute(updateItemQuantityDocument(listId, lineId, quantity));
+    const data = await this.client.execute<{
+      updateShoppingListItemV2?: { __typename?: string };
+    }>(updateItemQuantityDocument(listId, lineId, quantity));
     this.cachedList = undefined;
+    assertMutationSucceeded(data.updateShoppingListItemV2, 'change the quantity');
   }
 
   async removeItem(input: RemoveItemInput): Promise<void> {
     const listId = await this.resolveListId(input.listId);
-    await this.client.execute(deleteItemsDocument(listId, [input.lineId]));
+    const data = await this.client.execute<{ deleteShoppingListItemsV2?: { __typename?: string } }>(
+      deleteItemsDocument(listId, [input.lineId]),
+    );
     this.cachedList = undefined;
+    assertMutationSucceeded(data.deleteShoppingListItemsV2, 'remove the item');
   }
 
   /**
@@ -316,6 +357,31 @@ export class HebListOps implements ListOps {
       // Only the top candidate can be "the confident answer"; the rest are alternatives.
       .map((item, index) => ({ item, confident: index === 0 && confident }));
   }
+}
+
+/**
+ * The union member every list mutation returns on success.
+ *
+ * `ShoppingListResponseV2` is a union, and HEB signals a rejected mutation by returning a
+ * *different* member rather than a GraphQL error — so the response looks structurally fine
+ * to `HebClient` and carries only a `__typename`. Without this check a stale line id
+ * produces a cheerful "Removed it" while the item stays on the list, which is worse than
+ * an error because the user stops thinking about it.
+ */
+const MUTATION_SUCCESS_TYPENAME = 'ShoppingListV2';
+
+function assertMutationSucceeded(
+  payload: { __typename?: string } | undefined,
+  attempted: string,
+): void {
+  // A missing __typename means the selection did not ask for one; treat that as success
+  // rather than inventing a failure, since the request itself did not error.
+  const typename = payload?.__typename;
+  if (typename === undefined || typename === MUTATION_SUCCESS_TYPENAME) return;
+
+  throw new HebError('UPSTREAM_ERROR', `HEB refused to ${attempted}.`, {
+    details: { returned: typename },
+  });
 }
 
 // ---------------------------------------------------------------------------

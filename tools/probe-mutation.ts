@@ -63,18 +63,22 @@ async function main(): Promise<void> {
   const list = await lists.getList();
   console.log(`List "${list.name}" has ${list.items.length} item(s)`);
 
-  // Ensure there is something to delete.
-  let lineId: string;
-  if (list.items.length > 0) {
-    lineId = list.items[0]!.lineId;
-    console.log(`Reusing existing line: ${list.items[0]!.text}`);
-  } else {
-    const candidates = await lists.searchProducts('oat milk');
-    const added = await lists.addItem({ productId: candidates[0]!.id });
-    if (added.status === 'needs_confirmation') throw new Error('unreachable');
-    lineId = added.item.lineId;
-    console.log(`Added throwaway line: ${added.item.text}`);
+  // Always create the line this probe is going to delete.
+  //
+  // Reusing an existing line would mean the successful attempt below silently deletes a
+  // real household grocery — a probe has no business destroying data it did not create,
+  // and a nonempty list is the normal case, not the edge case.
+  const candidates = await lists.searchProducts('oat milk');
+  const added = await lists.addItem({ productId: candidates[0]!.id });
+  if (added.status === 'needs_confirmation') throw new Error('unreachable');
+  if (added.status === 'already_present') {
+    throw new Error(
+      'The throwaway product is already on the list; deleting it would remove a real line. ' +
+        'Re-run when it is not on the list.',
+    );
   }
+  const lineId = added.item.lineId;
+  console.log(`Added throwaway line: ${added.item.text}`);
 
   const listId = list.listId;
 

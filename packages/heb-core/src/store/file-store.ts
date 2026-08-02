@@ -31,7 +31,11 @@ export class FileStore implements Store {
     }
 
     try {
-      return JSON.parse(raw) as SessionState;
+      const parsed: unknown = JSON.parse(raw);
+      // Valid JSON is not a valid session. `{}` or `{"cookies": null}` would parse and then
+      // throw deep inside `checkSession` when it calls array methods — a generic crash
+      // instead of the promised "log in again" path. Structurally invalid reads as absent.
+      return isSessionState(parsed) ? parsed : null;
     } catch {
       // A truncated or hand-edited file is indistinguishable from no session as far as
       // callers are concerned: both mean "you need to log in again".
@@ -49,6 +53,29 @@ export class FileStore implements Store {
     await chmod(temporaryPath, SECRET_FILE_MODE);
     await rename(temporaryPath, this.path);
   }
+}
+
+/**
+ * Structural check on a parsed session.
+ *
+ * Only the fields the rest of the code dereferences. A cookie needs a usable name, value
+ * and domain to build a request header, and `expires` must be a number for the staleness
+ * comparison — anything else is a jar that would fail later and less clearly.
+ */
+function isSessionState(value: unknown): value is SessionState {
+  if (typeof value !== 'object' || value === null) return false;
+  const candidate = value as Partial<SessionState>;
+  if (!Array.isArray(candidate.cookies)) return false;
+
+  return candidate.cookies.every(
+    (cookie) =>
+      typeof cookie === 'object' &&
+      cookie !== null &&
+      typeof cookie.name === 'string' &&
+      typeof cookie.value === 'string' &&
+      typeof cookie.domain === 'string' &&
+      typeof cookie.expires === 'number',
+  );
 }
 
 function isNotFound(error: unknown): boolean {

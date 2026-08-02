@@ -20,6 +20,13 @@ import { chromium, type BrowserContext } from 'playwright';
 import { mkdir, writeFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
 
+/**
+ * Owner-only. These files hold the live H-E-B cookie jar and raw request/response bodies
+ * for an account with a saved payment method; the default umask would commonly make them
+ * world-readable, which on a shared machine is a real exposure regardless of .gitignore.
+ */
+const SECRET_FILE_MODE = 0o600;
+
 const PROFILE_DIR = resolve('.playwright-profile');
 const CAPTURE_DIR = resolve('captures');
 const START_URL = 'https://www.heb.com/shopping-list';
@@ -123,8 +130,11 @@ async function flush(context: BrowserContext): Promise<void> {
   await writeFile(
     resolve(CAPTURE_DIR, 'operations.json'),
     JSON.stringify(Object.fromEntries(operations), null, 2),
+    { mode: SECRET_FILE_MODE },
   );
-  await writeFile(resolve(CAPTURE_DIR, 'timeline.json'), JSON.stringify(timeline, null, 2));
+  await writeFile(resolve(CAPTURE_DIR, 'timeline.json'), JSON.stringify(timeline, null, 2), {
+    mode: SECRET_FILE_MODE,
+  });
 
   // Session state spans BOTH hosts — auth lives on accounts.heb.com. Capturing only the
   // storefront looks fine and then fails on renewal.
@@ -132,6 +142,7 @@ async function flush(context: BrowserContext): Promise<void> {
   await writeFile(
     resolve(CAPTURE_DIR, 'storage-state.json'),
     JSON.stringify(storageState, null, 2),
+    { mode: SECRET_FILE_MODE },
   );
 
   const hosts = new Set(storageState.cookies.map((c) => c.domain));
@@ -198,6 +209,7 @@ async function main(): Promise<void> {
       writeFile(
         resolve(CAPTURE_DIR, 'operations.json'),
         JSON.stringify(Object.fromEntries(operations), null, 2),
+        { mode: SECRET_FILE_MODE },
       ),
     );
   }, 15_000);

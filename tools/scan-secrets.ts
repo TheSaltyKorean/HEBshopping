@@ -35,6 +35,14 @@ const RULES: Rule[] = [
     note: 'live credential — rotate immediately if this ever reached a remote',
   },
   {
+    // `FileStore` and Playwright both serialise cookies as objects, so the header-style
+    // rule above cannot see them. A session copied to a filename `.gitignore` does not
+    // cover would otherwise scan clean while holding the primary live credentials.
+    name: 'serialised cookie jar',
+    pattern: /"name"\s*:\s*"(reese84|sat|sst|sst\.sig|_session[^"]*|visid_incap_\d+)"\s*,\s*"value"\s*:\s*"[^"]{16,}"/g,
+    note: 'live credential in JSON form — this is what a session/storage-state file looks like',
+  },
+  {
     name: 'bearer token',
     pattern: /\b[Bb]earer\s+[A-Za-z0-9._-]{20,}/g,
     note: 'live credential',
@@ -74,22 +82,61 @@ function committableFiles(): string[] {
     .filter((path) => !SKIP.some((skip) => skip.test(path)));
 }
 
+/** Paths git has staged, i.e. the ones whose *index* content is what gets committed. */
+function stagedPaths(): Set<string> {
+  try {
+    const output = execFileSync('git', ['diff', '--cached', '--name-only', '--diff-filter=ACMR'], {
+      encoding: 'utf8',
+    });
+    return new Set(output.split('\n').filter(Boolean));
+  } catch {
+    return new Set(); // no HEAD yet, or not a repo — fall back to working-tree content
+  }
+}
+
+/**
+ * The content that would actually be committed.
+ *
+ * As a pre-commit gate, reading the working tree is the wrong thing: a secret can be
+ * staged and then deleted from disk, and the scan would pass while the staged blob still
+ * carries the credential into the commit. For staged paths, read the blob from the index;
+ * for everything else — untracked files, unstaged edits — the working tree is what a later
+ * `git add -A` would pick up, so read that.
+ */
+function contentToScan(path: string, staged: ReadonlySet<string>): string | null {
+  if (staged.has(path)) {
+    try {
+      return execFileSync('git', ['show', `:${path}`], {
+        encoding: 'utf8',
+        maxBuffer: 32 * 1024 * 1024,
+      });
+    } catch {
+      return null; // binary or unreadable from the index
+    }
+  }
+
+  try {
+    if (statSync(path).size > 2_000_000) return null;
+    return readFileSync(path, 'utf8');
+  } catch {
+    return null;
+  }
+}
+
 let findings = 0;
+const staged = stagedPaths();
 
 for (const path of committableFiles()) {
-  let content: string;
-  try {
-    if (statSync(path).size > 2_000_000) continue;
-    content = readFileSync(path, 'utf8');
-  } catch {
-    continue; // binary or unreadable
-  }
+  const content = contentToScan(path, staged);
+  if (content === null) continue;
 
   for (const rule of RULES) {
     for (const match of content.matchAll(rule.pattern)) {
       const line = content.slice(0, match.index).split('\n').length;
-      const preview = match[0].slice(0, 48);
-      console.error(`✗ ${path}:${line}  [${rule.name}] ${preview}`);
+      // Location and rule only. Echoing even a prefix of the match would write a complete
+      // AWS key, or a usable chunk of a cookie, into terminal scrollback and CI logs —
+      // spreading the credential this tool exists to contain.
+      console.error(`✗ ${path}:${line}  [${rule.name}] ${match[0].length} chars, not shown`);
       console.error(`    ${rule.note}`);
       findings += 1;
     }

@@ -23,6 +23,8 @@ function session(overrides: Partial<SessionState> = {}): SessionState {
     cookies: [
       cookie('sat', 'www.heb.com'),
       cookie('sst', 'www.heb.com'),
+      // The signature over `sst`, and independently required — see REQUIRED_REQUEST_COOKIES.
+      cookie('sst.sig', 'www.heb.com'),
       cookie('reese84', '.heb.com'),
       cookie('_session', 'accounts.heb.com'),
     ],

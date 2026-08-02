@@ -79,6 +79,56 @@ export function speakableProduct(product: Product): string {
   return [...kept.slice(0, head), ...kept.slice(-(MAX_SPOKEN_WORDS - head))].join(' ').trim();
 }
 
+/**
+ * XML-escape text destined for SSML.
+ *
+ * `ResponseBuilder.speak()` emits SSML, so a catalog name containing `&` — H-E-B sells
+ * "Half & Half", among many others — produces invalid markup and the response fails to
+ * speak at all. Every catalog- or slot-derived string must go through this before being
+ * interpolated into speech. Card text must NOT: cards are plain text and would show the
+ * entities literally.
+ */
+export function escapeSsml(text: string): string {
+  return text
+    .replaceAll('&', '&amp;')
+    .replaceAll('<', '&lt;')
+    .replaceAll('>', '&gt;')
+    .replaceAll('"', '&quot;')
+    .replaceAll("'", '&apos;');
+}
+
+/** The size or count a product name carries, e.g. "15 oz", "12 ct". */
+export function extractSize(name: string): string | null {
+  // Fractions first: "1/2 gal" would otherwise match the plain-number pattern as "2 gal",
+  // which is a different and wrong size.
+  return (
+    name.match(/(\d+\/\d+\s*(?:gal|lb|oz))\b/i)?.[1] ??
+    name.match(/(\d+(?:\.\d+)?\s*(?:oz|lb|lbs|ct|gal|qt|l|ml|g|kg|pk|rolls|count))\b/i)?.[1] ??
+    null
+  );
+}
+
+/**
+ * Spoken names for a set of candidates, guaranteed to differ from one another.
+ *
+ * `speakableProduct` drops size because it is noise when choosing by ear — but when two
+ * candidates differ *only* by size, dropping it makes the dialog ask an unanswerable
+ * question: the same words offered twice for different product ids, where "yes" picks a
+ * variant the user had no way to choose. Size is restored only for the colliding names,
+ * so the common case stays short.
+ */
+export function speakableOffers(products: readonly Product[]): string[] {
+  const base = products.map(speakableProduct);
+  const counts = new Map<string, number>();
+  for (const name of base) counts.set(name, (counts.get(name) ?? 0) + 1);
+
+  return base.map((name, index) => {
+    if ((counts.get(name) ?? 0) < 2) return name;
+    const size = extractSize(products[index]!.name);
+    return size === null ? name : `${name}, ${size}`;
+  });
+}
+
 /** Join a list the way a person would say it: "a, b, and c". */
 export function speakableJoin(parts: readonly string[]): string {
   if (parts.length === 0) return '';

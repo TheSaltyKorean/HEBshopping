@@ -79,6 +79,12 @@ export function tokenize(text: string): string[] {
   return (
     text
       .toLowerCase()
+      // Fold accents to their base letters *before* the ASCII filter below, which would
+      // otherwise delete them outright: "café" would become "caf" and "maíz" "ma z",
+      // neither of which can reach the cafe/maiz entries in CANONICAL — failing on exactly
+      // the Spanish names those entries exist to match.
+      .normalize('NFD')
+      .replace(/[\u0300-\u036f]/g, '')
       // Collapse letter-by-letter hyphenation so "H-E-B" becomes one token "heb" and can
       // match a spoken "heb". Splitting it into h/e/b makes the store's own brand — by far
       // the most common one in this catalog — permanently unmatchable.
@@ -202,8 +208,16 @@ function rankBonus(rank: number): number {
 const SEPARATION_SCALE = 0.15;
 
 export function separation(scores: readonly number[]): number {
-  if (scores.length < 2) return 1;
-  const [best, runnerUp] = scores;
+  // A lone candidate is not evidence of a clear winner — it is the absence of evidence.
+  // HEB's search narrows on every extra word, so a singleton set is often a *symptom* of
+  // an over-constrained query that filtered out better catalog matches. Reporting maximum
+  // separation here would let a fully-covered singleton reach confidence 1.0 and be
+  // written silently, skipping the broadened retry that exists for exactly this case.
+  if (scores.length < 2) return 0;
+
+  // Sorted defensively: separation is meaningless unless it compares the best against the
+  // true runner-up, and callers rank by an ordering that folds in HEB's own position.
+  const [best, runnerUp] = [...scores].sort((a, b) => b - a);
   return Math.min(1, Math.max(0, (best! - runnerUp!) / SEPARATION_SCALE));
 }
 

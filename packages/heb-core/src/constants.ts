@@ -51,8 +51,13 @@ export const HEB_REQUEST_TIMEOUT_MS = 3_000;
  * `accounts.heb.com` cookies are deliberately absent: they are not sent to the storefront
  * host, so they cannot gate a request. They still matter for re-login, which is why the
  * session captures both hosts.
+ *
+ * `sst.sig` is the signature over `sst` and expires on its own schedule. Requiring only
+ * the unsigned value would let `checkSession` call a jar usable — and `tools/login.ts`
+ * persist it — while every authenticated request is rejected. Failing here costs nothing;
+ * failing at the network call costs a voice command.
  */
-export const REQUIRED_REQUEST_COOKIES = ['sat', 'sst', 'reese84'] as const;
+export const REQUIRED_REQUEST_COOKIES = ['sat', 'sst', 'sst.sig', 'reese84'] as const;
 
 /**
  * Refuse a session this close to its cookie expiry, rather than letting a request fail

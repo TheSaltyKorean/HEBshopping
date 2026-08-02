@@ -117,8 +117,12 @@ resource "aws_iam_role" "lambda" {
 
 /** Exactly the four actions the function performs, on exactly its own resources. */
 data "aws_iam_policy_document" "lambda" {
+  # Read only. The handlers never call `putSession` — the sole production writer is
+  # `tools/push-session.ts`, running under the operator's own credentials. Granting
+  # PutItem to two internet-facing functions would let compromised runtime code replace
+  # or destroy the household's stored credential, for no capability they actually use.
   statement {
-    actions   = ["dynamodb:GetItem", "dynamodb:PutItem"]
+    actions   = ["dynamodb:GetItem"]
     resources = [aws_dynamodb_table.session.arn]
   }
 

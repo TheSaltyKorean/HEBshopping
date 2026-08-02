@@ -290,3 +290,18 @@ describe('session health with duplicate cookies', () => {
       .toBeDefined();
   });
 });
+
+describe('session health prefers the longest-lived duplicate', () => {
+  it('is usable when a near-expiry copy sits ahead of a long-lived one', async () => {
+    // Otherwise a duplicate expiring inside the safety margin, merely because it comes
+    // first in the array, condemns a jar that is good for weeks.
+    const soon = NOW / 1_000 + 60; // inside the one-hour margin
+    const base = session();
+    const nearlyDead = { ...base.cookies.find((c) => c.name === 'sat')!, domain: '.heb.com', expires: soon };
+
+    const jar = session({ cookies: [nearlyDead, ...base.cookies] });
+    const fetchImpl = respond(JSON.stringify({ data: { ok: 1 } }));
+
+    await expect(client(fetchImpl, jar).execute(getShoppingListsDocument())).resolves.toBeDefined();
+  });
+});

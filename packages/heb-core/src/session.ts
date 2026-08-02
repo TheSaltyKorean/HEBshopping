@@ -76,14 +76,23 @@ export function checkSession(
       continue;
     }
 
-    const cookie = copies.find((candidate) => !cookieIsExpired(candidate, nowMs));
-    if (cookie === undefined) {
+    // The longest-lived copy, not the first unexpired one. Otherwise a duplicate expiring
+    // inside the safety margin can sit ahead of one good for months, and the whole jar is
+    // declared "expires imminently" — usability still hostage to array order, just one
+    // step further along than before.
+    const usable = copies
+      .filter((candidate) => !cookieIsExpired(candidate, nowMs))
+      // -1 means a session cookie: no expiry at all, so it outlives every dated one.
+      .map((candidate) => (candidate.expires === -1 ? Number.POSITIVE_INFINITY : candidate.expires * 1_000))
+      .sort((a, b) => b - a);
+
+    const longest = usable[0];
+    if (longest === undefined) {
       expired.push(name);
       continue;
     }
-    if (cookie.expires !== -1) {
-      const expiresAt = cookie.expires * 1_000;
-      soonestExpiry = soonestExpiry === undefined ? expiresAt : Math.min(soonestExpiry, expiresAt);
+    if (Number.isFinite(longest)) {
+      soonestExpiry = soonestExpiry === undefined ? longest : Math.min(soonestExpiry, longest);
     }
   }
 

@@ -415,7 +415,10 @@ export class HebListOps implements ListOps {
           }
 
           const actual = current.items.find((item) => item.lineId === existing.lineId);
-          if (actual !== undefined && actual.quantity === target) {
+          // At *or above*: a household member incrementing the same line before the
+          // reconciliation read leaves it higher than asked for, and treating that as a
+          // failure sends the user to retry a request that was already fulfilled.
+          if (actual !== undefined && actual.quantity >= target) {
             return { status: 'already_present', item: actual };
           }
           throw new HebError(
@@ -475,7 +478,21 @@ export class HebListOps implements ListOps {
     }
 
     if (added === undefined) {
-      throw new HebError('UPSTREAM_ERROR', 'HEB accepted the add but did not return the item.');
+      // The mutation succeeded; the returned page simply does not contain the new line —
+      // a long category-sorted list can place it outside the page. Throwing a retryable
+      // error here sends the user to add it again, and the retry finds the line and
+      // increments it. Look before saying anything.
+      this.cachedList = undefined;
+      const seen = await this.getList(listId).catch(() => null);
+      added = seen?.items.find((item) => item.product?.id === productId);
+
+      if (added === undefined) {
+        throw new HebError(
+          'UPSTREAM_ERROR',
+          'HEB accepted the add but did not return the item. Check the list before asking again.',
+          { retryable: false, details: { indeterminate: true } },
+        );
+      }
     }
 
     if (quantity > 1) {

@@ -14,6 +14,8 @@ export interface ParsedOperation {
   /** `null` when the client sent full query text instead of a persisted hash. */
   sha256Hash: string | null;
   hasFullQuery: boolean;
+  /** The document itself, when the client sent one. Present only in gitignored captures. */
+  query?: string;
   variables: unknown;
 }
 

@@ -34,6 +34,9 @@ let createdLine: string | null = null;
  */
 let createdProductId: string | null = null;
 
+/** The candidate's name, so cleanup can identify its line in a text listing. */
+let createdProductName: string | null = null;
+
 /** Line ids present before this run touched anything; module scope so cleanup can see it. */
 let before: ReadonlySet<string> = new Set();
 
@@ -139,6 +142,7 @@ async function main(): Promise<void> {
   // Armed *before* the call: a committed add whose response is lost rejects here, and the
   // cleanup would otherwise have neither a line nor a product to resolve.
   createdProductId = productId;
+  createdProductName = absent.name;
   const addReply = await call('heb_add_item', { productId });
 
   const listed = await call('heb_read_list');
@@ -192,10 +196,23 @@ main()
     // Resolve the line late if the read that would have identified it never happened.
     if (createdLine === null && createdProductId !== null) {
       const listing = await call('heb_read_list').catch(() => '');
-      const fresh = [...lineIdsIn(listing)].filter((lineId) => !before.has(lineId));
-      if (fresh.length === 1) createdLine = fresh[0]!;
-      else if (fresh.length > 1) {
-        console.error('⛔ Several new lines exist; not guessing which is ours. Check the list.');
+
+      // Match the *product*, not "the only new line". A household member adding one item
+      // after the opening snapshot also leaves exactly one unfamiliar line, and deleting
+      // it would destroy their grocery in the name of cleaning up ours.
+      const mine = listing
+        .split('\n')
+        .find(
+          (line) =>
+            createdProductName !== null &&
+            line.includes(createdProductName) &&
+            !before.has(line.match(/lineId: ([0-9a-f-]{36})/)?.[1] ?? ''),
+        );
+
+      const found = mine?.match(/lineId: ([0-9a-f-]{36})/)?.[1];
+      if (found !== undefined) createdLine = found;
+      else {
+        console.error('⛔ Could not identify our line; leaving the list alone. Check it by hand.');
         process.exitCode = 1;
       }
     }

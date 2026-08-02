@@ -21,6 +21,8 @@ export interface CapturedCall {
   operationName: string;
   sha256Hash: string | null;
   hasFullQuery: boolean;
+  /** The document itself, when the client sent one. Captures are gitignored. */
+  query?: string;
   variables: unknown;
   responseStatus: number;
   responseBody: unknown;

@@ -36,6 +36,8 @@ interface CapturedOperation {
   sha256Hash: string | null;
   /** Present only when the client sent the full query text — see the non-strict APQ experiment. */
   hasFullQuery: boolean;
+  /** The document itself, when the client sent one. Captures are gitignored. */
+  query?: string;
   variables: unknown;
   responseStatus: number;
   responseBody: unknown;
@@ -127,6 +129,8 @@ async function recordGraphqlTraffic(context: BrowserContext): Promise<void> {
           operationName,
           sha256Hash,
           hasFullQuery: typeof record['query'] === 'string',
+          // Retained so a schema-drift repair has the document to work from.
+          ...(typeof record['query'] === 'string' ? { query: record['query'] } : {}),
           variables: record['variables'] ?? null,
           responseStatus: response.status(),
           responseBody: ownResponse,

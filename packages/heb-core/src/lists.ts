@@ -209,7 +209,12 @@ export class HebListOps implements ListOps {
     // a `__typename`, which `HebClient` sees as a perfectly good data envelope. Mapping it
     // would manufacture an empty list, and we would cheerfully tell someone their shopping
     // list is empty when in fact the read was refused.
-    assertMutationSucceeded(data.getShoppingListV2, 'read the list');
+    //
+    // Uses the authentication-aware classifier, not the generic one: a deployment with
+    // HEB_LIST_ID never calls `getLists`, so this is the *only* read a dead session
+    // reaches — and misclassifying it costs the retry advice, the MCP login guidance, and
+    // the expiry alarm all at once.
+    assertReadableList(data.getShoppingListV2, 'ShoppingListV2', 'read the list');
 
     const list = toHebList(data.getShoppingListV2);
     this.cachedList = list;
@@ -671,16 +676,20 @@ const MUTATION_SUCCESS_TYPENAME = 'ShoppingListV2';
  * filter never sees `SESSION_EXPIRED` so no alert is sent, and MCP withholds the
  * login-and-upload guidance that is the actual remedy.
  */
-function assertReadableList(payload: { __typename?: string } | undefined): void {
+function assertReadableList(
+  payload: { __typename?: string } | undefined,
+  expected = 'ShoppingListsWithHeaderPageV2',
+  attempted = 'list your lists',
+): void {
   const typename = payload?.__typename;
-  if (typename === undefined || typename === 'ShoppingListsWithHeaderPageV2') return;
+  if (typename === undefined || typename === expected) return;
 
   if (/auth|unauthori|forbidden|session|login|denied/i.test(typename)) {
     throw new HebError('SESSION_EXPIRED', 'HEB rejected the stored session.', {
       details: { returned: typename },
     });
   }
-  throw new HebError('UPSTREAM_ERROR', 'HEB refused to list your lists.', {
+  throw new HebError('UPSTREAM_ERROR', `HEB refused to ${attempted}.`, {
     details: { returned: typename },
   });
 }

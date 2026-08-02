@@ -59,16 +59,19 @@ function guardedListOps(): HebListOps {
       return result;
     } catch (error) {
       // The throw does not mean nothing happened: HEB may have committed the write and
-      // lost the response. Without this, cleanup sees no recorded mutation and leaves a
-      // real grocery — or a raised quantity — behind on a run that reports failure.
-      const after = await ops.getList().catch(() => null);
-      if (after !== null) {
-        for (const item of after.items) {
-          const previous = before.get(item.lineId);
-          if (previous === undefined) createdLines.add(item.lineId);
-          else if (item.quantity > previous && !raisedQuantities.has(item.lineId)) {
-            raisedQuantities.set(item.lineId, previous);
-          }
+      // lost the response. But claim only the product *this call* asked for — a household
+      // member adding something at the same moment also appears as a line absent from the
+      // snapshot, and an unconditional diff would mark their grocery as test data and
+      // delete it during cleanup.
+      const wanted = input.productId;
+      const after = wanted === undefined ? null : await ops.getList().catch(() => null);
+
+      const mine = after?.items.find((item) => item.product?.id === wanted);
+      if (mine !== undefined) {
+        const previous = before.get(mine.lineId);
+        if (previous === undefined) createdLines.add(mine.lineId);
+        else if (mine.quantity > previous && !raisedQuantities.has(mine.lineId)) {
+          raisedQuantities.set(mine.lineId, previous);
         }
       }
       throw error;

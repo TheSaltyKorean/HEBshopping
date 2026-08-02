@@ -249,3 +249,24 @@ describe('sole-line removal needs the head noun', () => {
     expect(ranked[0]?.confident).toBe(true);
   });
 });
+
+describe('authentication refusals are classified as such', () => {
+  it('reports a refused pinned-list read as SESSION_EXPIRED', async () => {
+    // A deployment with HEB_LIST_ID never calls getLists, so this is the only read a dead
+    // session reaches. Misclassifying it costs the retry advice, the MCP login guidance,
+    // and the CloudWatch expiry alarm all at once.
+    const fetchImpl = (async () =>
+      new Response(JSON.stringify({ data: { getShoppingListV2: { __typename: 'AuthErrorV2' } } }), {
+        status: 200,
+      })) as unknown as typeof fetch;
+
+    const ops = new HebListOps({
+      client: new HebClient({ store: storeWith(), fetchImpl, now: () => NOW, minDelayMs: 0 }),
+      listId: 'list-1',
+    });
+
+    await expect(ops.getList()).rejects.toSatisfy((error: unknown) =>
+      hasCode(error, 'SESSION_EXPIRED'),
+    );
+  });
+});

@@ -12,7 +12,12 @@
  */
 
 import type { Page } from 'playwright';
+import { mkdir, readFile, writeFile } from 'node:fs/promises';
+import { dirname, resolve } from 'node:path';
 import { attachCapture, launchBrowser, saveCapture, type Capture } from './lib/browser.js';
+
+/** What `add` last put on the list, so `remove` can refuse to delete anything else. */
+const THROWAWAY_PATH = resolve('captures/.drive-throwaway.json');
 
 const LIST_URL = 'https://www.heb.com/shopping-list';
 
@@ -187,6 +192,12 @@ async function addItem(page: Page, text: string): Promise<void> {
   await addButton.click();
   await page.waitForTimeout(3_500);
   await page.screenshot({ path: 'captures/add-clicked.png', fullPage: true });
+
+  // Record what this run put on the list, so `remove` can prove the line it is about to
+  // delete is a throwaway rather than somebody's actual shopping.
+  await mkdir(dirname(THROWAWAY_PATH), { recursive: true });
+  await writeFile(THROWAWAY_PATH, JSON.stringify({ label, at: Date.now() }, null, 2));
+  console.log(`Recorded throwaway marker at ${THROWAWAY_PATH}`);
 }
 
 /**
@@ -262,14 +273,36 @@ async function exerciseQuantity(page: Page, capture: Capture): Promise<void> {
  * which is the bulk-edit affordance; that is the path tried here.
  */
 async function removeItem(page: Page, capture: Capture): Promise<void> {
-  // This drives a *deletion* against a real household list, and the first category-sorted
-  // line is whatever the household happens to have. The reproduction instructions advertise
-  // this command, so running them as written could permanently remove a real grocery.
-  // Require a single-item list — the state `add` leaves behind — rather than guessing.
-  const lines = await page.locator('input[type="checkbox"][aria-label^="Select "]').count();
-  if (lines > 1) {
-    console.error(`⛔ The list has ${lines} items; this probe deletes the first one.`);
-    console.error('   Run it against a list holding only a throwaway item (`drive.ts add`).');
+  // This drives a *deletion* against a real household list, and the reproduction
+  // instructions advertise the command — so it must prove the line belongs to this
+  // exercise rather than to the household. "The list has one item" is not proof: a normal
+  // list with one real grocery satisfies it just as well.
+  const marker = await readFile(THROWAWAY_PATH, 'utf8').catch(() => null);
+  if (marker === null) {
+    console.error('⛔ No throwaway marker. Run `npx tsx tools/drive.ts add "<something>"` first.');
+    console.error('   This command deletes a line permanently and will not guess which.');
+    return;
+  }
+
+  const recorded = (JSON.parse(marker) as { label?: string }).label ?? '';
+  const selectLabel =
+    (await page
+      .locator('input[type="checkbox"][aria-label^="Select "]')
+      .first()
+      .getAttribute('aria-label')) ?? '';
+
+  // Compare on the product words the two labels share; HEB phrases them differently in
+  // the add button ("Add X to list") and the row checkbox ("Select X").
+  const words = (text: string): string[] =>
+    text.toLowerCase().replace(/[^a-z0-9\s]/g, ' ').split(/\s+/).filter((w) => w.length > 3);
+  const recordedWords = new Set(words(recorded));
+  const overlap = words(selectLabel).filter((w) => recordedWords.has(w)).length;
+
+  if (recorded === '' || overlap < 2) {
+    console.error('⛔ The first line does not look like the item this run added.');
+    console.error(`   marker: ${recorded || '(none)'}`);
+    console.error(`   line:   ${selectLabel || '(none)'}`);
+    console.error('   Refusing to delete something that may be a real grocery.');
     return;
   }
 

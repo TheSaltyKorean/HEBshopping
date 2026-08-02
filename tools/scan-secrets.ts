@@ -76,9 +76,19 @@ function committableFiles(): string[] {
   const output = execFileSync('git', ['ls-files', '-co', '--exclude-standard'], {
     encoding: 'utf8',
   });
+
+  // `git ls-files -c` still lists a tracked file that has been deleted from the working
+  // tree, and the staged-path query excludes deletions — so without this, every commit
+  // that removes a file reports an unreadable path and the gate blocks it. A deleted file
+  // has no content to leak.
+  const deleted = new Set(
+    execFileSync('git', ['ls-files', '--deleted'], { encoding: 'utf8' }).split('\n').filter(Boolean),
+  );
+
   return output
     .split('\n')
     .filter(Boolean)
+    .filter((path) => !deleted.has(path))
     .filter((path) => !SKIP.some((skip) => skip.test(path)));
 }
 

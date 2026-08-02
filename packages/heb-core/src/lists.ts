@@ -407,25 +407,26 @@ export class HebListOps implements ListOps {
 
     this.cachedList = undefined; // the list is about to change underneath us
 
-    let payload: HebListPayload;
+    let added: ListItem | undefined;
     try {
       const data = await this.client.execute<{ addShoppingListItemsV2: HebListPayload }>(
         addItemsDocument(listId, [productId]),
       );
-      payload = data.addShoppingListItemsV2;
+      added = toHebList(data.addShoppingListItemsV2).items.find(
+        (item) => item.product?.id === productId,
+      );
     } catch (error) {
       // Indeterminate, exactly like the quantity update: HEB may have created the line
       // before the response was lost. A bare failure makes the surface say "try again",
       // and the retry finds that line and *increments* it — so "add milk" twice leaves
       // two. Look before inviting a retry.
-      const committed = (await this.getList(listId)).items.find(
-        (item) => item.product?.id === productId,
-      );
-      if (committed === undefined) throw error;
-      return { status: 'added', item: committed };
+      added = (await this.getList(listId)).items.find((item) => item.product?.id === productId);
+      if (added === undefined) throw error;
+      // Deliberately falls through rather than returning: the mutation only ever creates
+      // one unit, so "add five avocados" still needs the quantity step below. Returning
+      // here reported a one-unit success for a five-unit request.
     }
 
-    const added = toHebList(payload).items.find((item) => item.product?.id === productId);
     if (added === undefined) {
       throw new HebError('UPSTREAM_ERROR', 'HEB accepted the add but did not return the item.');
     }

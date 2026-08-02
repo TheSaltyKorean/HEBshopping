@@ -60,7 +60,7 @@ stored. They last 30–365 days (see *What discovery changed*), so it's a rare c
 |---|---|
 | W0 discovery | ✅ full CRUD found — see `docs/heb-api.md` |
 | W1 scaffold | ✅ monorepo, TypeScript, contracts, error taxonomy |
-| W2 `Store` port | ✅ `FileStore` (DynamoDB deferred to W10) |
+| W2 `Store` port | ✅ `FileStore` locally, `DynamoDbStore` in production |
 | W4 GraphQL client | ✅ hand-written queries, no persisted-hash dependency |
 | W5 matching | ✅ hybrid ranking + calibrated confidence |
 | W6 `ListOps` | ✅ add/read/remove verified against the real list |
@@ -91,7 +91,7 @@ plain Lambda, one small table, and a human login every month or two.
 
 ```
 packages/heb-core/        session, GraphQL client, matching, list ops   (pure lib, no deps)
-packages/mcp-server/      MCP tools over stdio; HTTP transport at W10
+packages/mcp-server/      MCP tools over stdio (HTTP endpoint lives in lambda-api)
 packages/lambda-api/      Alexa handler, MCP HTTP endpoint, DynamoDbStore
 infra/                    Terraform: DynamoDB, Lambda, SSM, SNS, alarms
 tools/                    capture, drive, verify, soak, scan CLIs

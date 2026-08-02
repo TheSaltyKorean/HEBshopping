@@ -33,7 +33,7 @@ async function main(): Promise<void> {
     platform: 'node',
     // Matches the Lambda runtime in infra/main.tf. Bundling for a newer target than the
     // runtime produces syntax errors that only appear at invocation time.
-    target: 'node20',
+    target: 'node22',
     format: 'esm',
     outdir: OUT_DIR,
     outExtension: { '.js': '.mjs' },

@@ -165,7 +165,11 @@ resource "aws_lambda_function" "alexa" {
   filename         = var.bundle_path
   source_code_hash = filebase64sha256(var.bundle_path)
   handler          = "alexa.handler"
-  runtime          = "nodejs20.x"
+  # nodejs20.x is deprecated: AWS blocked new functions on 2026-06-01 and updates on
+  # 2026-07-01, so an apply on that runtime now fails outright. Keep this in step with
+  # the esbuild target in tools/bundle.ts — bundling for a newer target than the runtime
+  # produces syntax errors that only appear at invocation.
+  runtime = "nodejs22.x"
 
   # Alexa allows ~8s end to end; the code enforces a 6.5s budget across its HEB calls.
   # This is the outer backstop, not the real limit.
@@ -189,7 +193,7 @@ resource "aws_lambda_function" "mcp" {
   filename         = var.bundle_path
   source_code_hash = filebase64sha256(var.bundle_path)
   handler          = "mcp.handler"
-  runtime          = "nodejs20.x"
+  runtime          = "nodejs22.x"
 
   timeout     = 15 # no Alexa ceiling here; an agent can wait a little longer
   memory_size = 512

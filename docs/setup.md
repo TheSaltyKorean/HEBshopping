@@ -195,8 +195,8 @@ added. They touch lists only: never the cart, never checkout.
 
 ### Method D — Alexa
 
-The skill is **built and verified**; what's missing is the AWS deployment that hosts it
-(W10). You can drive the whole conversation locally today:
+The skill is **built, verified, and deployable** — see [`deploy.md`](deploy.md) for putting
+it on your Echo. You can also drive the whole conversation locally, with no AWS at all:
 
 ```bash
 npm run verify:alexa
@@ -238,10 +238,15 @@ The skill package for the ASK CLI lives in `packages/lambda-api/skill-package/`
 list"**; change it in `interactionModels/custom/en-US.json` if you'd rather say something
 else.
 
-When W10 lands it will be a **development-mode** skill on your own Amazon and AWS accounts
-— enabled on every Echo registered to that Amazon account, usable by anyone in the house.
-It will never be on the Alexa Skill Store; see the README for why that's structurally
-impossible.
+### Putting it on your Echo
+
+**[`deploy.md`](deploy.md) is the step-by-step.** In outline: create a development-mode
+skill in the Alexa console, `terraform apply` the AWS side, point the skill at the printed
+Lambda ARN, and upload your H-E-B session with `npm run push:session`.
+
+A development-mode skill is enabled on **every Echo registered to your Amazon account**,
+with no installation step and no certification, so anyone in the house can use it. It will
+never be on the Alexa Skill Store; see the README for why that is structurally impossible.
 
 ---
 

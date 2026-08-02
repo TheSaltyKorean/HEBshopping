@@ -73,9 +73,20 @@ export function canonical(token: string): string {
   return CANONICAL[token] ?? token;
 }
 
+/**
+ * Spoken counts, up to the ceiling the tools accept.
+ *
+ * Runs to twenty because that is the MCP schema's maximum: stopping at twelve meant
+ * "thirteen bananas" kept the word in the query, so it either failed to match or added a
+ * single item — a silent undercount, since the confirmation still names the right product.
+ */
 const NUMBER_WORDS: Readonly<Record<string, number>> = {
   one: 1, two: 2, three: 3, four: 4, five: 5, six: 6, seven: 7, eight: 8,
-  nine: 9, ten: 10, eleven: 11, twelve: 12, couple: 2, few: 3,
+  nine: 9, ten: 10, eleven: 11, twelve: 12, thirteen: 13, fourteen: 14,
+  fifteen: 15, sixteen: 16, seventeen: 17, eighteen: 18, nineteen: 19, twenty: 20,
+  couple: 2, few: 3,
+  // NOT "dozen". "A dozen eggs" is one carton of twelve, not twelve cartons — the same
+  // trap as "two percent milk", and the product name already carries the count.
 };
 
 /**

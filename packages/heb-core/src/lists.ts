@@ -436,11 +436,14 @@ export class HebListOps implements ListOps {
         await this.setQuantity(listId, added.lineId, target);
         return { status: 'added', item: { ...added, quantity: target } };
       } catch {
-        // The add already succeeded — a quantity-one line exists. Throwing here would
-        // report total failure for a partial success, and a retry would then find that
-        // line and increment it, landing on three when two was asked for. Report what is
-        // actually on the list instead; the user can say "add another" if they want more.
-        return { status: 'added', item: added };
+        // The add already succeeded — a line exists — but whether the quantity bump landed
+        // is unknown, and `setQuantity` invalidated the cache before writing so a read here
+        // reaches HEB. Reporting the stale payload's quantity of one would understate what
+        // is on the list and invite another add, over-incrementing it.
+        const actual = (await this.getList(listId)).items.find(
+          (item) => item.lineId === added.lineId,
+        );
+        return { status: 'added', item: actual ?? added };
       }
     }
 

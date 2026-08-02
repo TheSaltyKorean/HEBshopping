@@ -19,7 +19,7 @@
 
 import { readFileSync, appendFileSync } from 'node:fs';
 import { resolve } from 'node:path';
-import { HEB_GRAPHQL_URL, HEB_ORIGIN } from '@heb/core';
+import { HEB_GRAPHQL_URL, HEB_ORIGIN, getShoppingListsDocument } from '@heb/core';
 
 /**
  * Seconds between probes, validated before anything is scheduled.
@@ -43,7 +43,17 @@ if (!Number.isFinite(INTERVAL_SECONDS) || INTERVAL_SECONDS < MIN_INTERVAL_SECOND
   process.exit(1);
 }
 const LOG_PATH = resolve('captures/soak.log');
-const LIST_QUERY_HASH = '35da893a3476a098d44f8d6ac379db3129117b977d4df4dcbe48a5641eb9fdd5';
+/**
+ * The probe sends full query text, not a persisted hash.
+ *
+ * This experiment measures how long a *session* survives. HEB's APQ store is a cache that
+ * evicts rarely-used operations — the finding that made the production client abandon
+ * hashes entirely — so a hash-based probe would eventually record `PersistedQueryNotFound`
+ * and attribute it to the cookies. The one experiment whose whole purpose is a longevity
+ * number would then produce the wrong number, in the direction of "sessions die sooner
+ * than they do".
+ */
+const LIST_QUERY = getShoppingListsDocument();
 
 interface StorageState {
   cookies: Array<{ name: string; value: string; domain: string }>;
@@ -79,9 +89,9 @@ async function probe(): Promise<string> {
         Cookie: cookieHeader,
       },
       body: JSON.stringify({
-        operationName: 'getShoppingListsV2',
+        operationName: LIST_QUERY.operationName,
+        query: LIST_QUERY.query,
         variables: {},
-        extensions: { persistedQuery: { version: 1, sha256Hash: LIST_QUERY_HASH } },
       }),
     });
 
@@ -112,8 +122,7 @@ async function probe(): Promise<string> {
     // member carrying only a __typename and no errors, so accepting any object would let
     // the soak record OK indefinitely after authentication failed — a longevity
     // measurement asserting the opposite of the truth.
-    const typename = (envelope.data?.getShoppingListsV2 as { __typename?: string } | null)
-      ?.__typename;
+    const typename = envelope.data?.getShoppingListsV2?.__typename;
     if (typename !== 'ShoppingListsWithHeaderPageV2') {
       return `FAIL rejected=${typename ?? 'null'}`;
     }

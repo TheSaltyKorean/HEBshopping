@@ -25,6 +25,18 @@ const client = new Client({ name: 'verify-mcp', version: '0.1.0' });
  */
 let createdLine: string | null = null;
 
+/**
+ * The product this run added, recorded the instant the add succeeds.
+ *
+ * Arming cleanup only after the follow-up `heb_read_list` means a failure *between* those
+ * two calls leaves a real grocery list holding test data — and the read is exactly the
+ * kind of call that times out. With the product id, cleanup can find the line itself.
+ */
+let createdProductId: string | null = null;
+
+/** Line ids present before this run touched anything; module scope so cleanup can see it. */
+let before: ReadonlySet<string> = new Set();
+
 const transport = new StdioClientTransport({
   command: 'node',
   args: [resolve('packages/mcp-server/dist/stdio.js')],
@@ -103,7 +115,7 @@ async function main(): Promise<void> {
   // claims have to be relative to its starting state — asserting an absolute item count
   // would both fail spuriously and, worse, exit before cleanup and leave the item behind.
   const initial = await call('heb_read_list');
-  const before = lineIdsIn(initial);
+  before = lineIdsIn(initial);
 
   await call('heb_search_product', { query: 'flour tortillas', limit: 3 });
 
@@ -125,6 +137,8 @@ async function main(): Promise<void> {
   const productId = absent.productId;
 
   const addReply = await call('heb_add_item', { productId });
+  if (addReply.includes('Added')) createdProductId = productId;
+
   const listed = await call('heb_read_list');
 
   const added = [...lineIdsIn(listed)].filter((lineId) => !before.has(lineId));
@@ -173,6 +187,17 @@ main()
   })
   .finally(async () => {
     // Unconditional: whatever went wrong, the household list must not keep test data.
+    // Resolve the line late if the read that would have identified it never happened.
+    if (createdLine === null && createdProductId !== null) {
+      const listing = await call('heb_read_list').catch(() => '');
+      const fresh = [...lineIdsIn(listing)].filter((lineId) => !before.has(lineId));
+      if (fresh.length === 1) createdLine = fresh[0]!;
+      else if (fresh.length > 1) {
+        console.error('⛔ Several new lines exist; not guessing which is ours. Check the list.');
+        process.exitCode = 1;
+      }
+    }
+
     if (createdLine !== null) {
       console.log(`\n🧹 removing the line this run created (${createdLine})`);
       await call('heb_remove_item', { lineId: createdLine }).catch((error: unknown) => {

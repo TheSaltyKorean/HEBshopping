@@ -143,9 +143,16 @@ export function parseSpokenRequest(text: string): SpokenRequest {
   const second = tokens[1];
   const numeric = NUMBER_WORDS[first] ?? (/^\d+$/.test(first) ? Number(first) : undefined);
 
-  // A number that starts a brand name belongs to the query, not to the count.
+  // A number that starts a brand name belongs to the query, not to the count. Alexa
+  // transcribes these either way — "7 Up" as often as "seven up" — so the digit form has
+  // to be normalised, or "7 Up" parses as seven units of "up".
+  const DIGIT_WORDS: Readonly<Record<string, string>> = {
+    '1': 'one', '2': 'two', '3': 'three', '4': 'four', '5': 'five',
+    '6': 'six', '7': 'seven', '8': 'eight', '9': 'nine', '10': 'ten',
+  };
+  const asWords = tokens.map((token) => DIGIT_WORDS[token] ?? token);
   const startsBrand = NUMBER_LED_BRANDS.some((brand) =>
-    brand.every((word, index) => tokens[index] === word),
+    brand.every((word, index) => asWords[index] === word),
   );
 
   const isCount =

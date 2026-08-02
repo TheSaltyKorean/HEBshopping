@@ -366,3 +366,18 @@ describe('inflection, not open-ended prefixes', () => {
     expect(matchProducts(query, [p('1', name)])).toBeNull();
   });
 });
+
+describe('numeric brand spellings', () => {
+  it.each(['7 up', '2 good vanilla yogurt', '3 bridges hummus'])(
+    '"%s" is one item, not a count',
+    (phrase) => {
+      // Alexa transcribes these either way, so the digit form has to normalise too —
+      // otherwise "7 Up" asks for seven units of "up".
+      expect(parseSpokenRequest(phrase).quantity).toBe(1);
+    },
+  );
+
+  it('still reads a genuine leading digit as a count', () => {
+    expect(parseSpokenRequest('7 bananas')).toEqual({ quantity: 7, query: 'bananas' });
+  });
+});

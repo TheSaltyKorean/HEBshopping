@@ -43,7 +43,10 @@ function toErrorText(error: unknown): TextResult {
   }
   const guidance: Partial<Record<string, string>> = {
     SESSION_EXPIRED:
-      'The HEB session has expired. A human must re-run `npm run login` — this cannot be fixed automatically.',
+      'The HEB session has expired. A human must re-run `npm run login` — this cannot be ' +
+      'fixed automatically. If this server is the deployed one (a Function URL rather than ' +
+      'a local stdio process), they must also run `npm run push:session`, because the ' +
+      'Lambda reads DynamoDB and a local login alone will not reach it.',
     BOT_CHALLENGE: 'HEB served a bot check. Wait a moment and try once more.',
     PRODUCT_NOT_FOUND:
       'No catalog product matched. Try a brand name, or Spanish wording — much of this ' +

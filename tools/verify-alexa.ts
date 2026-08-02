@@ -47,15 +47,32 @@ function guardedListOps(): HebListOps {
       (await ops.getList()).items.map((item) => [item.lineId, item.quantity] as const),
     );
 
-    const result = await realAdd(input);
-    if (result.status === 'added') createdLines.add(result.item.lineId);
-    if (result.status === 'already_present') {
-      const previous = before.get(result.item.lineId);
-      if (previous !== undefined && !raisedQuantities.has(result.item.lineId)) {
-        raisedQuantities.set(result.item.lineId, previous);
+    try {
+      const result = await realAdd(input);
+      if (result.status === 'added') createdLines.add(result.item.lineId);
+      if (result.status === 'already_present') {
+        const previous = before.get(result.item.lineId);
+        if (previous !== undefined && !raisedQuantities.has(result.item.lineId)) {
+          raisedQuantities.set(result.item.lineId, previous);
+        }
       }
+      return result;
+    } catch (error) {
+      // The throw does not mean nothing happened: HEB may have committed the write and
+      // lost the response. Without this, cleanup sees no recorded mutation and leaves a
+      // real grocery — or a raised quantity — behind on a run that reports failure.
+      const after = await ops.getList().catch(() => null);
+      if (after !== null) {
+        for (const item of after.items) {
+          const previous = before.get(item.lineId);
+          if (previous === undefined) createdLines.add(item.lineId);
+          else if (item.quantity > previous && !raisedQuantities.has(item.lineId)) {
+            raisedQuantities.set(item.lineId, previous);
+          }
+        }
+      }
+      throw error;
     }
-    return result;
   };
 
   ops.removeItem = async (input) => {

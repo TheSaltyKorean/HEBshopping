@@ -188,10 +188,36 @@ export function speakableList(items: readonly ListItem[]): string {
   );
 }
 
-/** Plain-text card body: no length limit, so nothing is hidden here. */
+/**
+ * Alexa's card body limit, with headroom.
+ *
+ * Cards are capped at 8000 characters and count toward the response as a whole. Exceeding
+ * it makes Alexa reject the *entire* response — so an unbounded card fails `ReadListIntent`
+ * outright on exactly the long lists the card exists to serve, and the user hears nothing
+ * rather than the seven items that were carefully prepared for speech.
+ */
+const MAX_CARD_CHARS = 7_000;
+
+/** Plain-text card body, bounded, and explicit about anything it had to drop. */
 export function cardList(items: readonly ListItem[]): string {
   if (items.length === 0) return 'Your H-E-B list is empty.';
-  return items
-    .map((item) => `${item.quantity > 1 ? `${item.quantity} × ` : ''}${item.product?.name ?? item.text}`)
-    .join('\n');
+
+  const lines: string[] = [];
+  let used = 0;
+
+  for (const [index, item] of items.entries()) {
+    const line = `${item.quantity > 1 ? `${item.quantity} × ` : ''}${item.product?.name ?? item.text}`;
+    const remaining = items.length - index;
+    // Reserve room for the footer, so the truncation notice itself cannot overflow.
+    const footer = `\n… and ${remaining} more (${items.length} items in total).`;
+
+    if (used + line.length + 1 + footer.length > MAX_CARD_CHARS) {
+      lines.push(footer.trimStart());
+      break;
+    }
+    lines.push(line);
+    used += line.length + 1;
+  }
+
+  return lines.join('\n');
 }

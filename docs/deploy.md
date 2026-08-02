@@ -82,7 +82,11 @@ terraform -chdir=infra init
 terraform -chdir=infra apply
 ```
 
-Read the plan before confirming. It should create nine resources and destroy none.
+Read the plan before confirming. **The number that matters is `0 to destroy`** — with the
+documented defaults it creates around fourteen resources, and enabling `alert_email` or
+`enable_mcp_url` adds a few more, so an exact count is not a useful check. What you should
+see: a DynamoDB table, two Lambda functions, an IAM role and policy, two log groups, an SSM
+parameter, an SNS topic, and a metric filter with two alarms.
 
 If you set `alert_email`, **check your inbox and confirm the SNS subscription** — AWS will
 not send alerts until you click that link.

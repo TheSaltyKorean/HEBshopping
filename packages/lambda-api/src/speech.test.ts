@@ -217,3 +217,24 @@ describe('offers are always distinguishable', () => {
     expect(spoken[0]).not.toBe(spoken[1]);
   });
 });
+
+describe('the card must fit inside Alexa limits', () => {
+  it('truncates a very long list and says how many were dropped', () => {
+    // Alexa rejects the whole response if the card is too big, so an unbounded card fails
+    // ReadListIntent on exactly the long lists the card exists to serve — and the user
+    // hears nothing rather than the seven items prepared for speech.
+    const items = Array.from({ length: 500 }, (_, i) =>
+      line(`H-E-B Select Ingredients Product Number ${i} With A Long Descriptive Name, 16 oz`),
+    );
+    const card = cardList(items);
+
+    expect(card.length).toBeLessThanOrEqual(7_000);
+    expect(card).toMatch(/and \d+ more \(500 items in total\)/);
+  });
+
+  it('leaves an ordinary list complete', () => {
+    const card = cardList([line('Fresh Bananas'), line('H-E-B Half & Half, 32 oz')]);
+    expect(card.split('\n')).toHaveLength(2);
+    expect(card).not.toContain('more (');
+  });
+});

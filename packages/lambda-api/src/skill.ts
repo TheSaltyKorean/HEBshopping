@@ -433,6 +433,21 @@ function errorHandler(): ErrorHandler {
         // spoken grocery query and AMBIGUOUS_LIST embeds list names, so logging either
         // would retain a household's shopping in CloudWatch indefinitely.
         console.error(`HebError ${error.code}`);
+
+        // A non-retryable upstream error means the command *partly* succeeded — most often
+        // a line was created but its quantity was refused. The generic copy says "please
+        // try again", and repeating "add five avocados" would then find that one-unit line
+        // and increment it by five, leaving six. Say what happened instead.
+        if (error.code === 'UPSTREAM_ERROR' && error.retryable === false) {
+          return input.responseBuilder
+            .speak(
+              'That went through only partly — the item is on your list, but H-E-B would ' +
+                'not set the amount. Please check the quantity in the H-E-B app.',
+            )
+            .withShouldEndSession(true)
+            .getResponse();
+        }
+
         return input.responseBuilder
           .speak(SPEECH_BY_CODE[error.code])
           .withShouldEndSession(true)

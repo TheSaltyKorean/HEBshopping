@@ -449,6 +449,20 @@ function errorHandler(): ErrorHandler {
             .getResponse();
         }
 
+        // Schema drift is permanent until someone changes the code. Suggesting a retry
+        // makes a broken integration look transient, and the log line — a bare code —
+        // gives no hint either, so an Alexa-only deployment could stay broken for weeks.
+        if (error.details?.['schemaDrift'] === true) {
+          console.error('HebError UPSTREAM_ERROR (schema drift — operations.ts needs updating)');
+          return input.responseBuilder
+            .speak(
+              'H-E-B has changed something on their side, and I cannot reach your list ' +
+                'until this skill is updated. Retrying will not help.',
+            )
+            .withShouldEndSession(true)
+            .getResponse();
+        }
+
         // Indeterminate: the write may well have landed and the confirming read failed
         // too. "Please try again" is the one response that can make it worse, because the
         // retry finds the committed line and increments it — so say what is unknown.

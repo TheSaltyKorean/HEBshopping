@@ -631,13 +631,18 @@ export class HebListOps implements ListOps {
     // names the thing, so it has to match as well.
     const spokenTokens = meaningfulTokens(spoken);
     const head = spokenTokens.at(-1);
-    const soleLine =
-      list.items.length === 1 &&
-      coverage(spokenTokens, match.product) >= SOLE_LINE_COVERAGE &&
-      head !== undefined &&
-      coverage([head], match.product) === 1;
 
-    const confident = soleLine || isConfident(match);
+    // The head token gates *every* automatic removal, not just the sole-line shortcut.
+    // Scoring alone is not enough on a multi-item list either: "organic dark chocolate
+    // cake" covers three of four tokens of "organic dark chocolate milk" and separates
+    // cleanly from an unrelated second line, so ordinary confidence deletes the milk — for
+    // a request whose category word was never on the list at all.
+    const namesTheLine = head !== undefined && coverage([head], match.product) === 1;
+
+    const soleLine =
+      list.items.length === 1 && coverage(spokenTokens, match.product) >= SOLE_LINE_COVERAGE;
+
+    const confident = namesTheLine && (soleLine || isConfident(match));
     const byLineId = new Map(list.items.map((item) => [item.lineId, item] as const));
 
     return [match.product, ...match.alternatives]
@@ -718,6 +723,17 @@ function assertMutationSucceeded(
   // is not "the selection did not ask" — it is a mutation that did not happen. Treating it
   // as success means confirming a deletion or a quantity change that never took place.
   if (payload?.__typename === MUTATION_SUCCESS_TYPENAME) return;
+
+  // An authentication refusal is not a generic rejection. With a pinned list, an MCP
+  // `heb_remove_item` carrying a lineId reaches the delete mutation with no preceding
+  // read — so this is the only place a dead session surfaces, and calling it
+  // UPSTREAM_ERROR costs the login-and-upload guidance and the expiry alarm together.
+  const typename = payload?.__typename;
+  if (typename !== undefined && /auth|unauthori|forbidden|session|login|denied/i.test(typename)) {
+    throw new HebError('SESSION_EXPIRED', 'HEB rejected the stored session.', {
+      details: { returned: typename },
+    });
+  }
 
   // `rejected` marks this as a *definitive* refusal rather than a lost response. Callers
   // reconcile indeterminate failures by re-reading; a refusal has nothing to reconcile.

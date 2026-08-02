@@ -270,3 +270,26 @@ describe('authentication refusals are classified as such', () => {
     );
   });
 });
+
+describe('the head token gates every confident removal', () => {
+  it('does not delete chocolate milk for "chocolate cake" on a multi-item list', async () => {
+    // Ordinary confidence, not the sole-line shortcut: three of four tokens match and the
+    // unrelated second line separates cleanly, so scoring alone said "certain" for a
+    // request whose category word was never on the list.
+    const ranked = await opsWithList(
+      'H-E-B Organic Dark Chocolate Milk, 1/2 gal',
+      'Fresh Bananas',
+    ).rankLines('organic dark chocolate cake');
+
+    expect(ranked[0]?.confident ?? false).toBe(false);
+  });
+
+  it('still removes confidently when the head token agrees', async () => {
+    const ranked = await opsWithList(
+      'H-E-B Organic Dark Chocolate Milk, 1/2 gal',
+      'Fresh Bananas',
+    ).rankLines('organic dark chocolate milk');
+
+    expect(ranked[0]?.confident).toBe(true);
+  });
+});

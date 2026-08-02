@@ -16,8 +16,37 @@ import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { dirname, resolve } from 'node:path';
 import { attachCapture, launchBrowser, saveCapture, type Capture } from './lib/browser.js';
 
-/** What `add` last put on the list, so `remove` can refuse to delete anything else. */
+/** What `add` last put on the list, so the mutating commands can refuse anything else. */
 const THROWAWAY_PATH = resolve('captures/.drive-throwaway.json');
+
+/**
+ * Is the first list line the item this exercise created?
+ *
+ * Both mutating commands end up removing that line — `remove` directly, `mutate` by
+ * decrementing to zero — so neither may run on a line it cannot account for. A count or a
+ * quantity is not proof: a household list with one grocery at quantity one satisfies both.
+ */
+async function isThrowawayLine(page: Page): Promise<boolean> {
+  const marker = await readFile(THROWAWAY_PATH, 'utf8').catch(() => null);
+  if (marker === null) return false;
+
+  const recorded = (JSON.parse(marker) as { label?: string }).label ?? '';
+  if (recorded === '') return false;
+
+  const selectLabel =
+    (await page
+      .locator('input[type="checkbox"][aria-label^="Select "]')
+      .first()
+      .getAttribute('aria-label')) ?? '';
+
+  // Compare on shared product words: HEB phrases the add button ("Add X to list") and the
+  // row checkbox ("Select X") differently, so an exact match would never hold.
+  const words = (text: string): string[] =>
+    text.toLowerCase().replace(/[^a-z0-9\s]/g, ' ').split(/\s+/).filter((w) => w.length > 3);
+
+  const recordedWords = new Set(words(recorded));
+  return words(selectLabel).filter((word) => recordedWords.has(word)).length >= 2;
+}
 
 const LIST_URL = 'https://www.heb.com/shopping-list';
 
@@ -219,17 +248,19 @@ async function exerciseQuantity(page: Page, capture: Capture): Promise<void> {
   }
 
   // These locators take the *first* category-sorted line, which on a real list is somebody's
-  // groceries rather than the throwaway item an earlier `add` run created. The sequence
-  // below assumes it starts at one: on a line at two or more it ends up reduced, and on a
-  // line at its ceiling the failed increment makes the reduction worse or the final
-  // decrement removes it outright. So run only against a line this probe can account for,
-  // and put the quantity back regardless of what happens.
+  // groceries rather than the throwaway item an earlier `add` run created. The final step
+  // decrements to zero, which removes it — so "quantity is 1" is not a safety check, it is
+  // a description of most groceries. Prove ownership from the marker, exactly as `remove`
+  // does, and put the quantity back regardless of what happens.
+  if (!(await isThrowawayLine(page))) {
+    console.error('⛔ The first line is not the item this run added — refusing to mutate it.');
+    console.error('   Run `npx tsx tools/drive.ts add "<something>"` against an empty list first.');
+    return;
+  }
+
   const startedAt = Number(await value.inputValue().catch(() => 'NaN'));
-  if (!Number.isFinite(startedAt) || startedAt !== 1) {
-    console.error(
-      `⛔ The first line is at quantity ${Number.isFinite(startedAt) ? startedAt : '?'}, not 1.`,
-    );
-    console.error('   This probe would leave it reduced. Run `add` first, or clear the list.');
+  if (!Number.isFinite(startedAt)) {
+    console.error('⛔ Could not read the current quantity; refusing to mutate blindly.');
     return;
   }
 
@@ -277,32 +308,9 @@ async function removeItem(page: Page, capture: Capture): Promise<void> {
   // instructions advertise the command — so it must prove the line belongs to this
   // exercise rather than to the household. "The list has one item" is not proof: a normal
   // list with one real grocery satisfies it just as well.
-  const marker = await readFile(THROWAWAY_PATH, 'utf8').catch(() => null);
-  if (marker === null) {
-    console.error('⛔ No throwaway marker. Run `npx tsx tools/drive.ts add "<something>"` first.');
-    console.error('   This command deletes a line permanently and will not guess which.');
-    return;
-  }
-
-  const recorded = (JSON.parse(marker) as { label?: string }).label ?? '';
-  const selectLabel =
-    (await page
-      .locator('input[type="checkbox"][aria-label^="Select "]')
-      .first()
-      .getAttribute('aria-label')) ?? '';
-
-  // Compare on the product words the two labels share; HEB phrases them differently in
-  // the add button ("Add X to list") and the row checkbox ("Select X").
-  const words = (text: string): string[] =>
-    text.toLowerCase().replace(/[^a-z0-9\s]/g, ' ').split(/\s+/).filter((w) => w.length > 3);
-  const recordedWords = new Set(words(recorded));
-  const overlap = words(selectLabel).filter((w) => recordedWords.has(w)).length;
-
-  if (recorded === '' || overlap < 2) {
-    console.error('⛔ The first line does not look like the item this run added.');
-    console.error(`   marker: ${recorded || '(none)'}`);
-    console.error(`   line:   ${selectLabel || '(none)'}`);
-    console.error('   Refusing to delete something that may be a real grocery.');
+  if (!(await isThrowawayLine(page))) {
+    console.error('⛔ The first line is not the item this run added — refusing to delete it.');
+    console.error('   Run `npx tsx tools/drive.ts add "<something>"` first.');
     return;
   }
 

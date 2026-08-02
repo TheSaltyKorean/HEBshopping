@@ -365,7 +365,33 @@ resource "aws_cloudwatch_metric_alarm" "session_expired" {
   treat_missing_data  = "notBreaching"
 }
 
-/** Unhandled crashes, which are a different problem with a different remedy. */
+/**
+ * Unhandled crashes in the MCP function.
+ *
+ * The other MCP signal is a *handled* SESSION_EXPIRED log line; a throw during transport
+ * setup or JSON-RPC dispatch produces neither that log nor an Alexa error, so an MCP-only
+ * deployment could sit broken while every configured alarm stayed green.
+ */
+resource "aws_cloudwatch_metric_alarm" "mcp_errors" {
+  count               = var.enable_mcp_url ? 1 : 0
+  alarm_name          = "${local.name}-mcp-errors"
+  comparison_operator = "GreaterThanThreshold"
+  evaluation_periods  = 1
+  metric_name         = "Errors"
+  namespace           = "AWS/Lambda"
+  period              = 300
+  statistic           = "Sum"
+  threshold           = 0
+  alarm_description   = "The MCP Lambda threw. Check /aws/lambda/${local.name}-mcp."
+  alarm_actions       = [aws_sns_topic.alerts.arn]
+  treat_missing_data  = "notBreaching"
+
+  dimensions = {
+    FunctionName = aws_lambda_function.mcp.function_name
+  }
+}
+
+/** Unhandled crashes in the Alexa function, a different problem with a different remedy. */
 resource "aws_cloudwatch_metric_alarm" "alexa_errors" {
   alarm_name          = "${local.name}-alexa-errors"
   comparison_operator = "GreaterThanThreshold"

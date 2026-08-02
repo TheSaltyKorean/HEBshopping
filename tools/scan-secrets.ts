@@ -77,12 +77,19 @@ function committableFiles(): string[] {
     encoding: 'utf8',
   });
 
-  // `git ls-files -c` still lists a tracked file that has been deleted from the working
-  // tree, and the staged-path query excludes deletions — so without this, every commit
-  // that removes a file reports an unreadable path and the gate blocks it. A deleted file
-  // has no content to leak.
+  // Only *index* deletions are skipped — paths git has actually been told to remove.
+  //
+  // `git ls-files --deleted` is the wrong question: it reports anything missing from the
+  // working tree, including a file that was staged *with a secret in it* and then deleted
+  // from disk. Skipping those would let the staged blob sail through the gate unread,
+  // which is the precise failure this scanner exists to prevent. A file whose deletion is
+  // staged has no content to leak; a file merely missing from disk may still have plenty.
   const deleted = new Set(
-    execFileSync('git', ['ls-files', '--deleted'], { encoding: 'utf8' }).split('\n').filter(Boolean),
+    execFileSync('git', ['diff', '--cached', '--name-only', '--diff-filter=D'], {
+      encoding: 'utf8',
+    })
+      .split('\n')
+      .filter(Boolean),
   );
 
   return output
@@ -132,6 +139,8 @@ function contentToScan(path: string, staged: ReadonlySet<string>): string | null
     return null;
   }
 }
+
+/** Paths whose removal is staged; their content cannot reach the commit. */
 
 /**
  * Files this gate could not read.

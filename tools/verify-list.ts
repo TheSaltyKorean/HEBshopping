@@ -14,6 +14,7 @@ import {
   HebListOps,
   checkSession,
   isHebError,
+  matchProducts,
   type HebList,
 } from '@heb/core';
 
@@ -98,10 +99,13 @@ async function main(): Promise<void> {
       throw error;
     };
 
+    // Resolve what the query form is *likely* to add before letting it write. Without an
+    // id, a committed-but-unacknowledged add cannot be reconciled and the cleanup would
+    // report an untouched list while the grocery sat there.
+    const likely = matchProducts(TERM, await lists.searchProducts(TERM))?.product.id;
+
     const result = await time('addItem', () =>
-      // The query form resolves the product server-side, so there is no id to reconcile
-      // against yet; the confirmed add below is the one that can leave data behind.
-      lists.addItem({ query: TERM }).catch((error: unknown) => reconcile(undefined, error)),
+      lists.addItem({ query: TERM }).catch((error: unknown) => reconcile(likely, error)),
     );
 
     let lineId: string;

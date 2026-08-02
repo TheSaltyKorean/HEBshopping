@@ -348,3 +348,21 @@ describe('singular and plural are the same grocery', () => {
     expect(matchProducts('grass', [p('1', 'Fresh Bananas')])).toBeNull();
   });
 });
+
+describe('inflection, not open-ended prefixes', () => {
+  it.each([
+    ['tomato', 'Fresh Roma Tomatoes'],
+    ['grape', 'Fresh Red Seedless Grapes'],
+  ])('"%s" matches "%s"', (query, name) => {
+    // Both -s and -es have to be tried: stripping only s gives "tomatoe", only es gives
+    // "grap". Comparing candidate forms gets both without guessing which rule applies.
+    expect(matchProducts(query, [p('1', name)])).not.toBeNull();
+  });
+
+  it.each([
+    ['bread', 'H-E-B Breaded Chicken Breasts, 24 oz'],
+    ['corn', 'H-E-B Cornbread Mix, 15 oz'],
+  ])('"%s" does not match "%s"', (query, name) => {
+    expect(matchProducts(query, [p('1', name)])).toBeNull();
+  });
+});

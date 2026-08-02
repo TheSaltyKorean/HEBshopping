@@ -360,7 +360,27 @@ export class HebListOps implements ListOps {
       // an add that silently removes groceries is the worst possible reading of the verb.
       const target = Math.max(existing.quantity, Math.min(existing.quantity + quantity, ceiling));
       if (target !== existing.quantity) {
-        await this.setQuantity(listId, existing.lineId, target);
+        try {
+          await this.setQuantity(listId, existing.lineId, target);
+        } catch (error) {
+          // A timeout here is *indeterminate*: HEB may well have committed the update
+          // before the response was lost. Propagating a bare failure makes the surface say
+          // "try again", and the retry reads the already-incremented line and increments it
+          // a second time. So re-read and report what is actually there.
+          const actual = (await this.getList(listId)).items.find(
+            (item) => item.lineId === existing.lineId,
+          );
+          if (actual !== undefined && actual.quantity === target) {
+            return { status: 'already_present', item: actual };
+          }
+          throw new HebError(
+            'UPSTREAM_ERROR',
+            actual === undefined
+              ? 'HEB did not confirm the change; check the list before trying again.'
+              : `HEB did not confirm the change. The list still shows ${actual.quantity}.`,
+            { cause: error, retryable: false },
+          );
+        }
       }
       return { status: 'already_present', item: { ...existing, quantity: target } };
     }

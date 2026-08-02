@@ -177,21 +177,35 @@ function tokensMatch(queryToken: string, productToken: string): boolean {
   const product = canonical(productToken);
   if (query === product) return true;
 
-  // Plural before length. The prefix rule below needs four characters to avoid nonsense
-  // like "oat" matching "oatmeal-flavoured-anything", but that guard also rejected
-  // "egg"/"eggs" — an entirely ordinary request that then reported the item missing from
-  // a list plainly containing it.
-  if (depluralise(query) === depluralise(product)) return true;
-
-  if (query.length < 4 || product.length < 4) return false;
-  return product.startsWith(query) || query.startsWith(product);
+  // Inflection only — deliberately NOT open-ended prefix matching.
+  //
+  // A general "one starts with the other" rule looks harmless and is not: `bread` starts
+  // `breaded`, so asking to remove bread from a list holding only "Breaded Chicken
+  // Breasts" reached full coverage and the sole-line shortcut deleted the chicken without
+  // asking. Recall is worth much less here than not destroying the wrong groceries, and
+  // the confirmation dialog already handles the cases this loses.
+  return sharesForm(query, product);
 }
 
-/** Crude, deliberately: "eggs"→"egg", but "grass" is left alone. */
-function depluralise(token: string): string {
-  return token.length > 3 && token.endsWith('s') && !token.endsWith('ss')
-    ? token.slice(0, -1)
-    : token;
+/**
+ * Candidate singular forms of a token.
+ *
+ * Both `-s` and `-es` are tried because neither alone is right: stripping only `s` turns
+ * "tomatoes" into "tomatoe", and stripping only `es` turns "grapes" into "grap".
+ * Comparing the *sets* gets both without needing to know which rule applies.
+ */
+function pluralForms(token: string): string[] {
+  const forms = [token];
+  if (token.length > 3 && token.endsWith('s') && !token.endsWith('ss')) {
+    forms.push(token.slice(0, -1));
+    if (token.length > 4 && token.endsWith('es')) forms.push(token.slice(0, -2));
+  }
+  return forms;
+}
+
+function sharesForm(a: string, b: string): boolean {
+  const forms = new Set(pluralForms(a));
+  return pluralForms(b).some((form) => forms.has(form));
 }
 
 /**

@@ -194,6 +194,12 @@ resource "aws_lambda_function" "mcp" {
   timeout     = 15 # no Alexa ceiling here; an agent can wait a little longer
   memory_size = 512
 
+  # Anyone can reach a Function URL, and every request resolves the SSM token before the
+  # bearer check can reject it — so an unauthenticated caller could otherwise scale cold
+  # containers, burn SSM throughput, and consume the account's unreserved concurrency.
+  # A household's MCP usage is one request at a time; five is generous.
+  reserved_concurrent_executions = var.enable_mcp_url ? 5 : -1
+
   environment {
     variables = {
       HEB_SESSION_TABLE   = aws_dynamodb_table.session.name

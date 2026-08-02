@@ -118,3 +118,17 @@ describe('adding never reduces a quantity', () => {
     expect(actual).toBe(10); // never below what is already there
   });
 });
+
+describe('prefix matches must not authorise a silent deletion', () => {
+  it('does not treat "bread" as describing "Breaded Chicken Breasts"', async () => {
+    // The sole-line shortcut deletes without confirmation, so an open-ended prefix rule
+    // — bread starts breaded — meant asking for a missing item removed the chicken.
+    const ranked = await opsWithList('H-E-B Breaded Chicken Breasts, 24 oz').rankLines('bread');
+    expect(ranked[0]?.confident ?? false).toBe(false);
+  });
+
+  it('still matches genuine plurals', async () => {
+    const ranked = await opsWithList('H-E-B Grade AA Large White Eggs, 12 ct').rankLines('egg');
+    expect(ranked[0]?.confident).toBe(true);
+  });
+});

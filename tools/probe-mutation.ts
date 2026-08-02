@@ -21,6 +21,9 @@ import { FileStore, HebClient, HebListOps, HEB_GRAPHQL_URL, HEB_ORIGIN, type Coo
 
 const SESSION_PATH = resolve('.session/session.json');
 
+/** No raw probe may outlive this; see the note in `rawGraphql`. */
+const PROBE_TIMEOUT_MS = 15_000;
+
 /**
  * The current session, read but never written.
  *
@@ -44,6 +47,10 @@ async function rawGraphql(session: SessionState, body: unknown): Promise<any> {
 
   const response = await fetch(HEB_GRAPHQL_URL, {
     method: 'POST',
+    // Bounded so the cleanup in `finally` is always reachable. An unbounded raw request
+    // that hangs leaves the throwaway line on a real household list, and the only way out
+    // is killing the process — which skips the cleanup entirely.
+    signal: AbortSignal.timeout(PROBE_TIMEOUT_MS),
     headers: {
       'User-Agent':
         'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/151.0.0.0 Safari/537.36',

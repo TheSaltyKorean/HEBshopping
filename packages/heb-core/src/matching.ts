@@ -251,7 +251,21 @@ const SEMANTIC_TIE = 0.05;
  */
 const SEPARATION_SCALE = 0.15;
 
-export function separation(scores: readonly number[]): number {
+/**
+ * How far clear the *chosen* candidate is of the strongest alternative.
+ *
+ * Anchored to `chosen` rather than to the top of the list, because ordering folds in
+ * signals other than the words — HEB's own position, and the personal preferences — so the
+ * product we are about to name is not always the semantic winner. Combining one product's
+ * coverage with another product's separation is what lets an early, weaker candidate
+ * inherit a gap it did not earn and cross the write threshold.
+ *
+ * When `chosen` is *not* the semantic winner the difference is negative, which clamps to
+ * zero: no separation, so confidence sits on the floor and we ask. That is the right
+ * answer — preferring a product on brand or habit is never evidence that the words were
+ * unambiguous.
+ */
+export function separation(scores: readonly number[], chosen?: number): number {
   // A lone candidate is not evidence of a clear winner — it is the absence of evidence.
   // HEB's search narrows on every extra word, so a singleton set is often a *symptom* of
   // an over-constrained query that filtered out better catalog matches. Reporting maximum
@@ -259,10 +273,16 @@ export function separation(scores: readonly number[]): number {
   // written silently, skipping the broadened retry that exists for exactly this case.
   if (scores.length < 2) return 0;
 
-  // Sorted defensively: separation is meaningless unless it compares the best against the
-  // true runner-up, and callers rank by an ordering that folds in HEB's own position.
-  const [best, runnerUp] = [...scores].sort((a, b) => b - a);
-  return Math.min(1, Math.max(0, (best! - runnerUp!) / SEPARATION_SCALE));
+  const target = chosen ?? Math.max(...scores);
+
+  // Remove exactly one occurrence, never every equal value: two candidates tied at the top
+  // means *no* separation, and filtering by value would delete both and hand the gap to a
+  // weaker third product instead.
+  const rivals = [...scores];
+  const index = rivals.indexOf(target);
+  if (index !== -1) rivals.splice(index, 1);
+
+  return Math.min(1, Math.max(0, (target - Math.max(...rivals)) / SEPARATION_SCALE));
 }
 
 /**
@@ -301,25 +321,48 @@ export function matchProducts(
     brand: brandPreference(product),
   }));
 
-  // Ordering is lexicographic, and the first key dominates: a materially better match
-  // always wins. Only when the words genuinely cannot separate two products do the
-  // personal signals decide — bought-before first, then house-brand preference, then
-  // HEB's own relevance position as the final tiebreak.
-  const ranked = [...scored].sort((a, b) => {
-    if (Math.abs(a.semantic - b.semantic) > SEMANTIC_TIE) return b.semantic - a.semantic;
+  // Partition against the best score, then sort each part independently.
+  //
+  // The obvious formulation — one comparator that treats scores within SEMANTIC_TIE as
+  // tied — is *intransitive*: a≈b and b≈c while a and c differ by twice the band. That
+  // makes the sort's result implementation-defined, and can leave a product first that is
+  // not the strongest match in its own band, which then hands its coverage to a confidence
+  // computed from someone else's gap.
+  //
+  // Anchoring to the leader is both well-defined and what the rule actually means: the
+  // personal signals decide among the products the words cannot separate *from the best
+  // one*, and never promote a materially worse match.
+  const topSemantic = Math.max(...scored.map((entry) => entry.semantic));
+  const contends = (entry: (typeof scored)[number]): boolean =>
+    entry.semantic >= topSemantic - SEMANTIC_TIE;
+
+  const byPreference = (a: (typeof scored)[number], b: (typeof scored)[number]): number => {
     if (a.purchased !== b.purchased) return a.purchased ? -1 : 1;
     if (a.brand !== b.brand) return a.brand - b.brand;
     return rankBonus(b.rank) - rankBonus(a.rank);
-  });
+  };
+
+  const ranked = [
+    ...scored.filter(contends).sort(byPreference),
+    ...scored
+      .filter((entry) => !contends(entry))
+      .sort((a, b) => b.semantic - a.semantic || rankBonus(b.rank) - rankBonus(a.rank)),
+  ];
 
   const best = ranked[0]!;
   if (coverage(queryTokens, best.product) === 0) return null;
 
   return {
     product: best.product,
+    // Both inputs describe `best` — its coverage and its gap over the strongest rival.
+    // Mixing one product's coverage with another's separation lets a candidate promoted on
+    // habit or brand inherit a gap it never earned, and cross the write threshold on it.
     confidence: confidenceFrom(
       coverage(queryTokens, best.product),
-      separation(ranked.map((entry) => entry.semantic)),
+      separation(
+        ranked.map((entry) => entry.semantic),
+        best.semantic,
+      ),
     ),
     alternatives: ranked.slice(1, 5).map((entry) => entry.product),
   };

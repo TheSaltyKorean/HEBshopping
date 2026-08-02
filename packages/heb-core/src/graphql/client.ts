@@ -63,6 +63,8 @@ export class HebClient {
   /** Serialises bursts so we stay a polite guest on an API that never invited us. */
   private queue: Promise<unknown> = Promise.resolve();
   private active = 0;
+  /** When the most recent request *started*, so spacing is measured start-to-start. */
+  private lastStart = Number.NEGATIVE_INFINITY;
 
   constructor(options: HebClientOptions) {
     this.store = options.store;
@@ -202,13 +204,28 @@ export class HebClient {
       await this.queue.catch(() => undefined);
     }
 
+    // Space requests by *start* time, not by completion.
+    //
+    // Delaying after a task finishes spaces nothing: `active` has already been decremented
+    // by then, so a waiting call starts during the delay rather than after it, and two
+    // concurrent calls that both see a free slot start together. Since being a polite
+    // client is the whole point — HEB never invited us, and Imperva is watching — the gate
+    // has to be on when a request begins.
+    // The slot is claimed *synchronously*, before any await. Computing a deadline and then
+    // awaiting would let every concurrent caller read the same `lastStart`, all wait the
+    // same interval, and all start together — spacing nothing. Reserving first works
+    // because this read-modify-write cannot be interleaved on a single thread.
+    const startAt = Math.max(this.now(), this.lastStart + this.minDelayMs);
+    const wait = startAt - this.now();
+    this.lastStart = startAt;
+    if (wait > 0) await delay(wait);
+
     this.active += 1;
     const run = (async () => {
       try {
         return await task();
       } finally {
         this.active -= 1;
-        await delay(this.minDelayMs);
       }
     })();
 

@@ -34,6 +34,7 @@ import type {
 // ---------------------------------------------------------------------------
 
 interface HebProduct {
+  __typename?: string;
   id: string;
   fullDisplayName?: string;
   displayName?: string;
@@ -160,7 +161,13 @@ export class HebListOps implements ListOps {
       productSearchItems: { searchGrid?: { items?: HebProduct[] } };
     }>(searchProductsDocument(query, storeId));
 
-    return (data.productSearchItems.searchGrid?.items ?? []).map(toProduct);
+    // `searchGrid.items` is a union — sponsored placements and banners appear alongside
+    // products. Those come back as a bare `__typename`, and mapping one produces a
+    // "Unknown product" with an undefined id: MCP would hand that id back as a real
+    // productId, and Alexa would offer it in a confirmation whose "yes" cannot succeed.
+    return (data.productSearchItems.searchGrid?.items ?? [])
+      .filter((item) => item.__typename === 'Product' && typeof item.id === 'string')
+      .map(toProduct);
   }
 
   /**

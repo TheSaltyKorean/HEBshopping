@@ -19,12 +19,16 @@ import { createHebMcpServer, SERVER_NAME, SERVER_VERSION } from './server.js';
 const sessionPath = resolve(process.env['HEB_SESSION_PATH'] ?? '.session/session.json');
 const listId = process.env['HEB_LIST_ID'];
 
-const listOps = new HebListOps({
-  client: new HebClient({ store: new FileStore(sessionPath) }),
-  ...(listId === undefined ? {} : { listId }),
+// A factory, not an instance: this process outlives every tool call, and a shared
+// `HebListOps` would keep serving its first list snapshot for the whole session.
+const store = new FileStore(sessionPath);
+const server = createHebMcpServer({
+  createListOps: () =>
+    new HebListOps({
+      client: new HebClient({ store }),
+      ...(listId === undefined ? {} : { listId }),
+    }),
 });
-
-const server = createHebMcpServer({ listOps });
 
 // stderr, deliberately — see the note above.
 console.error(`${SERVER_NAME} v${SERVER_VERSION} — session: ${sessionPath}`);

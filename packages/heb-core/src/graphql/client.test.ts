@@ -178,3 +178,27 @@ describe('HebClient', () => {
     expect(error.retryable).toBe(true);
   });
 });
+
+describe('politeness throttle', () => {
+  it('spaces concurrent request STARTS, not just completions', async () => {
+    // The bug this guards: every concurrent caller reads the same `lastStart`, waits the
+    // same interval, and starts together — spacing nothing, and presenting HEB's bot
+    // protection with exactly the burst the delay exists to avoid.
+    const starts: number[] = [];
+    const client = new HebClient({
+      // Real clock here: this test is about elapsed time between starts.
+      store: storeWith(session({ capturedAt: Date.now() })),
+      minDelayMs: 50,
+      fetchImpl: (async () => {
+        starts.push(Date.now());
+        return new Response(JSON.stringify({ data: { ok: 1 } }), { status: 200 });
+      }) as unknown as typeof fetch,
+    });
+
+    await Promise.all([1, 2, 3, 4].map(() => client.execute(getShoppingListsDocument())));
+
+    const gaps = starts.slice(1).map((start, index) => start - starts[index]!);
+    expect(starts).toHaveLength(4);
+    for (const gap of gaps) expect(gap).toBeGreaterThanOrEqual(45);
+  });
+});

@@ -19,7 +19,6 @@
     "test:watch": "vitest",
     "test:live": "HEB_LIVE=1 vitest run --testNamePattern=live",
     "login": "tsx tools/login.ts",
-    "hashes": "tsx tools/hashes.ts",
     "capture": "tsx tools/capture.ts",
     "scan": "tsx tools/scan-secrets.ts",
     "soak": "tsx tools/soak.ts",

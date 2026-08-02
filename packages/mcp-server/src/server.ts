@@ -80,10 +80,19 @@ function describeAddResult(result: AddResult): TextResult {
 }
 
 export interface CreateServerOptions {
-  listOps: HebListOps;
+  /**
+   * Built fresh for every tool call, never shared.
+   *
+   * `HebListOps` caches the resolved list, which is correct within one operation and wrong
+   * across two. A stdio server lives for the whole client session, so a single shared
+   * instance would answer `heb_read_list` from a snapshot taken hours earlier and never
+   * see edits made in the H-E-B app — and free-text removal would match against that
+   * stale list too.
+   */
+  createListOps: () => HebListOps;
 }
 
-export function createHebMcpServer({ listOps }: CreateServerOptions): McpServer {
+export function createHebMcpServer({ createListOps }: CreateServerOptions): McpServer {
   const server = new McpServer({ name: SERVER_NAME, version: SERVER_VERSION });
 
   server.registerTool(
@@ -97,7 +106,7 @@ export function createHebMcpServer({ listOps }: CreateServerOptions): McpServer 
     },
     async (): Promise<TextResult> => {
       try {
-        const list = await listOps.getList();
+        const list = await createListOps().getList();
         if (list.items.length === 0) return text(`The HEB list "${list.name}" is empty.`);
         const lines = list.items
           .map((item) => `• ${describeItem(item)}  [lineId: ${item.lineId}]`)
@@ -124,7 +133,7 @@ export function createHebMcpServer({ listOps }: CreateServerOptions): McpServer 
     },
     async ({ query, limit }): Promise<TextResult> => {
       try {
-        const products = await listOps.searchProducts(query);
+        const products = await createListOps().searchProducts(query);
         if (products.length === 0) return text(`No HEB products matched "${query}".`);
         const shown = products.slice(0, limit ?? 10);
         const lines = shown
@@ -168,7 +177,7 @@ export function createHebMcpServer({ listOps }: CreateServerOptions): McpServer 
         return text('Provide exactly one of `query` or `productId`.', true);
       }
       try {
-        const result = await listOps.addItem({
+        const result = await createListOps().addItem({
           ...(query === undefined ? {} : { query }),
           ...(productId === undefined ? {} : { productId }),
           ...(quantity === undefined ? {} : { quantity }),
@@ -209,6 +218,7 @@ export function createHebMcpServer({ listOps }: CreateServerOptions): McpServer 
       try {
         // Resolving free text against the list (not the whole catalog) is a much smaller
         // problem, and findLine refuses to guess between equally plausible lines.
+        const listOps = createListOps();
         const target = lineId ?? (await listOps.findLine(item!)).lineId;
         const label = lineId === undefined ? item : lineId;
         await listOps.removeItem({ lineId: target });

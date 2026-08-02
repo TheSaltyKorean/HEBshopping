@@ -29,6 +29,7 @@ import {
 } from '@heb/core';
 import type { HebListOps } from '@heb/core';
 import {
+  MAX_SPOKEN_ITEMS,
   cardList,
   escapeSsml,
   speakableJoin,
@@ -194,8 +195,11 @@ function readListHandler(options: CreateSkillOptions): RequestHandler {
         `${escapeSsml(speakableList(list.items))} Anything else?`,
       );
 
-      // Only card the overflow case; a card for three items is noise in the app's history.
-      if (list.items.length > 0) builder.withSimpleCard(CARD_TITLE, cardList(list.items));
+      // Only the overflow case. Every nonempty list used to get one, so a three-item read
+      // left a card in the app's history that said nothing the speech had not already.
+      if (list.items.length > MAX_SPOKEN_ITEMS) {
+        builder.withSimpleCard(CARD_TITLE, cardList(list.items));
+      }
       return builder.reprompt(REPROMPT).getResponse();
     },
   };

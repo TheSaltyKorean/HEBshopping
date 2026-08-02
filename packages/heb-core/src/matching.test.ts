@@ -10,6 +10,7 @@ import {
   separation,
   tokenize,
 } from './matching.js';
+import { CONFIRMATION_THRESHOLD } from './constants.js';
 import type { Product } from './types.js';
 
 /** Product names copied from real HEB search results, so the table tests reality. */
@@ -274,11 +275,30 @@ describe('personal preferences break ties the words cannot', () => {
     expect(match!.product.id).toBe('oatly');
   });
 
-  it('does not let preferences inflate confidence', () => {
+  it('never lets preferences inflate confidence', () => {
     const plain = matchProducts('whole milk', MILKS);
     const preferred = matchProducts('whole milk', MILKS, { purchasedIds: new Set(['hcf']) });
-    // Same words, same candidates: knowing the user's habits reorders the offer list but
-    // says nothing about whether the request was unambiguous.
-    expect(preferred!.confidence).toBeCloseTo(plain!.confidence);
+
+    // Knowing the user's habits reorders the offer list but says nothing about whether the
+    // words were unambiguous. Promoting a product that is *not* the semantic winner in
+    // fact lowers confidence to the floor, because separation is anchored to whatever was
+    // chosen — picking on habit is an admission that the words did not decide.
+    expect(preferred!.confidence).toBeLessThanOrEqual(plain!.confidence);
+    expect(preferred!.confidence).toBeLessThan(CONFIRMATION_THRESHOLD);
+  });
+
+  it('does not let a promoted product inherit the semantic winner\'s gap', () => {
+    // The write-threshold hazard: an early weak candidate kept first by ordering, with
+    // confidence computed from a gap that belongs to a different, better product.
+    const candidates = [
+      p('vanilla', 'H-E-B Vanilla Organic Oat Milk, 52 oz', 'H-E-B'),
+      p('plain', 'Oatly Organic Oat Milk, 52 oz', 'Oatly'),
+    ];
+    const match = matchProducts('organic oat milk', candidates, {
+      purchasedIds: new Set(['vanilla']),
+    });
+    if (match!.product.id === 'vanilla') {
+      expect(isConfident(match!)).toBe(false);
+    }
   });
 });

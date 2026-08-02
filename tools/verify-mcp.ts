@@ -54,6 +54,20 @@ function lineIdsIn(listing: string): Set<string> {
   return new Set([...listing.matchAll(/lineId: ([0-9a-f-]{36})/g)].map((match) => match[1]!));
 }
 
+/**
+ * Candidate `name [productId: N]` pairs from an ambiguous `heb_add_item` reply.
+ *
+ * Needed so the run can pick a product that is *not* already on the list. Adding one that
+ * is would increment a real grocery instead of creating a line, and MCP exposes no way to
+ * set a quantity back down — so the only safe restore is never to cause the increment.
+ */
+function candidatesIn(reply: string): Array<{ name: string; productId: string }> {
+  return [...reply.matchAll(/^\s*\d+\.\s*(.+?)\s*\[productId: (\d+)\]/gm)].map((match) => ({
+    name: match[1]!.trim(),
+    productId: match[2]!,
+  }));
+}
+
 async function main(): Promise<void> {
   await client.connect(transport);
 
@@ -75,15 +89,26 @@ async function main(): Promise<void> {
     throw new Error('expected an ambiguous query to be refused rather than written');
   }
 
-  const productId = vague.match(/productId: (\d+)/)?.[1];
-  if (productId === undefined) throw new Error('no productId offered in the candidate list');
+  // Choose a candidate that is demonstrably absent, so the add creates a line rather than
+  // incrementing one belonging to the household.
+  const candidates = candidatesIn(vague);
+  if (candidates.length === 0) throw new Error('no candidates offered in the ambiguous reply');
+
+  const absent = candidates.find((candidate) => !initial.includes(candidate.name));
+  if (absent === undefined) {
+    throw new Error('every offered candidate is already on the list; nothing safe to add');
+  }
+  const productId = absent.productId;
 
   await call('heb_add_item', { productId });
   const listed = await call('heb_read_list');
 
   const added = [...lineIdsIn(listed)].filter((lineId) => !before.has(lineId));
   if (added.length !== 1) {
-    throw new Error(`expected exactly one new line, saw ${added.length}`);
+    // Zero would mean the add incremented a pre-existing line despite the absence check;
+    // stopping here without deleting anything is the safe response, since MCP offers no
+    // way to set a quantity back down.
+    throw new Error(`expected exactly one new line, saw ${added.length} — list left untouched`);
   }
 
   // Remove by lineId, not by free text. Free-text removal against a real list can match a

@@ -129,6 +129,16 @@ export function speakableOffers(products: readonly Product[]): string[] {
   });
 }
 
+/**
+ * What to speak for a list line, product-backed or not.
+ *
+ * A free-text line has no product to shorten, and its `text` is already what a person
+ * typed — short by construction — so it is spoken verbatim.
+ */
+export function speakableItem(item: ListItem): string {
+  return item.product === undefined ? item.text : speakableProduct(item.product);
+}
+
 /** Join a list the way a person would say it: "a, b, and c". */
 export function speakableJoin(parts: readonly string[]): string {
   if (parts.length === 0) return '';
@@ -151,7 +161,7 @@ export function speakableList(items: readonly ListItem[]): string {
   if (items.length === 0) return 'Your H-E-B list is empty.';
 
   const spoken = items.slice(0, MAX_SPOKEN_ITEMS).map((item) => {
-    const name = speakableProduct(item.product);
+    const name = speakableItem(item);
     return item.quantity > 1 ? `${item.quantity} ${name}` : name;
   });
 
@@ -169,6 +179,6 @@ export function speakableList(items: readonly ListItem[]): string {
 export function cardList(items: readonly ListItem[]): string {
   if (items.length === 0) return 'Your H-E-B list is empty.';
   return items
-    .map((item) => `${item.quantity > 1 ? `${item.quantity} × ` : ''}${item.product.name}`)
+    .map((item) => `${item.quantity > 1 ? `${item.quantity} × ` : ''}${item.product?.name ?? item.text}`)
     .join('\n');
 }

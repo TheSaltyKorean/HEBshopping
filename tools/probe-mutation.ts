@@ -69,13 +69,19 @@ async function main(): Promise<void> {
   // real household grocery — a probe has no business destroying data it did not create,
   // and a nonempty list is the normal case, not the edge case.
   const candidates = await lists.searchProducts('oat milk');
-  const added = await lists.addItem({ productId: candidates[0]!.id });
-  if (added.status === 'needs_confirmation') throw new Error('unreachable');
-  if (added.status === 'already_present') {
-    throw new Error(
-      'The throwaway product is already on the list; deleting it would remove a real line. ' +
-        'Re-run when it is not on the list.',
-    );
+
+  // Check BEFORE mutating. Guarding after the add is no guard at all: `addItem` has
+  // already incremented the real line by then, and the probe leaves the household list
+  // changed even as it refuses to continue.
+  const onList = new Set(list.items.map((item) => item.product?.id).filter(Boolean));
+  const disposable = candidates.find((product) => !onList.has(product.id));
+  if (disposable === undefined) {
+    throw new Error('Every candidate product is already on the list; nothing safe to probe with.');
+  }
+
+  const added = await lists.addItem({ productId: disposable.id });
+  if (added.status !== 'added') {
+    throw new Error(`expected a fresh line, got ${added.status}`);
   }
   const lineId = added.item.lineId;
   console.log(`Added throwaway line: ${added.item.text}`);

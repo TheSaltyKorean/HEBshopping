@@ -86,13 +86,15 @@ export interface ListItem {
   /** HEB's item UUID for this line; what `updateShoppingListItem` and `deleteShoppingListItems` take. */
   lineId: string;
   /**
-   * Non-nullable: W0 established that HEB list items always resolve to a catalog product.
-   * Adding requires a `productId`, and the per-line `note` field annotates a product rather
-   * than standing in for one. The mobile app can create genuinely free-text lines; this
-   * project cannot yet, so every line it creates has a product.
+   * Absent for a free-text line.
+   *
+   * HEB's mobile app offers `Add "<what you typed>" to your list` for an unmatched search,
+   * producing a `GenericShoppingListItemV2` with its text in `note` and no product at all.
+   * This project cannot create those yet, but a household member can, and a list read that
+   * dropped them would under-report a list the H-E-B app shows correctly.
    */
-  product: Product;
-  /** What to speak back to the user. */
+  product?: Product;
+  /** What to speak back. Always populated — for a free-text line this is the note itself. */
   text: string;
   quantity: number;
   /** Server-side upper bound for this line. Respect it rather than letting HEB reject the write. */

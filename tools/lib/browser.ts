@@ -75,11 +75,18 @@ export function attachCapture(context: BrowserContext): Capture {
         responseBody = '(unparseable response body)';
       }
 
-      for (const operation of parsed) {
+      // A batched POST carries several operations and the response is an array in the
+      // same order. Storing the whole array on every call would attribute one operation's
+      // data — and its errors — to all of its neighbours, which is exactly the kind of
+      // quiet mis-association that sends fixture-driven debugging down a blind alley.
+      const bodies = Array.isArray(responseBody) ? responseBody : null;
+
+      for (const [index, operation] of parsed.entries()) {
+        const own = bodies === null ? responseBody : bodies[index];
         const call: CapturedCall = {
           ...operation,
           responseStatus: response.status(),
-          responseBody,
+          responseBody: own,
           capturedAt: Date.now(),
         };
         const isNew = !operations.has(operation.operationName);
@@ -87,9 +94,7 @@ export function attachCapture(context: BrowserContext): Capture {
         timeline.push(call);
 
         const errors =
-          responseBody && typeof responseBody === 'object' && 'errors' in responseBody
-            ? '  ⚠ errors'
-            : '';
+          own && typeof own === 'object' && 'errors' in own ? '  ⚠ errors' : '';
         console.log(`${isNew ? 'NEW ' : '    '}${operation.operationName}${errors}`);
       }
     })();

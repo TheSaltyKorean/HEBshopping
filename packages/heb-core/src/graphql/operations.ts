@@ -74,6 +74,17 @@ const LIST_FIELDS = `
         maximumQuantity
         product { id fullDisplayName brand { name } }
       }
+      # Free-text lines. HEB's mobile app offers 'Add "<what you typed>" to your list'
+      # for an unmatched search, and those lines come back as this member with the text
+      # in "note" and no product at all. Omitting the fragment does not omit the item —
+      # it arrives with only a __typename and is silently dropped, so Alexa and MCP
+      # under-report a list that the H-E-B app shows correctly.
+      ... on GenericShoppingListItemV2 {
+        id
+        quantity
+        note
+        checked
+      }
     }
   }
 `;

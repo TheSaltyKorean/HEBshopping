@@ -15,6 +15,22 @@ import { createSkill } from './skill.js';
 const SESSION_PATH = process.env['HEB_SESSION_PATH'] ?? '/tmp/heb-session.json';
 
 /**
+ * Required, and deliberately fatal when missing.
+ *
+ * Without it `createSkill` never calls `withSkillId`, and the function accepts requests
+ * from *any* Alexa application that can reach it — which is the whole defence against
+ * someone pointing their own skill at this ARN, since a direct Alexa trigger has no
+ * request signature to verify. Failing at cold start is far better than silently serving
+ * a household's shopping list to an unknown skill.
+ */
+const SKILL_ID = process.env['HEB_SKILL_ID'];
+if (SKILL_ID === undefined || SKILL_ID.trim() === '') {
+  throw new Error(
+    'HEB_SKILL_ID is required: without it this Lambda would accept any Alexa skill id.',
+  );
+}
+
+/**
  * Built once per container, reused across invocations.
  *
  * Safe to hoist because it holds no per-request state: the skill object is a router. The
@@ -27,7 +43,7 @@ const skill = createSkill({
       client: new HebClient({ store: new FileStore(SESSION_PATH) }),
       ...(process.env['HEB_LIST_ID'] !== undefined ? { listId: process.env['HEB_LIST_ID'] } : {}),
     }),
-  ...(process.env['HEB_SKILL_ID'] !== undefined ? { skillId: process.env['HEB_SKILL_ID'] } : {}),
+  skillId: SKILL_ID,
 });
 
 export const handler = async (event: unknown, context: unknown): Promise<unknown> =>

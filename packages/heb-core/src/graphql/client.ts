@@ -220,6 +220,14 @@ export class HebClient {
     this.lastStart = startAt;
     if (wait > 0) await delay(wait);
 
+    // Re-acquire the concurrency slot after sleeping. Several callers can clear the check
+    // above before any of them sleeps, and each would otherwise wake and increment
+    // `active` without looking again — putting more requests in flight than the cap allows
+    // whenever a request outlasts the spacing interval.
+    while (this.active >= MAX_CONCURRENT_REQUESTS) {
+      await this.queue.catch(() => undefined);
+    }
+
     this.active += 1;
     const run = (async () => {
       try {

@@ -9,6 +9,7 @@ import {
   cardList,
   escapeSsml,
   extractSize,
+  speakableItem,
   speakableJoin,
   speakableList,
   speakableOffers,
@@ -173,5 +174,26 @@ describe('speakableOffers — offers must be distinguishable by ear', () => {
     ['Oatly The Original Oat Milk, 1/2 gal', '1/2 gal'],
   ])('extracts the size from %s', (name, expected) => {
     expect(extractSize(name)).toBe(expected);
+  });
+});
+
+describe('free-text lines have no product', () => {
+  const freeText = (text: string, quantity = 1): ListItem => ({ lineId: 'g1', text, quantity });
+
+  it('speaks the note verbatim', () => {
+    // Created by the H-E-B mobile app's `Add "<text>" to your list`. There is no catalog
+    // product to shorten, and what the user typed is already short.
+    expect(speakableItem(freeText('pico de gallo'))).toBe('pico de gallo');
+  });
+
+  it('reads alongside product lines without crashing', () => {
+    const speech = speakableList([freeText('pico de gallo', 2), line('Fresh Bananas')]);
+    expect(speech).toContain('2 pico de gallo');
+    expect(speech).toContain('Fresh Bananas');
+    expect(speech).toContain('2 items');
+  });
+
+  it('appears on the card', () => {
+    expect(cardList([freeText('pico de gallo')])).toContain('pico de gallo');
   });
 });

@@ -126,7 +126,7 @@ async function cleanUp(before: ReadonlySet<string>): Promise<void> {
 
   for (const item of added) {
     await listOps.removeItem({ lineId: item.lineId });
-    console.log(`\n🧹 cleaned up: ${item.product.name}`);
+    console.log(`\n🧹 cleaned up: ${item.product?.name ?? item.text}`);
   }
   if (added.length === 0) console.log('\n🧹 nothing to clean up.');
 }

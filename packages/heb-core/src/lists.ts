@@ -45,7 +45,9 @@ interface HebProduct {
 
 interface HebListItem {
   id: string;
-  quantity: number;
+  quantity?: number;
+  /** Free-text content on a GenericShoppingListItemV2; absent on product lines. */
+  note?: string;
   maximumQuantity?: number;
   product?: HebProduct;
 }
@@ -134,9 +136,15 @@ export class HebListOps implements ListOps {
     // redundant round trips is a large fraction of Alexa's ~8s ceiling.
     if (this.cachedList !== undefined && this.cachedList.listId === id) return this.cachedList;
 
-    const data = await this.client.execute<{ getShoppingListV2: HebListPayload }>(
-      getShoppingListDocument(id),
-    );
+    const data = await this.client.execute<{
+      getShoppingListV2: HebListPayload & { __typename?: string };
+    }>(getShoppingListDocument(id));
+
+    // A deleted or inaccessible list comes back as a different union member carrying only
+    // a `__typename`, which `HebClient` sees as a perfectly good data envelope. Mapping it
+    // would manufacture an empty list, and we would cheerfully tell someone their shopping
+    // list is empty when in fact the read was refused.
+    assertMutationSucceeded(data.getShoppingListV2, 'read the list');
 
     const list = toHebList(data.getShoppingListV2);
     this.cachedList = list;
@@ -284,7 +292,7 @@ export class HebListOps implements ListOps {
     // Quantity is a property of a list line, so a repeat add increments rather than
     // creating a duplicate line — matching what HEB's own UI does.
     const existing = (await this.getList(listId)).items.find(
-      (item) => item.product.id === productId,
+      (item) => item.product?.id === productId,
     );
 
     if (existing !== undefined) {
@@ -303,7 +311,7 @@ export class HebListOps implements ListOps {
     this.cachedList = undefined; // the list just changed underneath us
 
     const added = toHebList(data.addShoppingListItemsV2).items.find(
-      (item) => item.product.id === productId,
+      (item) => item.product?.id === productId,
     );
     if (added === undefined) {
       throw new HebError('UPSTREAM_ERROR', 'HEB accepted the add but did not return the item.');
@@ -311,8 +319,16 @@ export class HebListOps implements ListOps {
 
     if (quantity > 1) {
       const target = Math.min(quantity, added.maximumQuantity ?? quantity);
-      await this.setQuantity(listId, added.lineId, target);
-      return { status: 'added', item: { ...added, quantity: target } };
+      try {
+        await this.setQuantity(listId, added.lineId, target);
+        return { status: 'added', item: { ...added, quantity: target } };
+      } catch {
+        // The add already succeeded — a quantity-one line exists. Throwing here would
+        // report total failure for a partial success, and a retry would then find that
+        // line and increment it, landing on three when two was asked for. Report what is
+        // actually on the list instead; the user can say "add another" if they want more.
+        return { status: 'added', item: added };
+      }
     }
 
     return { status: 'added', item: added };
@@ -363,7 +379,7 @@ export class HebListOps implements ListOps {
       throw new HebError(
         'AMBIGUOUS_REMOVAL',
         `"${spoken}" could mean more than one item on the list.`,
-        { details: { candidates: ranked.map((entry) => entry.item.product.name) } },
+        { details: { candidates: ranked.map((entry) => entry.item.text) } },
       );
     }
     return best.item;
@@ -385,14 +401,20 @@ export class HebListOps implements ListOps {
       throw new HebError('ITEM_NOT_ON_LIST', 'The list is empty.');
     }
 
-    const match = matchProducts(spoken, list.items.map((item) => item.product));
+    // Match against a synthetic product per *line*, keyed by lineId, so free-text items
+    // are removable by voice too. Keying by product id would drop them entirely, and
+    // would also collapse two lines that somehow share a product.
+    const match = matchProducts(
+      spoken,
+      list.items.map((item) => ({ id: item.lineId, name: item.text })),
+    );
     if (match === null) return [];
 
     const confident = isConfident(match);
-    const byProductId = new Map(list.items.map((item) => [item.product.id, item] as const));
+    const byLineId = new Map(list.items.map((item) => [item.lineId, item] as const));
 
     return [match.product, ...match.alternatives]
-      .map((product) => byProductId.get(product.id))
+      .map((product) => byLineId.get(product.id))
       .filter((item): item is ListItem => item !== undefined)
       // Only the top candidate can be "the confident answer"; the rest are alternatives.
       .map((item, index) => ({ item, confident: index === 0 && confident }));
@@ -440,17 +462,20 @@ export function toProduct(product: HebProduct): Product {
 }
 
 function toListItem(item: HebListItem): ListItem | null {
-  // Every HEB list line resolves to a catalog product; a line without one is malformed
-  // rather than a free-text item, so drop it instead of inventing a placeholder.
-  if (item.product === undefined) return null;
+  const quantity = item.quantity ?? 1;
+  const ceiling = item.maximumQuantity === undefined ? {} : { maximumQuantity: item.maximumQuantity };
+
+  // A free-text line: created in the H-E-B mobile app for a search that matched nothing,
+  // carrying its text in `note` and no product. Dropping it would under-report a list the
+  // app itself displays correctly, and would let removal claim the item is not there.
+  if (item.product === undefined) {
+    const note = item.note?.trim();
+    if (note === undefined || note === '') return null;
+    return { lineId: item.id, text: note, quantity, ...ceiling };
+  }
+
   const product = toProduct(item.product);
-  return {
-    lineId: item.id,
-    product,
-    text: product.name,
-    quantity: item.quantity,
-    ...(item.maximumQuantity === undefined ? {} : { maximumQuantity: item.maximumQuantity }),
-  };
+  return { lineId: item.id, product, text: product.name, quantity, ...ceiling };
 }
 
 export function toHebList(payload: HebListPayload): HebList {

@@ -32,6 +32,7 @@ import {
   MAX_SPOKEN_ITEMS,
   cardList,
   escapeSsml,
+  speakableItem,
   speakableJoin,
   speakableList,
   speakableOffers,
@@ -120,7 +121,7 @@ function giveUp(input: HandlerInput, pending: PendingChoice): Response {
 function confirmAdded(input: HandlerInput, item: ListItem, wasPresent: boolean): Response {
   // Confirm with the *resolved* product name, never the spoken text: the whole point of
   // the dialog is that those two can differ, and echoing the request back would hide it.
-  const name = escapeSsml(speakableProduct(item.product));
+  const name = escapeSsml(speakableItem(item));
   const speech = wasPresent
     ? `${name} was already on your list. You now have ${item.quantity}.`
     : `Added ${item.quantity > 1 ? `${item.quantity} ` : ''}${name}.`;
@@ -231,7 +232,7 @@ function removeItemHandler(options: CreateSkillOptions): RequestHandler {
       if (best.confident) {
         await listOps.removeItem({ lineId: best.item.lineId });
         return input.responseBuilder
-          .speak(`Removed ${escapeSsml(speakableProduct(best.item.product))}. Anything else?`)
+          .speak(`Removed ${escapeSsml(speakableItem(best.item))}. Anything else?`)
           .reprompt(REPROMPT)
           .getResponse();
       }
@@ -241,11 +242,15 @@ function removeItemHandler(options: CreateSkillOptions): RequestHandler {
         spokenQuery: spoken,
         quantity: 1,
         offers: (() => {
-          const spoken = speakableOffers(ranked.map((entry) => entry.item.product));
+          // Synthesise a product per *line* so free-text items can be offered too:
+          // they have no catalog product, but they do have text worth speaking.
+          const spoken = speakableOffers(
+            ranked.map((entry) => entry.item.product ?? { id: entry.item.lineId, name: entry.item.text }),
+          );
           return ranked.map((entry, index) => ({
             lineId: entry.item.lineId,
             spoken: spoken[index]!,
-            full: entry.item.product.name,
+            full: entry.item.product?.name ?? entry.item.text,
           }));
         })(),
         index: 0,

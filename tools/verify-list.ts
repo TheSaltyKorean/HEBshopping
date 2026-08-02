@@ -86,16 +86,22 @@ async function main(): Promise<void> {
     // Reconcile before rethrowing: a rejection does not mean nothing happened, and the
     // `finally` below would otherwise report an untouched list while a test grocery — or
     // an incremented real one — sits on it.
-    const result = await time('addItem', () =>
-      lists.addItem({ query: TERM }).catch(async (error: unknown) => {
+    // Reconcile against the product this call asked for, not "whatever changed". A
+    // household member adding something mid-run also shows as a line absent from the
+    // snapshot, and claiming it would have the cleanup delete their grocery.
+    const reconcile = async (productId: string | undefined, error: unknown): Promise<never> => {
+      if (productId !== undefined) {
         const after = await lists.getList().catch(() => null);
-        const changed = after?.items.find((item) => {
-          const was = before.items.find((original) => original.lineId === item.lineId);
-          return was === undefined || item.quantity > was.quantity;
-        });
-        if (changed !== undefined) touchedLine = changed.lineId;
-        throw error;
-      }),
+        const mine = after?.items.find((item) => item.product?.id === productId);
+        if (mine !== undefined) touchedLine = mine.lineId;
+      }
+      throw error;
+    };
+
+    const result = await time('addItem', () =>
+      // The query form resolves the product server-side, so there is no id to reconcile
+      // against yet; the confirmed add below is the one that can leave data behind.
+      lists.addItem({ query: TERM }).catch((error: unknown) => reconcile(undefined, error)),
     );
 
     let lineId: string;
@@ -108,8 +114,11 @@ async function main(): Promise<void> {
       for (const alt of result.match.alternatives.slice(0, 3)) console.log(`     alt:  ${alt.name}`);
 
       console.log('\n   confirming the top match by productId …');
+      const chosen = result.match.product.id;
       const confirmed = await time('addItem(productId)', () =>
-        lists.addItem({ productId: result.match.product.id }),
+        // Armed before the call: a committed add whose response is lost rejects here, and
+        // the cleanup would otherwise report an untouched list.
+        lists.addItem({ productId: chosen }).catch((error: unknown) => reconcile(chosen, error)),
       );
       if (confirmed.status === 'needs_confirmation') throw new Error('unreachable');
       lineId = confirmed.item.lineId;

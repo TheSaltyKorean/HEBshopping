@@ -12,7 +12,7 @@ actually want — they're independent, and you can enable more later.
 | You need | Why |
 |---|---|
 | An **H-E-B account** with at least one shopping list | This drives your real list. Create one at [heb.com](https://www.heb.com) first if you haven't. |
-| **Node.js 20 or newer** | Check with `node --version`. |
+| **Node.js `^20.19` or `>=22.12`** | Check with `node --version`. Earlier 20.x and 22.x releases fail: Vitest pulls in Vite, which requires these minimums, so the version check passes and `npm test` then does not. |
 | **git** | To clone. |
 | A machine with a **screen** | Logging in opens a real browser window. A headless server won't work for this one step. |
 

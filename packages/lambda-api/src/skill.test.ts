@@ -447,3 +447,32 @@ describe('speech is valid SSML', () => {
     expect(turn.speech).not.toMatch(/&(?!amp;|lt;|gt;|quot;|apos;)/);
   });
 });
+
+describe('indeterminate writes must not invite a retry', () => {
+  it('tells the user to check the list rather than repeat the command', async () => {
+    // The write may well have landed and only the confirming read failed. "Try again" is
+    // the one answer that compounds it: the retry finds the committed line and increments.
+    const ops = fakeOps({
+      addItem: vi.fn(async () => {
+        throw new HebError('UPSTREAM_ERROR', 'HEB did not confirm the add.', {
+          retryable: false,
+          details: { indeterminate: true },
+        });
+      }),
+    });
+    const turn = await conversation(ops)(intent('AddItemIntent', { item: 'oat milk' }));
+
+    expect(turn.speech).toMatch(/could not confirm/i);
+    expect(turn.speech).not.toMatch(/try again/i);
+  });
+
+  it('still says try again for an ordinary upstream failure', async () => {
+    const ops = fakeOps({
+      addItem: vi.fn(async () => {
+        throw new HebError('UPSTREAM_ERROR', 'HEB is down.', { retryable: true });
+      }),
+    });
+    const turn = await conversation(ops)(intent('AddItemIntent', { item: 'oat milk' }));
+    expect(turn.speech).toMatch(/try again/i);
+  });
+});

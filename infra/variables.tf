@@ -21,8 +21,14 @@ variable "alexa_skill_id" {
   type        = string
 
   validation {
-    condition     = startswith(var.alexa_skill_id, "amzn1.ask.skill.")
-    error_message = "Expected an Alexa skill id beginning with amzn1.ask.skill. — find it in the developer console under Endpoint."
+    # The full shape, not just the prefix. The example file's placeholder carries the
+    # prefix too, so a prefix check accepts it — and Terraform then happily deploys an
+    # invoke permission and a HEB_SKILL_ID locked to an id no skill will ever present.
+    # Everything applies cleanly and the skill is simply dead, with nothing to point at.
+    condition = can(
+      regex("^amzn1\\.ask\\.skill\\.[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$", var.alexa_skill_id)
+    )
+    error_message = "alexa_skill_id must be a real skill id (amzn1.ask.skill.<uuid>), not the placeholder. Copy it from the Alexa developer console under Build → Endpoint."
   }
 }
 

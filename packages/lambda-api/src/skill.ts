@@ -449,6 +449,19 @@ function errorHandler(): ErrorHandler {
             .getResponse();
         }
 
+        // Indeterminate: the write may well have landed and the confirming read failed
+        // too. "Please try again" is the one response that can make it worse, because the
+        // retry finds the committed line and increments it — so say what is unknown.
+        if (error.details?.['indeterminate'] === true) {
+          return input.responseBuilder
+            .speak(
+              'I could not confirm whether that worked. Please check your list before ' +
+                'asking again, so we do not add it twice.',
+            )
+            .withShouldEndSession(true)
+            .getResponse();
+        }
+
         return input.responseBuilder
           .speak(SPEECH_BY_CODE[error.code])
           .withShouldEndSession(true)

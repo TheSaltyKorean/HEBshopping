@@ -9,6 +9,7 @@ import { HebError } from './errors.js';
 import { HebClient } from './graphql/client.js';
 import {
   addItemsDocument,
+  buyItAgainDocument,
   deleteItemsDocument,
   getShoppingListDocument,
   getShoppingListsDocument,
@@ -79,6 +80,7 @@ export class HebListOps implements ListOps {
   private cachedStoreId: number | undefined;
   /** Which list `cachedStoreId` belongs to — stores are per-list, not per-account. */
   private cachedStoreListId: string | undefined;
+  private cachedPurchasedIds: ReadonlySet<string> | undefined;
 
   constructor(options: HebListOpsOptions) {
     this.client = options.client;
@@ -162,6 +164,32 @@ export class HebListOps implements ListOps {
   }
 
   /**
+   * Catalog ids this account buys regularly, fetched once per instance.
+   *
+   * Best-effort: a personalisation signal is never worth failing an add over, so any
+   * error here degrades to "no purchase history" rather than propagating.
+   */
+  private async purchasedIds(listId?: string): Promise<ReadonlySet<string>> {
+    if (this.cachedPurchasedIds !== undefined) return this.cachedPurchasedIds;
+
+    try {
+      const storeId = await this.resolveStoreId(listId);
+      const data = await this.client.execute<{
+        getBuyItAgainCarousel?: { items?: Array<{ id?: string }> };
+      }>(buyItAgainDocument(storeId));
+
+      this.cachedPurchasedIds = new Set(
+        (data.getBuyItAgainCarousel?.items ?? [])
+          .map((item) => item.id)
+          .filter((id): id is string => id !== undefined),
+      );
+    } catch {
+      this.cachedPurchasedIds = new Set();
+    }
+    return this.cachedPurchasedIds;
+  }
+
+  /**
    * Resolve free text to a best match, retrying with a broader query when unsure.
    *
    * A specific phrase can make HEB's search *narrower and worse* — it treats each extra
@@ -169,12 +197,17 @@ export class HebListOps implements ListOps {
    * set as a genuinely ambiguous request. One broadened retry distinguishes the two.
    *
    * Cost is one extra ~700ms call, paid only on the unsure path, and only when the query
-   * is long enough to broaden. Worst case is now search + search + mutation, which still
-   * sits inside Alexa's ceiling (plan §3.2).
+   * is long enough to broaden. Worst case is search + search + mutation, which still sits
+   * inside Alexa's ceiling (plan §3.2).
    */
   private async resolveQuery(query: string, listId?: string): Promise<MatchResult | null> {
-    const candidates = await this.searchProducts(query, listId);
-    const match = matchProducts(query, candidates);
+    // Fetched alongside the search rather than before it: the personalisation signal costs
+    // no extra wall-clock this way, which matters inside Alexa's ceiling.
+    const [candidates, purchasedIds] = await Promise.all([
+      this.searchProducts(query, listId),
+      this.purchasedIds(listId),
+    ]);
+    const match = matchProducts(query, candidates, { purchasedIds });
 
     if (match !== null && isConfident(match)) return match;
 
@@ -186,7 +219,7 @@ export class HebListOps implements ListOps {
 
     // Re-score the union against the *original* wording — broadening was a way to find
     // candidates, never a redefinition of what the user asked for.
-    const retried = matchProducts(query, merged);
+    const retried = matchProducts(query, merged, { purchasedIds });
     if (retried === null) return match;
     if (match === null) return retried;
 

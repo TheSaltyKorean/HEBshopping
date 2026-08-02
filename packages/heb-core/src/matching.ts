@@ -199,6 +199,50 @@ function rankBonus(rank: number): number {
 }
 
 /**
+ * House brands, most specific pattern first.
+ *
+ * Detection order is not preference order. Mi Tienda products are named "H-E-B Mi Tienda
+ * …", so testing for plain H-E-B first would swallow every Mi Tienda item.
+ */
+const BRAND_PATTERNS: ReadonlyArray<{ pattern: RegExp; preference: number }> = [
+  { pattern: /\bmi tienda\b/, preference: 1 },
+  { pattern: /\bhill country fare\b/, preference: 2 },
+  { pattern: /\bh-?e-?b\b/, preference: 0 },
+];
+
+/** Lower is better; anything unrecognised sorts after every house brand. */
+const UNRANKED_BRAND = BRAND_PATTERNS.length;
+
+export function brandPreference(product: Product): number {
+  const haystack = `${product.brand ?? ''} ${product.name}`.toLowerCase();
+  for (const { pattern, preference } of BRAND_PATTERNS) {
+    if (pattern.test(haystack)) return preference;
+  }
+  return UNRANKED_BRAND;
+}
+
+/**
+ * Personal signals that break ties between products the words cannot separate.
+ *
+ * Deliberately *only* tiebreakers. Letting them raise confidence would mean a familiar
+ * brand could win against a product that matches the request better — "H-E-B Whole Milk"
+ * beating "Oatly Oat Milk" for "oat milk" — which is precisely the silent-wrong-product
+ * failure the whole design is built to avoid.
+ */
+export interface MatchPreferences {
+  /** Catalog ids the account has bought before, from the buy-it-again carousel. */
+  purchasedIds?: ReadonlySet<string>;
+}
+
+/**
+ * How close two semantic scores must be to count as "the words cannot separate these".
+ *
+ * Inside this band the personal signals decide. Outside it, the better match always wins,
+ * however unfamiliar its brand.
+ */
+const SEMANTIC_TIE = 0.05;
+
+/**
  * How much better the best candidate is than the runner-up, normalised to 0..1.
  *
  * This is what distinguishes "oat milk" (one clear winner) from "milk" (fifty equally good
@@ -238,20 +282,35 @@ export function confidenceFrom(topCoverage: number, sep: number): number {
  * Rank candidates and report the best with a calibrated confidence.
  *
  * Returns `null` when nothing matches at all, which callers surface as
- * `PRODUCT_NOT_FOUND` — HEB has no free-text fallback, so there is nothing else to offer.
+ * `PRODUCT_NOT_FOUND`. NOTE: the HEB mobile app does offer a free-text add, so this is a
+ * gap in this project rather than a limit of the platform — see errors.ts.
  */
-export function matchProducts(query: string, candidates: readonly Product[]): MatchResult | null {
+export function matchProducts(
+  query: string,
+  candidates: readonly Product[],
+  preferences: MatchPreferences = {},
+): MatchResult | null {
   const queryTokens = tokenize(query).filter((token) => !FILLER.has(token));
   if (queryTokens.length === 0 || candidates.length === 0) return null;
 
-  // Order by semantics plus HEB's ranking; judge confidence on semantics alone.
-  const ranked = candidates
-    .map((product, rank) => ({
-      product,
-      semantic: semanticScore(queryTokens, product),
-      ordering: semanticScore(queryTokens, product) + rankBonus(rank),
-    }))
-    .sort((a, b) => b.ordering - a.ordering);
+  const scored = candidates.map((product, rank) => ({
+    product,
+    rank,
+    semantic: semanticScore(queryTokens, product),
+    purchased: preferences.purchasedIds?.has(product.id) === true,
+    brand: brandPreference(product),
+  }));
+
+  // Ordering is lexicographic, and the first key dominates: a materially better match
+  // always wins. Only when the words genuinely cannot separate two products do the
+  // personal signals decide — bought-before first, then house-brand preference, then
+  // HEB's own relevance position as the final tiebreak.
+  const ranked = [...scored].sort((a, b) => {
+    if (Math.abs(a.semantic - b.semantic) > SEMANTIC_TIE) return b.semantic - a.semantic;
+    if (a.purchased !== b.purchased) return a.purchased ? -1 : 1;
+    if (a.brand !== b.brand) return a.brand - b.brand;
+    return rankBonus(b.rank) - rankBonus(a.rank);
+  });
 
   const best = ranked[0]!;
   if (coverage(queryTokens, best.product) === 0) return null;

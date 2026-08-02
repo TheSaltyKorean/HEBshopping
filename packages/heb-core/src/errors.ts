@@ -14,7 +14,14 @@ export type HebErrorCode =
   | 'SESSION_EXPIRED'
   /** Hit the Imperva interstitial. */
   | 'BOT_CHALLENGE'
-  /** No catalog match for the query. HEB has no free-text fallback, so this is terminal. */
+  /**
+   * No catalog match for the query.
+   *
+   * Terminal *for now*. The HEB mobile app offers `Add "<text>" to your list` for exactly
+   * this case, so a free-text line is possible on the platform — the mutation behind that
+   * button has not been found yet (the web UI does not expose it, and the schema has both
+   * introspection and did-you-mean suggestions disabled).
+   */
   | 'PRODUCT_NOT_FOUND'
   /** Several lists exist and none is clearly the default. */
   | 'AMBIGUOUS_LIST'

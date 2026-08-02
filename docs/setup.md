@@ -254,10 +254,23 @@ Worth knowing before you're surprised by it.
 | Clear match | Added, and confirmed back using the **resolved product name** — not what you said. |
 | Vague request | **Nothing is written.** You get candidate products and a question. |
 | Already on the list | Quantity increases; it doesn't duplicate the line. |
-| No match at all | Says so. H-E-B lists have no free-text items, so there's no "just add the words" fallback. |
+| No match at all | Says so. **Known gap:** the H-E-B mobile app offers `Add "<what you typed>" to your list` for free text; that mutation has not been found yet, so this project cannot yet fall back to it. |
 
 The bias is deliberate: an unnecessary "did you mean?" costs two seconds, while silently
 adding the wrong product costs a wasted trip to the store.
+
+### It learns your habits
+
+Ranking uses two personal signals, both **tiebreakers only** — they reorder products the
+words cannot separate, and never override a better match:
+
+1. **Bought before** — from H-E-B's own "Buy it again" data for your account.
+2. **House brands** — H-E-B, then Mi Tienda, then Hill Country Fare.
+
+In practice that turns "tortilla chips" into the H-E-B Bakery *Unsalted* ones you actually
+buy rather than the Sea Salt ones, and "russet potatoes" into the 5 lb bag rather than the
+4 ct. Neither signal touches confidence, so "oat milk" can never resolve to H-E-B *dairy*
+milk just because the brand is preferred.
 
 ---
 

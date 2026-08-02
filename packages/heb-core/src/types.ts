@@ -88,7 +88,8 @@ export interface ListItem {
   /**
    * Non-nullable: W0 established that HEB list items always resolve to a catalog product.
    * Adding requires a `productId`, and the per-line `note` field annotates a product rather
-   * than standing in for one — there is no free-text item.
+   * than standing in for one. The mobile app can create genuinely free-text lines; this
+   * project cannot yet, so every line it creates has a product.
    */
   product: Product;
   /** What to speak back to the user. */

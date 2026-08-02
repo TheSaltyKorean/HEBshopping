@@ -119,6 +119,34 @@ export function getShoppingListDocument(listId: string): GraphqlDocument {
   };
 }
 
+/**
+ * Products the account buys regularly — HEB's own "Buy it again" carousel.
+ *
+ * Used as a *ranking* signal only: among products the words cannot separate, something
+ * already bought before is far more likely to be the one meant. It never affects
+ * confidence, so a familiar brand can never win against a better match.
+ *
+ * Signature per the validator: getBuyItAgainCarousel(storeId: ID!, shoppingContext:
+ * ShoppingContext!), returning a union whose success member is `Carousel`. Its `items`
+ * field takes the same two arguments again, this time with storeId as an Int.
+ */
+export function buyItAgainDocument(storeId: number): GraphqlDocument {
+  return {
+    operationName: 'HebBuyItAgain',
+    query: `query HebBuyItAgain {
+      getBuyItAgainCarousel(storeId: ${str(String(storeId))}, shoppingContext: EXPLORE_MY_STORE) {
+        __typename
+        ... on Carousel {
+          items(storeId: ${storeId}, shoppingContext: EXPLORE_MY_STORE) {
+            __typename
+            ... on Product { id }
+          }
+        }
+      }
+    }`,
+  };
+}
+
 export function searchProductsDocument(query: string, storeId: number): GraphqlDocument {
   return {
     operationName: 'HebSearchProducts',

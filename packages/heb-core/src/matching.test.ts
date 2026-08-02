@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
+  brandPreference,
   broadenQuery,
   canonical,
   isConfident,
@@ -82,7 +83,9 @@ describe('matchProducts — ranking acceptance table', () => {
     ['two percent milk', CATALOG.twoPercent, '7'],
     ['heb brand tortillas', CATALOG.tortillas, '9'],
     ['bananas', CATALOG.bananas, '11'],
-    ['paper towels', CATALOG.paperTowels, '14'],
+    // Bounty and H-E-B Ultra Strong match "paper towels" equally well, so the house-brand
+    // preference decides — which is the whole point of it.
+    ['paper towels', CATALOG.paperTowels, '15'],
   ])('"%s" ranks the right product first', (query, candidates, expectedId) => {
     const match = matchProducts(query, candidates);
     expect(match?.product.id).toBe(expectedId);
@@ -230,5 +233,52 @@ describe('diacritics fold to their base letters', () => {
   it('matches an accented product name against an unaccented request', () => {
     const accented = [p('9', 'Café Bustelo Espresso Ground Coffee, 10 oz')];
     expect(matchProducts('coffee', accented)).not.toBeNull();
+  });
+});
+
+describe('personal preferences break ties the words cannot', () => {
+  const MILKS = [
+    p('own-brand', 'Oak Farms Whole Milk, 1 gal', 'Oak Farms'),
+    p('heb', 'H-E-B Whole Milk, 1 gal', 'H-E-B'),
+    p('mitienda', 'H-E-B Mi Tienda Whole Milk, 1 gal', 'H-E-B Mi Tienda'),
+    p('hcf', 'Hill Country Fare Whole Milk, 1 gal', 'Hill Country Fare'),
+  ];
+
+  it('ranks house brands H-E-B, then Mi Tienda, then Hill Country Fare', () => {
+    expect(MILKS.map(brandPreference)).toEqual([3, 0, 1, 2]);
+  });
+
+  it('does not mistake a Mi Tienda product for plain H-E-B', () => {
+    // Mi Tienda names contain "H-E-B", so detection has to be specific-first.
+    expect(brandPreference(p('x', 'H-E-B Mi Tienda Salsa Verde Para Enchiladas, 16 oz'))).toBe(1);
+  });
+
+  it('offers the preferred brand first among equally good matches', () => {
+    const match = matchProducts('whole milk', MILKS);
+    expect(match!.product.id).toBe('heb');
+  });
+
+  it('puts a previously-purchased product ahead even of the preferred brand', () => {
+    const match = matchProducts('whole milk', MILKS, { purchasedIds: new Set(['hcf']) });
+    expect(match!.product.id).toBe('hcf');
+  });
+
+  it('never lets a familiar brand beat a materially better match', () => {
+    // The failure this guards: "oat milk" resolving to H-E-B *dairy* milk because the
+    // brand is preferred. Preference is a tiebreak, never a substitute for matching.
+    const candidates = [
+      p('heb-dairy', 'H-E-B Select Ingredients Whole Milk, 1 gal', 'H-E-B'),
+      p('oatly', 'Oatly The Original Oat Milk, 1/2 gal', 'Oatly'),
+    ];
+    const match = matchProducts('oat milk', candidates, { purchasedIds: new Set(['heb-dairy']) });
+    expect(match!.product.id).toBe('oatly');
+  });
+
+  it('does not let preferences inflate confidence', () => {
+    const plain = matchProducts('whole milk', MILKS);
+    const preferred = matchProducts('whole milk', MILKS, { purchasedIds: new Set(['hcf']) });
+    // Same words, same candidates: knowing the user's habits reorders the offer list but
+    // says nothing about whether the request was unambiguous.
+    expect(preferred!.confidence).toBeCloseTo(plain!.confidence);
   });
 });

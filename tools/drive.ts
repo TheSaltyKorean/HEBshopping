@@ -262,6 +262,17 @@ async function exerciseQuantity(page: Page, capture: Capture): Promise<void> {
  * which is the bulk-edit affordance; that is the path tried here.
  */
 async function removeItem(page: Page, capture: Capture): Promise<void> {
+  // This drives a *deletion* against a real household list, and the first category-sorted
+  // line is whatever the household happens to have. The reproduction instructions advertise
+  // this command, so running them as written could permanently remove a real grocery.
+  // Require a single-item list — the state `add` leaves behind — rather than guessing.
+  const lines = await page.locator('input[type="checkbox"][aria-label^="Select "]').count();
+  if (lines > 1) {
+    console.error(`⛔ The list has ${lines} items; this probe deletes the first one.`);
+    console.error('   Run it against a list holding only a throwaway item (`drive.ts add`).');
+    return;
+  }
+
   const checkbox = page.locator('input[type="checkbox"][aria-label^="Select "]').first();
   if ((await checkbox.count()) === 0) {
     console.error('⛔ No item checkbox found — is the list empty? Run `add` first.');

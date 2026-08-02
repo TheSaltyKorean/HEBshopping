@@ -493,6 +493,17 @@ export class HebListOps implements ListOps {
           );
         }
 
+        // A readback that still shows less than was asked for is not a success. Saying
+        // "added five" over a line holding one is the same lie the reconciliation exists to
+        // prevent, just arrived at from the other direction.
+        if ((actual?.quantity ?? added.quantity) < target) {
+          throw new HebError(
+            'UPSTREAM_ERROR',
+            `Added ${added.text}, but only ${actual?.quantity ?? added.quantity} of ${target}.`,
+            { cause: error, retryable: false, details: { partialAdd: true } },
+          );
+        }
+
         return { status: 'added', item: actual ?? added };
       }
     }

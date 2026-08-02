@@ -174,12 +174,13 @@ async function main(): Promise<void> {
         'declarations and we can hand-write every operation.',
     );
   } finally {
-    const stillThere =
-      lineId !== null && (await lists.getList()).items.some((item) => item.lineId === lineId);
-    if (stillThere && lineId !== null) {
-      console.log('\n🧹 removing the throwaway line');
+    // Attempt the removal for any line this probe created, without gating on a read.
+    // A transient read failure would otherwise skip cleanup entirely and leave test data
+    // on a real list — and a delete of an already-deleted line is harmless.
+    if (lineId !== null) {
+      console.log('\n🧹 removing the throwaway line (if it still exists)');
       await lists.removeItem({ lineId }).catch((error: unknown) => {
-        console.error('⛔ CLEANUP FAILED — remove it by hand:', error);
+        console.error('⛔ CLEANUP may have failed — check the list:', error);
         process.exitCode = 1;
       });
     }

@@ -432,3 +432,26 @@ describe('abbreviated units are sizes, not counts', () => {
     expect(parseSpokenRequest('5 bananas')).toEqual({ quantity: 5, query: 'bananas' });
   });
 });
+
+describe('articles and irregular plurals', () => {
+  it('reads "a 3 Musketeers bar" as one bar', () => {
+    // The article is filler, so without special handling this is indistinguishable from
+    // "3 Musketeers bars" — and numeric brand names cannot be enumerated.
+    expect(parseSpokenRequest('a 3 musketeers bar').quantity).toBe(1);
+  });
+
+  it('still reads "a couple of lemons" as two', () => {
+    // Only an article directly before a *digit* marks the singular; nobody says
+    // "a three Musketeers".
+    expect(parseSpokenRequest('a couple of lemons')).toEqual({ quantity: 2, query: 'lemons' });
+  });
+
+  it.each([
+    ['strawberry', 'Fresh Strawberries, 1 lb'],
+    ['blueberry', 'H-E-B Fresh Blueberries, 18 oz'],
+  ])('"%s" matches "%s"', (query, name) => {
+    // -s and -es gave "strawberrie" and "strawberri", neither of which anyone said, so
+    // coverage stayed at zero and the add reported PRODUCT_NOT_FOUND.
+    expect(matchProducts(query, [p('1', name)])).not.toBeNull();
+  });
+});

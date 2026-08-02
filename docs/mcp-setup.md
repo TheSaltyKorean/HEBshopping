@@ -43,10 +43,32 @@ Absolute paths matter here: Gemini CLI does not launch the server from this dire
 
 ## Gemini Spark
 
-Spark takes an MCP **URL**, not a command, so it needs the HTTP transport that arrives with
-W10. It also requires a Google AI Ultra subscription ($99.99/mo), US-only, and setup on the
-web app at *Settings → Connected Apps → Custom apps for Spark*. The tools themselves are
-unchanged — only the transport differs.
+Spark takes an MCP **URL**, not a command, so it needs the deployed HTTP endpoint. It also
+requires a Google AI Ultra subscription ($99.99/mo), US-only, and setup on the web app at
+*Settings → Connected Apps → Custom apps for Spark*. The tools are identical to the stdio
+ones — only the transport differs.
+
+The endpoint is **off by default**, because a public URL you are not using is only an
+attack surface. To turn it on:
+
+**1.** Set `enable_mcp_url = true` in `infra/terraform.tfvars`, then deploy — see
+[`deploy.md`](deploy.md).
+
+**2.** Read the URL and the bearer token. The token is deliberately not a Terraform output,
+since that would put it in plain text in state and in your scrollback:
+
+```bash
+terraform -chdir=infra output -raw mcp_url
+
+aws ssm get-parameter --with-decryption \
+  --name "$(terraform -chdir=infra output -raw mcp_token_parameter)" \
+  --query Parameter.Value --output text
+```
+
+**3.** In Spark, add the URL as a custom app with an `Authorization: Bearer <token>`
+header. Requests without it get a 401 — the check runs before anything is parsed.
+
+Treat that token like the session file: anyone holding it can read and change your list.
 
 ## Configuration
 

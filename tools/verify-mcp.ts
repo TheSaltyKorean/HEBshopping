@@ -136,8 +136,10 @@ async function main(): Promise<void> {
   }
   const productId = absent.productId;
 
+  // Armed *before* the call: a committed add whose response is lost rejects here, and the
+  // cleanup would otherwise have neither a line nor a product to resolve.
+  createdProductId = productId;
   const addReply = await call('heb_add_item', { productId });
-  if (addReply.includes('Added')) createdProductId = productId;
 
   const listed = await call('heb_read_list');
 

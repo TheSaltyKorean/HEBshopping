@@ -165,7 +165,19 @@ export interface SpokenRequest {
  * and so does "two percent milk" — because the word after the number is a measure word.
  */
 export function parseSpokenRequest(text: string): SpokenRequest {
-  const tokens = tokenize(text).filter((token) => !FILLER.has(token));
+  const raw = tokenize(text);
+
+  // "A 3 Musketeers bar" is one bar. The article is filtered as filler a line later, which
+  // makes that phrase indistinguishable from "3 Musketeers bars" — and the brand cannot be
+  // enumerated, since numeric product names are open-ended. An article immediately before
+  // a *digit* is therefore treated as a singular marker.
+  //
+  // Only before a digit: "a couple of lemons" and "a dozen eggs" are ordinary quantity
+  // phrases, and nobody says "a three Musketeers".
+  const article = raw[0] === 'a' || raw[0] === 'an';
+  const singular = article && raw[1] !== undefined && /^\d/.test(raw[1]);
+
+  const tokens = raw.filter((token) => !FILLER.has(token));
   if (tokens.length === 0) return { quantity: 1, query: '' };
 
   const first = tokens[0]!;
@@ -185,6 +197,7 @@ export function parseSpokenRequest(text: string): SpokenRequest {
   );
 
   const isCount =
+    !singular &&
     !startsBrand &&
     numeric !== undefined &&
     // Zero is not a count, it is a refusal. "add 0 bananas" would otherwise reach
@@ -235,6 +248,10 @@ function pluralForms(token: string): string[] {
   if (token.length > 3 && token.endsWith('s') && !token.endsWith('ss')) {
     forms.push(token.slice(0, -1));
     if (token.length > 4 && token.endsWith('es')) forms.push(token.slice(0, -2));
+    // "strawberries" → "strawberry". Without this the -s and -es forms give "strawberrie"
+    // and "strawberri", neither of which is the word anyone said, so coverage stayed at
+    // zero and an add reported PRODUCT_NOT_FOUND while HEB had returned the right product.
+    if (token.length > 4 && token.endsWith('ies')) forms.push(`${token.slice(0, -3)}y`);
   }
   return forms;
 }

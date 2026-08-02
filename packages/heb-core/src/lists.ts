@@ -473,10 +473,26 @@ export class HebListOps implements ListOps {
 
   async removeItem(input: RemoveItemInput): Promise<void> {
     const listId = await this.resolveListId(input.listId);
-    const data = await this.client.execute<{ deleteShoppingListItemsV2?: { __typename?: string } }>(
-      deleteItemsDocument(listId, [input.lineId]),
-    );
+
+    // Invalidated before sending, for the same reason as the other mutations: a request
+    // whose response is lost has probably still happened, so the cache is wrong from the
+    // moment it leaves.
     this.cachedList = undefined;
+
+    let data: { deleteShoppingListItemsV2?: { __typename?: string } };
+    try {
+      data = await this.client.execute(deleteItemsDocument(listId, [input.lineId]));
+    } catch (error) {
+      // The line may already be gone. Reporting failure here sends the user to retry a
+      // removal that succeeded, and the retry then says the item is not on the list —
+      // which reads as though the first attempt did nothing.
+      const stillThere = (await this.getList(listId)).items.some(
+        (item) => item.lineId === input.lineId,
+      );
+      if (!stillThere) return;
+      throw error;
+    }
+
     assertMutationSucceeded(data.deleteShoppingListItemsV2, 'remove the item');
   }
 

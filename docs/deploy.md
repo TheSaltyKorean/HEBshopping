@@ -97,11 +97,17 @@ ARN**, paste it into **Default Region**, and **Save Endpoints**.
 The Lambda cannot read the session file on your laptop.
 
 ```bash
-npm run push:session -- --table heb-shopping-session --region us-east-1
+npm run push:session -- \
+  --table "$(terraform -chdir=infra output -raw session_table)" \
+  --region us-east-1
 ```
 
-Expect `✅ Session in heb-shopping-session (N cookies)`. It refuses to upload a session
-that is already dead, so a failure here means running `npm run login` first.
+Taking the name from Terraform rather than hard-coding it, because it follows
+`name_prefix` — hard-coding works only until someone changes that variable, and then it
+silently writes to a table nothing reads.
+
+Expect `✅ Session in … (N cookies)`. It checks the session against H-E-B before
+uploading, so a failure here means running `npm run login` first.
 
 ### Step 9. Talk to it
 
@@ -118,7 +124,9 @@ Amazon account** — no installation step, and anyone in the house can use it.
 
 ```bash
 npm run login                 # browser opens; log in
-npm run push:session -- --table heb-shopping-session --region us-east-1
+npm run push:session -- \
+  --table "$(terraform -chdir=infra output -raw session_table)" \
+  --region us-east-1
 ```
 
 **Forgetting the second one is the most common failure.** The laptop works, the skill says

@@ -99,6 +99,41 @@ export class HebClient {
     this.createdAt = this.now();
   }
 
+  /**
+   * Fail a promise that outlives the remaining budget.
+   *
+   * The work itself keeps running — there is no way to cancel an in-flight SDK call from
+   * here — but the caller stops waiting, which is what the deadline is actually for.
+   */
+  private async withinBudget<T>(work: Promise<T>, description: string): Promise<T> {
+    const remaining = Math.min(this.remainingBudget(), this.timeoutMs);
+    if (remaining <= 0) {
+      throw new HebError('UPSTREAM_ERROR', `Ran out of time before we could ${description}.`, {
+        retryable: false,
+      });
+    }
+    if (!Number.isFinite(remaining)) return work;
+
+    let timer: ReturnType<typeof setTimeout>;
+    const expiry = new Promise<never>((_resolve, reject) => {
+      timer = setTimeout(
+        () =>
+          reject(
+            new HebError('UPSTREAM_ERROR', `Timed out trying to ${description}.`, {
+              retryable: true,
+            }),
+          ),
+        remaining,
+      );
+    });
+
+    try {
+      return await Promise.race([work, expiry]);
+    } finally {
+      clearTimeout(timer!);
+    }
+  }
+
   /** Milliseconds left in the invocation budget, or Infinity when none was set. */
   private remainingBudget(): number {
     if (this.budgetMs === undefined) return Number.POSITIVE_INFINITY;
@@ -106,7 +141,14 @@ export class HebClient {
   }
 
   async execute<T>(document: GraphqlDocument): Promise<T> {
-    const session = await this.store.getSession();
+    // The store read counts against the budget too. In production this is a DynamoDB call
+    // that can stall or spend seconds retrying, and it happens *before* `send()` checks
+    // the remaining budget — so an unbounded await here lets Alexa hit its hard timeout
+    // with no spoken response at all, while this class claims every call is bounded.
+    const session = await this.withinBudget(
+      this.store.getSession(),
+      'read the stored session',
+    );
     const health = checkSession(session, this.now());
 
     if (!health.usable || session === null) {

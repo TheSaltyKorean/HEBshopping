@@ -292,7 +292,7 @@ every request, so a running MCP server picks up the new one on its next call.
 > your laptop, so a fresh login is invisible to it until you upload it:
 >
 > ```bash
-> npm run push:session -- --table heb-shopping-session --region us-east-1
+> npm run push:session -- --table "$(terraform -chdir=infra output -raw session_table)" --region us-east-1
 > ```
 >
 > Forgetting this is the most common deployment failure: local commands work while the

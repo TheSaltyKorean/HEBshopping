@@ -207,6 +207,21 @@ async function exerciseQuantity(page: Page, capture: Capture): Promise<void> {
     return;
   }
 
+  // These locators take the *first* category-sorted line, which on a real list is somebody's
+  // groceries rather than the throwaway item an earlier `add` run created. The sequence
+  // below assumes it starts at one: on a line at two or more it ends up reduced, and on a
+  // line at its ceiling the failed increment makes the reduction worse or the final
+  // decrement removes it outright. So run only against a line this probe can account for,
+  // and put the quantity back regardless of what happens.
+  const startedAt = Number(await value.inputValue().catch(() => 'NaN'));
+  if (!Number.isFinite(startedAt) || startedAt !== 1) {
+    console.error(
+      `⛔ The first line is at quantity ${Number.isFinite(startedAt) ? startedAt : '?'}, not 1.`,
+    );
+    console.error('   This probe would leave it reduced. Run `add` first, or clear the list.');
+    return;
+  }
+
   const step = async (label: string, action: () => Promise<void>): Promise<void> => {
     capture.mark();
     const before = await value.inputValue().catch(() => '?');
@@ -220,9 +235,21 @@ async function exerciseQuantity(page: Page, capture: Capture): Promise<void> {
     }
   };
 
-  await step('INCREMENT 1 → 2', () => increment.click());
-  await step('DECREMENT 2 → 1', () => decrement.click());
-  await step('DECREMENT 1 → 0 (expect removal)', () => decrement.click());
+  try {
+    await step('INCREMENT 1 → 2', () => increment.click());
+    await step('DECREMENT 2 → 1', () => decrement.click());
+    await step('DECREMENT 1 → 0 (expect removal)', () => decrement.click());
+  } finally {
+    // Whatever happened, do not leave the line above where it started.
+    const now = Number(await value.inputValue().catch(() => 'NaN'));
+    if (Number.isFinite(now) && now > startedAt) {
+      console.log(`\n🧹 restoring quantity ${now} → ${startedAt}`);
+      for (let step = now; step > startedAt; step -= 1) {
+        await decrement.click().catch(() => undefined);
+        await page.waitForTimeout(2_000);
+      }
+    }
+  }
 
   await page.screenshot({ path: 'captures/after-mutations.png', fullPage: true });
 }

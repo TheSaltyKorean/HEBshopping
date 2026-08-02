@@ -184,3 +184,50 @@ describe('indeterminate writes are reconciled, not retried blindly', () => {
     if (result.status === 'added') expect(result.item.lineId).toBe('line-new');
   });
 });
+
+describe('removal reconciliation', () => {
+  it('treats an absent line as removed when the response was lost', async () => {
+    let deleted = false;
+    const fetchImpl = (async (_url: unknown, init: { body?: string }) => {
+      const body = String(init.body ?? '');
+      if (body.includes('deleteShoppingListItems')) {
+        deleted = true; // HEB commits, then the response is lost
+        throw Object.assign(new Error('aborted'), { name: 'AbortError' });
+      }
+      return new Response(
+        JSON.stringify({
+          data: {
+            getShoppingListV2: {
+              __typename: 'ShoppingListV2',
+              id: 'list-1',
+              name: 'Shopping',
+              fulfillment: { store: { storeNumber: 1 } },
+              itemPage: {
+                items: deleted
+                  ? []
+                  : [
+                      {
+                        __typename: 'ProductShoppingListItemV2',
+                        id: 'line-1',
+                        quantity: 1,
+                        product: { __typename: 'Product', id: 'p1', fullDisplayName: 'Milk' },
+                      },
+                    ],
+              },
+            },
+          },
+        }),
+        { status: 200 },
+      );
+    }) as unknown as typeof fetch;
+
+    const ops = new HebListOps({
+      client: new HebClient({ store: storeWith(), fetchImpl, now: () => NOW, minDelayMs: 0 }),
+      listId: 'list-1',
+    });
+
+    // Reporting failure would send the user to retry a removal that worked — and the retry
+    // then says the item is not on the list, reading as though nothing happened at all.
+    await expect(ops.removeItem({ lineId: 'line-1' })).resolves.toBeUndefined();
+  });
+});

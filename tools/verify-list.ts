@@ -8,7 +8,14 @@
  */
 
 import { resolve } from 'node:path';
-import { FileStore, HebClient, HebListOps, checkSession, isHebError } from '@heb/core';
+import {
+  FileStore,
+  HebClient,
+  HebListOps,
+  checkSession,
+  isHebError,
+  type HebList,
+} from '@heb/core';
 
 const SESSION_PATH = resolve('.session/session.json');
 const TERM = process.argv[2] ?? 'oat milk';
@@ -34,6 +41,28 @@ const time = async <T>(label: string, task: () => Promise<T>): Promise<T> => {
   return result;
 };
 
+/**
+ * Put one line back the way it was.
+ *
+ * A line that existed before this run was *incremented* rather than created, so deleting
+ * it would remove a real grocery; only lines this run brought into existence are deleted.
+ */
+async function restoreLine(
+  lists: HebListOps,
+  before: HebList,
+  lineId: string,
+  label: string,
+): Promise<void> {
+  const preExisting = before.items.find((item) => item.lineId === lineId);
+
+  if (preExisting === undefined) {
+    await time('removeItem', () => lists.removeItem({ lineId }));
+    return;
+  }
+  console.log(`   "${label}" pre-existed — restoring quantity ${preExisting.quantity}`);
+  await time('restore quantity', () => lists.setItemQuantity(lineId, preExisting.quantity));
+}
+
 async function main(): Promise<void> {
   const store = new FileStore(SESSION_PATH);
   await requireSession(store);
@@ -44,77 +73,81 @@ async function main(): Promise<void> {
   console.log(`   "${before.name}" — ${before.items.length} item(s)`);
   for (const item of before.items) console.log(`     • ${item.quantity} × ${item.text}`);
 
-  console.log(`\n── 2. add "${TERM}"`);
-  const result = await time('addItem', () => lists.addItem({ query: TERM }));
+  // Everything below mutates the real list, so restoration must be unconditional: a
+  // failed assertion or a timed-out read would otherwise leave a grocery — or a raised
+  // quantity — behind on someone's shopping list. These are declared outside the `try` so
+  // the `finally` can undo whatever was actually done.
+  let touchedLine: string | null = null;
+  let done = false;
 
-  let lineId: string;
-  let addedName: string;
-
-  if (result.status === 'needs_confirmation') {
-    // Expected for a generic phrase: the safe path is to ask rather than guess.
-    console.log(`   ↪ needs confirmation (confidence ${result.match.confidence.toFixed(2)})`);
-    console.log(`     best: ${result.match.product.name}`);
-    for (const alt of result.match.alternatives.slice(0, 3)) console.log(`     alt:  ${alt.name}`);
-
-    console.log('\n   confirming the top match by productId …');
-    const confirmed = await time('addItem(productId)', () =>
-      lists.addItem({ productId: result.match.product.id }),
-    );
-    if (confirmed.status === 'needs_confirmation') throw new Error('unreachable');
-    lineId = confirmed.item.lineId;
-    addedName = confirmed.item.text;
-    console.log(`   ↪ ${confirmed.status}: ${confirmed.item.quantity} × ${addedName}`);
-  } else {
-    lineId = result.item.lineId;
-    addedName = result.item.text;
-    console.log(`   ↪ ${result.status}: ${result.item.quantity} × ${addedName}`);
-  }
-
-  console.log('\n── 3. read back');
-  const during = await time('getList', () => lists.getList());
-  const present = during.items.some((item) => item.lineId === lineId);
-  console.log(`   ${during.items.length} item(s); added item present: ${present ? 'yes' : 'NO'}`);
-  if (!present) throw new Error('the item did not appear on the list after adding');
-
-  console.log('\n── 4. find it by spoken text (the removal path)');
   try {
-    const found = await time('findLine', () => lists.findLine(addedName));
-    console.log(`   matched line: ${found.text}`);
-  } catch (error) {
-    // Not fatal: with one item on the list this should match, but ambiguity here is a
-    // matching-calibration signal rather than a broken write path.
-    console.log(`   (${isHebError(error) ? error.code : 'error'}: ${(error as Error).message})`);
-  }
+    console.log(`\n── 2. add "${TERM}"`);
+    const result = await time('addItem', () => lists.addItem({ query: TERM }));
 
-  console.log('\n── 5. restore the list to how it was');
+    let lineId: string;
+    let addedName: string;
 
-  // The line may have existed before this run, in which case `addItem` incremented its
-  // quantity rather than creating anything. Deleting it would remove a real grocery — so
-  // the cleanup restores the previous quantity instead, and only deletes lines this run
-  // actually created.
-  const preExisting = before.items.find((item) => item.lineId === lineId);
+    if (result.status === 'needs_confirmation') {
+      // Expected for a generic phrase: the safe path is to ask rather than guess.
+      console.log(`   ↪ needs confirmation (confidence ${result.match.confidence.toFixed(2)})`);
+      console.log(`     best: ${result.match.product.name}`);
+      for (const alt of result.match.alternatives.slice(0, 3)) console.log(`     alt:  ${alt.name}`);
 
-  if (preExisting === undefined) {
-    await time('removeItem', () => lists.removeItem({ lineId }));
-  } else {
-    console.log(`   "${addedName}" pre-existed — restoring quantity ${preExisting.quantity}`);
-    await time('restore quantity', () =>
-      lists.setItemQuantity(lineId, preExisting.quantity),
+      console.log('\n   confirming the top match by productId …');
+      const confirmed = await time('addItem(productId)', () =>
+        lists.addItem({ productId: result.match.product.id }),
+      );
+      if (confirmed.status === 'needs_confirmation') throw new Error('unreachable');
+      lineId = confirmed.item.lineId;
+      touchedLine = lineId;
+      addedName = confirmed.item.text;
+      console.log(`   ↪ ${confirmed.status}: ${confirmed.item.quantity} × ${addedName}`);
+    } else {
+      lineId = result.item.lineId;
+      touchedLine = lineId;
+      addedName = result.item.text;
+      console.log(`   ↪ ${result.status}: ${result.item.quantity} × ${addedName}`);
+    }
+
+    console.log('\n── 3. read back');
+    const during = await time('getList', () => lists.getList());
+    const present = during.items.some((item) => item.lineId === lineId);
+    console.log(`   ${during.items.length} item(s); added item present: ${present ? 'yes' : 'NO'}`);
+    if (!present) throw new Error('the item did not appear on the list after adding');
+
+    console.log('\n── 4. find it by spoken text (the removal path)');
+    try {
+      const found = await time('findLine', () => lists.findLine(addedName));
+      console.log(`   matched line: ${found.text}`);
+    } catch (error) {
+      // Not fatal: with one item on the list this should match, but ambiguity here is a
+      // matching-calibration signal rather than a broken write path.
+      console.log(`   (${isHebError(error) ? error.code : 'error'}: ${(error as Error).message})`);
+    }
+
+    console.log('\n── 5. restore the list to how it was');
+    await restoreLine(lists, before, lineId, addedName);
+    touchedLine = null;
+
+    const after = await time('getList', () => lists.getList());
+    console.log(`   ${after.items.length} item(s)`);
+    done = true;
+
+    console.log(
+      `\n✅ add → read → remove verified. List restored to ${after.items.length} item(s).`,
     );
+  } finally {
+    // The mutation happened but the run did not reach its own restore step. Undo it here
+    // rather than leaving a grocery — or a raised quantity — on a real household list.
+    if (touchedLine !== null) {
+      console.error('\n🧹 run did not complete; restoring the line it touched …');
+      await restoreLine(lists, before, touchedLine, touchedLine).catch((error: unknown) => {
+        console.error('⛔ RESTORE FAILED — the list still holds test data:', error);
+      });
+    } else if (!done) {
+      console.error('\n(the list was not modified)');
+    }
   }
-
-  const after = await time('getList', () => lists.getList());
-  const restored =
-    preExisting === undefined
-      ? !after.items.some((item) => item.lineId === lineId)
-      : after.items.find((item) => item.lineId === lineId)?.quantity === preExisting.quantity;
-
-  console.log(`   ${after.items.length} item(s); restored: ${restored ? 'yes' : 'NO'}`);
-  if (!restored) throw new Error('the list was not restored to its original state');
-
-  console.log(
-    `\n✅ add → read → remove verified. List restored to ${after.items.length} item(s).`,
-  );
 }
 
 main().catch((error: unknown) => {

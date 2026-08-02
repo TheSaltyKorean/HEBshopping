@@ -60,9 +60,18 @@ function summarise(): string {
     .join('\n');
 }
 
+/**
+ * Response handlers still reading their bodies.
+ *
+ * `page.on('response')` fires synchronously but `response.json()` is async, so a Ctrl+C
+ * timed between the two would serialise the maps while the final mutation — the one the
+ * user just performed, and most likely the reason they ran this — was still being parsed.
+ */
+const pending = new Set<Promise<void>>();
+
 async function recordGraphqlTraffic(context: BrowserContext): Promise<void> {
   context.on('response', (response) => {
-    void (async () => {
+    const handled = (async () => {
       const request = response.request();
       if (!request.url().includes('/graphql')) return;
 
@@ -121,10 +130,18 @@ async function recordGraphqlTraffic(context: BrowserContext): Promise<void> {
         console.log(`${marker}${operationName}${errorFlag}`);
       }
     })();
+    pending.add(handled);
+    void handled.finally(() => pending.delete(handled));
   });
 }
 
 async function flush(context: BrowserContext): Promise<void> {
+  // Let in-flight body reads finish first, or the capture can omit the very last call.
+  if (pending.size > 0) {
+    console.log(`\nWaiting for ${pending.size} response(s) still being read …`);
+    await Promise.allSettled([...pending]);
+  }
+
   await mkdir(CAPTURE_DIR, { recursive: true });
 
   await writeFile(
@@ -188,13 +205,17 @@ async function main(): Promise<void> {
   const shutdown = async () => {
     if (flushing) return;
     flushing = true;
+    let failed = false;
     try {
       await flush(context);
     } catch (error) {
       console.error('Failed while writing captures:', error);
+      failed = true;
     } finally {
       await context.close().catch(() => {});
-      process.exit(0);
+      // A run that produced no usable capture is a failed run: exiting zero would let a
+      // script — or a person skimming — treat an unwritable directory as success.
+      process.exit(failed ? 1 : 0);
     }
   };
 

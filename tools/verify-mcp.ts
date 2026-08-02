@@ -16,6 +16,15 @@ import { resolve } from 'node:path';
 
 const client = new Client({ name: 'verify-mcp', version: '0.1.0' });
 
+/**
+ * The line this run created, if any.
+ *
+ * Module scope so the `finally` in `main` can reach it: a timeout or a failed assertion
+ * between the add and the removal would otherwise leave a real grocery list holding test
+ * data, with the top-level catch only closing the transport.
+ */
+let createdLine: string | null = null;
+
 const transport = new StdioClientTransport({
   command: 'node',
   args: [resolve('packages/mcp-server/dist/stdio.js')],
@@ -102,6 +111,7 @@ async function main(): Promise<void> {
 
   await call('heb_add_item', { productId });
   const listed = await call('heb_read_list');
+  createdLine = [...lineIdsIn(listed)].find((lineId) => !before.has(lineId)) ?? null;
 
   const added = [...lineIdsIn(listed)].filter((lineId) => !before.has(lineId));
   if (added.length !== 1) {
@@ -115,6 +125,7 @@ async function main(): Promise<void> {
   // pre-existing grocery, and `verify:alexa` already covers that path behind a guard that
   // refuses to delete anything it did not create.
   await call('heb_remove_item', { lineId: added[0]! });
+  createdLine = null;
 
   const afterward = await call('heb_read_list');
   const remaining = lineIdsIn(afterward);
@@ -132,8 +143,19 @@ async function main(): Promise<void> {
   await client.close();
 }
 
-main().catch(async (error: unknown) => {
-  console.error('\n⛔', error);
-  await client.close().catch(() => {});
-  process.exit(1);
-});
+main()
+  .catch(async (error: unknown) => {
+    console.error('\n⛔', error);
+    process.exitCode = 1;
+  })
+  .finally(async () => {
+    // Unconditional: whatever went wrong, the household list must not keep test data.
+    if (createdLine !== null) {
+      console.log(`\n🧹 removing the line this run created (${createdLine})`);
+      await call('heb_remove_item', { lineId: createdLine }).catch((error: unknown) => {
+        console.error('⛔ CLEANUP FAILED — the list still holds test data:', error);
+        process.exitCode = 1;
+      });
+    }
+    await client.close().catch(() => {});
+  });

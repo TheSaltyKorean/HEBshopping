@@ -21,12 +21,18 @@ import { FileStore, HebClient, HebListOps, HEB_GRAPHQL_URL, HEB_ORIGIN, type Coo
 
 const SESSION_PATH = resolve('.session/session.json');
 
-async function seed(): Promise<SessionState> {
-  const raw = JSON.parse(
-    await readFile(resolve('captures/storage-state.json'), 'utf8'),
-  ) as { cookies: Cookie[] };
-  const session: SessionState = { cookies: raw.cookies, capturedAt: Date.now(), buildId: null };
-  await new FileStore(SESSION_PATH).putSession(session);
+/**
+ * The current session, read but never written.
+ *
+ * This used to overwrite `.session/session.json` from an old W0 capture on every run,
+ * which silently downgraded a freshly logged-in session to a stale jar and broke every
+ * other command until the user logged in again.
+ */
+async function currentSession(): Promise<SessionState> {
+  const session = await new FileStore(SESSION_PATH).getSession();
+  if (session === null) {
+    throw new Error('No session stored. Run `npm run login` first.');
+  }
   return session;
 }
 
@@ -57,7 +63,7 @@ async function rawGraphql(session: SessionState, body: unknown): Promise<any> {
 }
 
 async function main(): Promise<void> {
-  const session = await seed();
+  const session = await currentSession();
   const lists = new HebListOps({ client: new HebClient({ store: new FileStore(SESSION_PATH) }) });
 
   const list = await lists.getList();
@@ -102,7 +108,10 @@ async function main(): Promise<void> {
   });
   console.log(JSON.stringify(unquoted).slice(0, 500));
 
-  if (unquoted?.data?.deleteShoppingListItemsV2) {
+  // A refusal is still a truthy object carrying only its __typename, so "we got a payload"
+  // is not "the delete happened" — and returning here would also skip the cleanup below,
+  // leaving the throwaway line on the list.
+  if (unquoted?.data?.deleteShoppingListItemsV2?.__typename === 'ShoppingListV2') {
     console.log('\n✅ Hand-written mutation WORKS with unquoted enums.');
     console.log('   → We can stop depending on the persisted-query cache entirely.');
     return;

@@ -75,6 +75,21 @@ const NUMBER_WORDS: Readonly<Record<string, number>> = {
  */
 const MEASURE_WORDS = new Set(['percent', '%', 'pound', 'pounds', 'lb', 'lbs', 'ounce', 'ounces', 'oz', 'liter', 'litre', 'gallon', 'quart', 'inch']);
 
+/**
+ * Brand names that *begin* with a number word, where the number is part of the name.
+ *
+ * "Two Good vanilla yogurt" is one product, not two yogurts — and the mistake is silent,
+ * because the resolved product still looks right while the quantity is doubled. Only
+ * spelled-out numbers are listed: nobody says "add 2 Good yogurt" out loud, and treating
+ * digits this way would break the ordinary "2 avocados" case.
+ */
+const NUMBER_LED_BRANDS: ReadonlyArray<readonly string[]> = [
+  ['two', 'good'],
+  ['seven', 'up'],
+  ['five', 'guys'],
+  ['three', 'bridges'],
+];
+
 export function tokenize(text: string): string[] {
   return (
     text
@@ -117,7 +132,13 @@ export function parseSpokenRequest(text: string): SpokenRequest {
   const second = tokens[1];
   const numeric = NUMBER_WORDS[first] ?? (/^\d+$/.test(first) ? Number(first) : undefined);
 
+  // A number that starts a brand name belongs to the query, not to the count.
+  const startsBrand = NUMBER_LED_BRANDS.some((brand) =>
+    brand.every((word, index) => tokens[index] === word),
+  );
+
   const isCount =
+    !startsBrand &&
     numeric !== undefined &&
     // Zero is not a count, it is a refusal. "add 0 bananas" would otherwise reach
     // `addItem` with quantity 0, and the initial mutation adds a line regardless —

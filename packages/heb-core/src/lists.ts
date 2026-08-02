@@ -16,7 +16,14 @@ import {
   searchProductsDocument,
   updateItemQuantityDocument,
 } from './graphql/operations.js';
-import { broadenQuery, isConfident, matchProducts, mergeCandidates } from './matching.js';
+import {
+  broadenQuery,
+  coverage,
+  isConfident,
+  matchProducts,
+  mergeCandidates,
+  tokenize,
+} from './matching.js';
 import type {
   AddItemInput,
   AddResult,
@@ -28,6 +35,15 @@ import type {
   Product,
   RemoveItemInput,
 } from './types.js';
+
+/**
+ * How much of a removal request a sole list line must account for.
+ *
+ * Below this the shortcut does not apply and normal confidence rules resume, so an
+ * unrelated request against a one-item list reports "not on the list" rather than
+ * deleting the only thing there.
+ */
+const SOLE_LINE_COVERAGE = 0.6;
 
 // ---------------------------------------------------------------------------
 // HEB response shapes (only the fields we consume)
@@ -94,7 +110,7 @@ export class HebListOps implements ListOps {
    * and issue an identical `getShoppingListV2` — a redundant round trip on Alexa's
    * critical path, plus the throttle delay it earns.
    */
-  private inFlightList: Promise<HebList> | undefined;
+  private inFlightList: Map<string, Promise<HebList>> = new Map();
 
   constructor(options: HebListOpsOptions) {
     this.client = options.client;
@@ -155,12 +171,16 @@ export class HebListOps implements ListOps {
     // + mutation, because `resolveStoreId` already fetched the list a moment earlier. Two
     // redundant round trips is a large fraction of Alexa's ~8s ceiling.
     if (this.cachedList !== undefined && this.cachedList.listId === id) return this.cachedList;
-    if (this.inFlightList !== undefined) return this.inFlightList;
 
-    this.inFlightList = this.fetchList(id).finally(() => {
-      this.inFlightList = undefined;
-    });
-    return this.inFlightList;
+    // Keyed by list id: sharing one promise across ids would hand a caller asking for
+    // list B the contents — and the store — of list A, and a query-based add would then
+    // search A's store while mutating B.
+    const inFlight = this.inFlightList.get(id);
+    if (inFlight !== undefined) return inFlight;
+
+    const request = this.fetchList(id).finally(() => this.inFlightList.delete(id));
+    this.inFlightList.set(id, request);
+    return request;
   }
 
   private async fetchList(id: string): Promise<HebList> {
@@ -450,11 +470,23 @@ export class HebListOps implements ListOps {
 
     // Catalog separation semantics are wrong for a one-item list. `separation()` returns
     // zero for a singleton — correct for search, where a lone result usually means an
-    // over-constrained query hid better ones — but a list is a closed set: if exactly one
-    // line matches the words at all, there is nothing it could be confused with. Without
-    // this, "remove the milk" from a one-item list asks a pointless question, and MCP
-    // claims several items match when only one exists.
-    const confident = list.items.length === 1 || isConfident(match);
+    // over-constrained query hid better ones — but a list is a closed set: nothing else
+    // could be meant. Without this, "remove the milk" from a one-item list asks a
+    // pointless question, and MCP claims several items match when only one exists.
+    //
+    // "Nothing else could be meant" is not "anything goes", though. `matchProducts`
+    // returns a result on a single shared word, so an unguarded shortcut turns
+    // "remove chocolate cake" against a list holding only "chocolate milk" into a silent
+    // deletion of the milk. The shortcut therefore still requires the request to be
+    // substantially accounted for by the line.
+    const soleLine =
+      list.items.length === 1 &&
+      coverage(
+        tokenize(spoken).filter((token) => token.length > 0),
+        match.product,
+      ) >= SOLE_LINE_COVERAGE;
+
+    const confident = soleLine || isConfident(match);
     const byLineId = new Map(list.items.map((item) => [item.lineId, item] as const));
 
     return [match.product, ...match.alternatives]
@@ -505,11 +537,13 @@ function assertMutationSucceeded(
 ): void {
   // A missing __typename means the selection did not ask for one; treat that as success
   // rather than inventing a failure, since the request itself did not error.
-  const typename = payload?.__typename;
-  if (typename === undefined || typename === MUTATION_SUCCESS_TYPENAME) return;
+  // These documents always request `__typename`, so a null payload or a missing typename
+  // is not "the selection did not ask" — it is a mutation that did not happen. Treating it
+  // as success means confirming a deletion or a quantity change that never took place.
+  if (payload?.__typename === MUTATION_SUCCESS_TYPENAME) return;
 
   throw new HebError('UPSTREAM_ERROR', `HEB refused to ${attempted}.`, {
-    details: { returned: typename },
+    details: { returned: payload?.__typename ?? 'null' },
   });
 }
 

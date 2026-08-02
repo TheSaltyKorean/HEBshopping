@@ -316,3 +316,18 @@ describe('a sole list line is unambiguous', () => {
     expect(separation([0.9])).toBe(0);
   });
 });
+
+describe('numbers that belong to the product name', () => {
+  it.each([
+    ['two good vanilla yogurt', 1],
+    ['seven up', 1],
+  ])('"%s" is not a count of %i', (phrase) => {
+    // Silent when wrong: the resolved product still looks right while the quantity is
+    // doubled, so the user only finds out at the shelf.
+    expect(parseSpokenRequest(phrase).quantity).toBe(1);
+  });
+
+  it('still reads an ordinary leading count', () => {
+    expect(parseSpokenRequest('two avocados')).toEqual({ quantity: 2, query: 'avocados' });
+  });
+});

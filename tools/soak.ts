@@ -62,8 +62,27 @@ async function probe(): Promise<string> {
     const text = await response.text();
     if (response.status !== 200) return `FAIL http=${response.status}`;
     if (text.toLowerCase().includes('pardon our interruption')) return 'FAIL imperva-challenge';
-    if (text.includes('"getShoppingListsV2"')) return 'OK';
-    return `FAIL unexpected=${text.slice(0, 120).replace(/\s+/g, ' ')}`;
+
+    // Parse rather than substring-match. An expired session returns
+    // `{"data":{"getShoppingListsV2":null},"errors":[…]}` — which *contains* the field
+    // name, so a substring check reports OK and the whole longevity experiment keeps
+    // recording successes long after authentication stopped working. That would be a
+    // measurement saying the opposite of the truth, which is worse than no measurement.
+    let envelope: {
+      data?: { getShoppingListsV2?: unknown };
+      errors?: Array<{ message?: string }>;
+    };
+    try {
+      envelope = JSON.parse(text) as typeof envelope;
+    } catch {
+      return `FAIL non-json=${text.slice(0, 80).replace(/\s+/g, ' ')}`;
+    }
+
+    if (envelope.errors?.length) {
+      return `FAIL graphql=${(envelope.errors[0]?.message ?? 'unknown').slice(0, 80)}`;
+    }
+    if (envelope.data?.getShoppingListsV2 == null) return 'FAIL no-data';
+    return 'OK';
   } catch (error) {
     return `FAIL error=${error instanceof Error ? error.message : String(error)}`;
   }

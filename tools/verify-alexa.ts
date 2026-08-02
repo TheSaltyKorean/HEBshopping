@@ -137,9 +137,13 @@ async function say(label: string, request: object): Promise<string> {
  * Diffing lineIds rather than matching on names: the list belongs to someone, and a
  * name-based cleanup would happily delete a real item that resembled the test one.
  */
-async function cleanUp(before: ReadonlySet<string>): Promise<void> {
+async function cleanUp(): Promise<void> {
   const listOps = new HebListOps({ client: new HebClient({ store }) });
-  const added = (await listOps.getList()).items.filter((item) => !before.has(item.lineId));
+
+  // Only lines this run created, never "everything absent from the opening snapshot".
+  // A household member adding a grocery from the app while this runs would satisfy that
+  // diff and be deleted — which is precisely the failure this cleanup exists to prevent.
+  const added = (await listOps.getList()).items.filter((item) => createdLines.has(item.lineId));
 
   for (const item of added) {
     await listOps.removeItem({ lineId: item.lineId });
@@ -167,12 +171,6 @@ async function main(): Promise<void> {
 
   console.log('── Alexa skill, driven against the real HEB list ──');
 
-  // Snapshot first: cleanup removes the difference, never a name that looks familiar.
-  const before = new Set(
-    (await new HebListOps({ client: new HebClient({ store }) }).getList()).items.map(
-      (item) => item.lineId,
-    ),
-  );
 
   // Everything from here can mutate the real list, so cleanup must be unconditional: an
   // assertion failure or a timed-out call would otherwise jump straight to the top-level
@@ -215,9 +213,9 @@ async function main(): Promise<void> {
 
 
   } finally {
-    await cleanUp(before).catch((error: unknown) => {
-      console.error('\n⛔ CLEANUP FAILED — the list may still hold test data:', error);
-    });
+    // Deliberately not swallowed. Test data left on a real household list is a failure of
+    // the verification, however well the assertions went, and exiting zero would hide it.
+    await cleanUp();
   }
 
   await say('what is on my list', intent('ReadListIntent'));

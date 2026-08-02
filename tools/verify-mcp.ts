@@ -43,11 +43,24 @@ function textOf(result: unknown): string {
     .join('\n');
 }
 
-const call = async (name: string, args: Record<string, unknown> = {}): Promise<string> => {
+/**
+ * Call a tool and log it. Throws when the tool reports failure.
+ *
+ * `isError: true` arrives as a perfectly normal protocol response, so resolving it as a
+ * string made a failed removal indistinguishable from a successful one — the verifier
+ * would clear its cleanup marker and leave test data on a real household list.
+ * `expectError` is for the cases that are *supposed* to fail, like argument validation.
+ */
+const call = async (
+  name: string,
+  args: Record<string, unknown> = {},
+  expectError = false,
+): Promise<string> => {
   const started = Date.now();
   const result = await client.callTool({ name, arguments: args });
   const body = textOf(result);
   const failed = (result as { isError?: boolean }).isError === true;
+
   console.log(`\n── ${name}(${JSON.stringify(args)})  ${Date.now() - started}ms${failed ? '  [isError]' : ''}`);
   console.log(
     body
@@ -55,6 +68,8 @@ const call = async (name: string, args: Record<string, unknown> = {}): Promise<s
       .map((line) => `   ${line}`)
       .join('\n'),
   );
+
+  if (failed && !expectError) throw new Error(`${name} failed: ${body}`);
   return body;
 };
 
@@ -109,11 +124,19 @@ async function main(): Promise<void> {
   }
   const productId = absent.productId;
 
-  await call('heb_add_item', { productId });
+  const addReply = await call('heb_add_item', { productId });
   const listed = await call('heb_read_list');
-  createdLine = [...lineIdsIn(listed)].find((lineId) => !before.has(lineId)) ?? null;
 
   const added = [...lineIdsIn(listed)].filter((lineId) => !before.has(lineId));
+
+  // Arm cleanup only when exactly one line appeared. If a household member added
+  // something between the snapshot and this read, the diff holds several ids and picking
+  // "the first" would arm deletion of *their* grocery — the cleanup would then destroy
+  // real data precisely because something unexpected happened.
+  if (added.length === 1 && addReply.includes('Added')) {
+    createdLine = added[0]!;
+  }
+
   if (added.length !== 1) {
     // Zero would mean the add incremented a pre-existing line despite the absence check;
     // stopping here without deleting anything is the safe response, since MCP offers no
@@ -135,7 +158,7 @@ async function main(): Promise<void> {
   }
 
   // Guardrails: exactly one of the mutually exclusive arguments.
-  const both = await call('heb_add_item', { query: 'milk', productId: '123' });
+  const both = await call('heb_add_item', { query: 'milk', productId: '123' }, true);
   if (!both.includes('exactly one')) throw new Error('expected mutually-exclusive args to be rejected');
 
   console.log('\n✅ MCP server verified end to end: read, search, ambiguous-add refusal,');

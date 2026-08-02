@@ -95,9 +95,16 @@ async function recordGraphqlTraffic(context: BrowserContext): Promise<void> {
         responseBody = '(unparseable response body)';
       }
 
-      for (const body of bodies) {
+      // A batched POST's response is an array in request order. Storing the whole array
+      // on every operation attributes each one's data — and its errors — to all of its
+      // neighbours, which quietly misleads exactly the fixture-driven debugging this
+      // capture exists to support.
+      const responseBodies = Array.isArray(responseBody) ? responseBody : null;
+
+      for (const [index, body] of bodies.entries()) {
         if (typeof body !== 'object' || body === null) continue;
         const record = body as Record<string, unknown>;
+        const ownResponse = responseBodies === null ? responseBody : responseBodies[index];
 
         const operationName =
           typeof record['operationName'] === 'string' ? record['operationName'] : '(anonymous)';
@@ -112,7 +119,7 @@ async function recordGraphqlTraffic(context: BrowserContext): Promise<void> {
           hasFullQuery: typeof record['query'] === 'string',
           variables: record['variables'] ?? null,
           responseStatus: response.status(),
-          responseBody,
+          responseBody: ownResponse,
           capturedAt: Date.now(),
         };
 
@@ -122,9 +129,9 @@ async function recordGraphqlTraffic(context: BrowserContext): Promise<void> {
 
         const marker = isNew ? 'NEW ' : '    ';
         const errorFlag =
-          responseBody &&
-          typeof responseBody === 'object' &&
-          'errors' in (responseBody as Record<string, unknown>)
+          ownResponse &&
+          typeof ownResponse === 'object' &&
+          'errors' in (ownResponse as Record<string, unknown>)
             ? '  ⚠ errors in response'
             : '';
         console.log(`${marker}${operationName}${errorFlag}`);

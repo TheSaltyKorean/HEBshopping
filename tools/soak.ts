@@ -21,7 +21,24 @@ import { readFileSync, appendFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { HEB_GRAPHQL_URL, HEB_ORIGIN } from '@heb/core';
 
+/**
+ * Seconds between probes, validated before anything is scheduled.
+ *
+ * `Number('')`, `Number('abc')` and a negative argument all yield values Node schedules as
+ * a ~1ms timer, and `tick()` is detached — so a CLI typo would launch unbounded
+ * overlapping authenticated requests at HEB and quite plausibly earn an Imperva block.
+ * The floor is generous because this measures session longevity over hours, not load.
+ */
+const MIN_INTERVAL_SECONDS = 10;
+
 const INTERVAL_SECONDS = Number(process.argv[2] ?? 120);
+if (!Number.isFinite(INTERVAL_SECONDS) || INTERVAL_SECONDS < MIN_INTERVAL_SECONDS) {
+  console.error(
+    `⛔ Interval must be a number of seconds >= ${MIN_INTERVAL_SECONDS}. ` +
+      `Got: ${JSON.stringify(process.argv[2])}`,
+  );
+  process.exit(1);
+}
 const LOG_PATH = resolve('captures/soak.log');
 const LIST_QUERY_HASH = '35da893a3476a098d44f8d6ac379db3129117b977d4df4dcbe48a5641eb9fdd5';
 

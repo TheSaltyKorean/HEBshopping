@@ -46,12 +46,25 @@ function toErrorText(error: unknown): TextResult {
       'The HEB session has expired. A human must re-run `npm run login` — this cannot be fixed automatically.',
     BOT_CHALLENGE: 'HEB served a bot check. Wait a moment and try once more.',
     PRODUCT_NOT_FOUND:
-      'No catalog product matched. HEB lists cannot hold free text, so try different wording.',
+      'No catalog product matched. Try a brand name, or Spanish wording — much of this ' +
+      'catalog is named in Spanish. (HEB lists can hold free text, but only the mobile ' +
+      'app can create such lines today.)',
+    AMBIGUOUS_LIST_EMPTY:
+      'This HEB account has no shopping lists at all. Tell the user to create one in the ' +
+      'H-E-B app; nothing can be added until they do.',
     AMBIGUOUS_LIST: 'Several lists exist; ask the user which one to use.',
     AMBIGUOUS_REMOVAL: 'Several list items match; ask the user which one they meant.',
     ITEM_NOT_ON_LIST: 'That item is not on the list.',
   };
-  const extra = guidance[error.code];
+  // AMBIGUOUS_LIST covers both "several lists" and "none at all", and the remedies are
+  // opposites: telling a model to ask which list to use is unactionable for an account
+  // that has none, and contradicts the message it is printed beneath.
+  const key =
+    error.code === 'AMBIGUOUS_LIST' && error.details?.['listCount'] === 0
+      ? 'AMBIGUOUS_LIST_EMPTY'
+      : error.code;
+
+  const extra = guidance[key];
   return text(`${error.code}: ${error.message}${extra ? `\n${extra}` : ''}`, true);
 }
 

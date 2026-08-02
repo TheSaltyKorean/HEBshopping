@@ -46,12 +46,22 @@ interface Options {
 
 function parseArgs(argv: string[]): Options {
   const sessionFlag = argv.indexOf('--session');
-  return {
-    switchAccount: argv.includes('--switch'),
-    sessionPath: resolve(
-      sessionFlag !== -1 ? (argv[sessionFlag + 1] ?? DEFAULT_SESSION_PATH) : DEFAULT_SESSION_PATH,
-    ),
-  };
+  let sessionPath = DEFAULT_SESSION_PATH;
+
+  if (sessionFlag !== -1) {
+    const value = argv[sessionFlag + 1];
+    // `npm run login -- --session --switch` would otherwise write the live cookie jar to a
+    // committable file literally named "--switch" in the repo root — and `--switch` is
+    // still recognised as an option, so the profile is wiped too. A plausible typo with a
+    // credential-shaped consequence.
+    if (value === undefined || value.startsWith('-')) {
+      console.error('⛔ --session needs a file path, e.g. --session .session/other.json');
+      process.exit(1);
+    }
+    sessionPath = value;
+  }
+
+  return { switchAccount: argv.includes('--switch'), sessionPath: resolve(sessionPath) };
 }
 
 const sleep = (ms: number): Promise<void> => new Promise((done) => setTimeout(done, ms));
@@ -113,8 +123,15 @@ async function worksAgainstHeb(candidate: SessionState): Promise<boolean> {
     putSession: async () => undefined,
   };
   try {
-    await new HebClient({ store: memory }).execute(getShoppingListsDocument());
-    return true;
+    const data = await new HebClient({ store: memory }).execute<{
+      getShoppingListsV2?: { __typename?: string };
+    }>(getShoppingListsDocument());
+
+    // A data envelope is not proof. A refused read returns a different union member with
+    // only a `__typename` and no envelope-level error, so accepting any envelope would let
+    // stale cookies end the poll and overwrite the stored session — the exact failure this
+    // probe exists to prevent.
+    return data.getShoppingListsV2?.__typename === 'ShoppingListsWithHeaderPageV2';
   } catch {
     return false;
   }

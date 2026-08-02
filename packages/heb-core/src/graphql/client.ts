@@ -35,6 +35,18 @@ export interface HebClientOptions {
   now?: () => number;
   /** Inter-request spacing. Overridable so tests don't pay the politeness delay. */
   minDelayMs?: number;
+  /**
+   * Total budget for every call this client makes, from construction.
+   *
+   * The per-call timeout bounds one request; it does not bound a *sequence*. An add of
+   * two units is search + add + set-quantity, and a broadened search makes it four calls —
+   * 12 seconds at the 3s per-call limit, against Alexa's ~8s ceiling. Exceeding it is
+   * worse than failing: the list is mutated, Alexa drops the response, and the user
+   * retries into a second increment.
+   *
+   * Instances are per-invocation, so "since construction" is the right origin.
+   */
+  budgetMs?: number;
 }
 
 /** Mimics the site's own request headers; anything less gets challenged. */
@@ -59,6 +71,8 @@ export class HebClient {
   private readonly timeoutMs: number;
   private readonly now: () => number;
   private readonly minDelayMs: number;
+  private readonly budgetMs: number | undefined;
+  private readonly createdAt: number;
 
   /** Serialises bursts so we stay a polite guest on an API that never invited us. */
   private queue: Promise<unknown> = Promise.resolve();
@@ -72,6 +86,14 @@ export class HebClient {
     this.timeoutMs = options.timeoutMs ?? HEB_REQUEST_TIMEOUT_MS;
     this.now = options.now ?? Date.now;
     this.minDelayMs = options.minDelayMs ?? MIN_REQUEST_DELAY_MS;
+    this.budgetMs = options.budgetMs;
+    this.createdAt = this.now();
+  }
+
+  /** Milliseconds left in the invocation budget, or Infinity when none was set. */
+  private remainingBudget(): number {
+    if (this.budgetMs === undefined) return Number.POSITIVE_INFINITY;
+    return this.createdAt + this.budgetMs - this.now();
   }
 
   async execute<T>(document: GraphqlDocument): Promise<T> {
@@ -90,8 +112,18 @@ export class HebClient {
   }
 
   private async send<T>(document: GraphqlDocument, cookieHeader: string): Promise<T> {
+    // Refuse rather than start a call that cannot finish inside the budget. Failing fast
+    // leaves time to say something; overrunning says nothing at all.
+    const remaining = this.remainingBudget();
+    if (remaining <= 0) {
+      throw new HebError('UPSTREAM_ERROR', 'Ran out of time before HEB could be called.', {
+        retryable: false,
+        details: { operation: document.operationName },
+      });
+    }
+
     const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), this.timeoutMs);
+    const timer = setTimeout(() => controller.abort(), Math.min(this.timeoutMs, remaining));
 
     let response: Response;
     try {

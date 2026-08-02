@@ -37,10 +37,22 @@ if (SKILL_ID === undefined || SKILL_ID.trim() === '') {
  * things that *are* per-request — the resolved list, the pending question — live in
  * `HebListOps` instances and Alexa session attributes respectively.
  */
+/**
+ * Total HEB time one voice command may consume.
+ *
+ * Alexa's ceiling is roughly 8 seconds end to end; this leaves room for cold start,
+ * parsing, and speaking. The per-call timeout alone cannot enforce it, because an add of
+ * several units is three or four sequential calls.
+ */
+const INVOCATION_BUDGET_MS = 6_500;
+
 const skill = createSkill({
   createListOps: () =>
     new HebListOps({
-      client: new HebClient({ store: new FileStore(SESSION_PATH) }),
+      client: new HebClient({
+        store: new FileStore(SESSION_PATH),
+        budgetMs: INVOCATION_BUDGET_MS,
+      }),
       ...(process.env['HEB_LIST_ID'] !== undefined ? { listId: process.env['HEB_LIST_ID'] } : {}),
     }),
   skillId: SKILL_ID,

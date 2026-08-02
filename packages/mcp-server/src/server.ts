@@ -52,7 +52,12 @@ function toErrorText(error: unknown): TextResult {
     AMBIGUOUS_LIST_EMPTY:
       'This HEB account has no shopping lists at all. Tell the user to create one in the ' +
       'H-E-B app; nothing can be added until they do.',
-    AMBIGUOUS_LIST: 'Several lists exist; ask the user which one to use.',
+    // Not "ask which list": no tool here accepts a listId, so the user's answer could not
+    // change the next call and the same error would recur. HEB_LIST_ID is the only lever.
+    AMBIGUOUS_LIST:
+      'Several lists exist and this server is not pinned to one. Tell the user to set ' +
+      'HEB_LIST_ID in the server configuration and restart it; asking which list to use ' +
+      'cannot help, because these tools take no list argument.',
     AMBIGUOUS_REMOVAL: 'Several list items match; ask the user which one they meant.',
     ITEM_NOT_ON_LIST: 'That item is not on the list.',
   };

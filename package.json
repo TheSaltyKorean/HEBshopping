@@ -28,7 +28,9 @@
     "verify": "tsx tools/verify-list.ts",
     "verify:session": "tsx tools/verify.ts",
     "verify:mcp": "tsx tools/verify-mcp.ts",
-    "verify:alexa": "tsx tools/verify-alexa.ts"
+    "verify:alexa": "tsx tools/verify-alexa.ts",
+    "push:session": "tsx tools/push-session.ts",
+    "bundle": "tsx tools/bundle.ts"
   },
   "devDependencies": {
     "@types/node": "^26.1.2",

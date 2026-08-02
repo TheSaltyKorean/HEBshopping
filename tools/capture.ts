@@ -61,6 +61,16 @@ function summarise(): string {
 }
 
 /**
+ * The most recent storage state we were able to read.
+ *
+ * `context.storageState()` fails once the context is closing, and closing the browser
+ * window is a documented way to end a capture — so reading it only during shutdown loses
+ * the cookie jar exactly when the user did the thing the instructions suggested. Snapshot
+ * it while the context is alive and fall back to that.
+ */
+let lastStorageState: unknown;
+
+/**
  * Response handlers still reading their bodies.
  *
  * `page.on('response')` fires synchronously but `response.json()` is async, so a Ctrl+C
@@ -162,7 +172,15 @@ async function flush(context: BrowserContext): Promise<void> {
 
   // Session state spans BOTH hosts — auth lives on accounts.heb.com. Capturing only the
   // storefront looks fine and then fails on renewal.
-  const storageState = await context.storageState();
+  let storageState: { cookies: Array<{ domain: string }> };
+  try {
+    storageState = (await context.storageState()) as typeof storageState;
+    lastStorageState = storageState;
+  } catch (error) {
+    if (lastStorageState === undefined) throw error;
+    console.warn('Context already closing; writing the last good storage snapshot.');
+    storageState = lastStorageState as typeof storageState;
+  }
   await writeFile(
     resolve(CAPTURE_DIR, 'storage-state.json'),
     JSON.stringify(storageState, null, 2),
@@ -240,6 +258,14 @@ async function main(): Promise<void> {
         { mode: SECRET_FILE_MODE },
       ),
     );
+    // Keep a live snapshot of the cookie jar: it is the expensive thing to reacquire, and
+    // it cannot be read once the context starts closing.
+    void context
+      .storageState()
+      .then((state) => {
+        lastStorageState = state;
+      })
+      .catch(() => undefined);
   }, 15_000);
 }
 

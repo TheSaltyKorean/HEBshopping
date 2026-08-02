@@ -79,6 +79,8 @@ export class HebClient {
   private active = 0;
   /** When the most recent request *started*, so spacing is measured start-to-start. */
   private lastStart = Number.NEGATIVE_INFINITY;
+  /** Serialises acquisition so concurrency and spacing are decided together, not racily. */
+  private gate: Promise<void> = Promise.resolve();
 
   constructor(options: HebClientOptions) {
     this.store = options.store;
@@ -232,35 +234,8 @@ export class HebClient {
    * delay, and it keeps `heb-core` dependency-free so the Lambda bundle stays small.
    */
   private async throttled<T>(task: () => Promise<T>): Promise<T> {
-    while (this.active >= MAX_CONCURRENT_REQUESTS) {
-      await this.queue.catch(() => undefined);
-    }
+    await this.acquire();
 
-    // Space requests by *start* time, not by completion.
-    //
-    // Delaying after a task finishes spaces nothing: `active` has already been decremented
-    // by then, so a waiting call starts during the delay rather than after it, and two
-    // concurrent calls that both see a free slot start together. Since being a polite
-    // client is the whole point — HEB never invited us, and Imperva is watching — the gate
-    // has to be on when a request begins.
-    // The slot is claimed *synchronously*, before any await. Computing a deadline and then
-    // awaiting would let every concurrent caller read the same `lastStart`, all wait the
-    // same interval, and all start together — spacing nothing. Reserving first works
-    // because this read-modify-write cannot be interleaved on a single thread.
-    const startAt = Math.max(this.now(), this.lastStart + this.minDelayMs);
-    const wait = startAt - this.now();
-    this.lastStart = startAt;
-    if (wait > 0) await delay(wait);
-
-    // Re-acquire the concurrency slot after sleeping. Several callers can clear the check
-    // above before any of them sleeps, and each would otherwise wake and increment
-    // `active` without looking again — putting more requests in flight than the cap allows
-    // whenever a request outlasts the spacing interval.
-    while (this.active >= MAX_CONCURRENT_REQUESTS) {
-      await this.queue.catch(() => undefined);
-    }
-
-    this.active += 1;
     const run = (async () => {
       try {
         return await task();
@@ -271,6 +246,47 @@ export class HebClient {
 
     this.queue = run.catch(() => undefined);
     return run;
+  }
+
+  /**
+   * Wait until this request may begin, holding both invariants at once.
+   *
+   * Concurrency and spacing cannot be enforced independently. Taking a slot and *then*
+   * computing a start time looks right and is not: when both slots are held by slow
+   * requests, every waiting caller resumes with `lastStart` far in the past, so
+   * `max(now, lastStart + delay)` yields `now` for all of them and they start together —
+   * a burst aimed at Imperva at exactly the moment the upstream is already struggling.
+   * Measured before this change: six requests at a 200ms floor started at 2, 201, 1703,
+   * 1703, 1714, 1714ms.
+   *
+   * So the whole acquisition is serialised through `gate`. Only one caller can be between
+   * "a slot is free" and "my start time is reserved", which makes the reservations chain
+   * strictly. The delay is awaited while still holding the gate, because start-to-start
+   * spacing is precisely the guarantee that the *next* caller must not begin during it.
+   */
+  private async acquire(): Promise<void> {
+    const previous = this.gate;
+    let release!: () => void;
+    this.gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+
+    await previous;
+
+    try {
+      while (this.active >= MAX_CONCURRENT_REQUESTS) {
+        await this.queue.catch(() => undefined);
+      }
+      this.active += 1;
+
+      const startAt = Math.max(this.now(), this.lastStart + this.minDelayMs);
+      this.lastStart = startAt;
+
+      const wait = startAt - this.now();
+      if (wait > 0) await delay(wait);
+    } finally {
+      release();
+    }
   }
 }
 

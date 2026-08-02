@@ -31,6 +31,9 @@ import { HEB_GRAPHQL_URL, HEB_ORIGIN } from '@heb/core';
  */
 const MIN_INTERVAL_SECONDS = 10;
 
+/** No probe may outlive this; see the note in `probe`. */
+const PROBE_TIMEOUT_MS = 20_000;
+
 const INTERVAL_SECONDS = Number(process.argv[2] ?? 120);
 if (!Number.isFinite(INTERVAL_SECONDS) || INTERVAL_SECONDS < MIN_INTERVAL_SECONDS) {
   console.error(
@@ -59,7 +62,13 @@ const startedAt = Date.now();
 
 async function probe(): Promise<string> {
   try {
+    // Bounded: an unbounded probe would hang the loop rather than record a failure, and a
+    // soak that stops reporting looks identical to a soak that is going fine.
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), PROBE_TIMEOUT_MS);
+
     const response = await fetch(HEB_GRAPHQL_URL, {
+      signal: controller.signal,
       method: 'POST',
       headers: {
         'User-Agent':
@@ -77,6 +86,7 @@ async function probe(): Promise<string> {
     });
 
     const text = await response.text();
+    clearTimeout(timer);
     if (response.status !== 200) return `FAIL http=${response.status}`;
     if (text.toLowerCase().includes('pardon our interruption')) return 'FAIL imperva-challenge';
 
@@ -101,7 +111,10 @@ async function probe(): Promise<string> {
     if (envelope.data?.getShoppingListsV2 == null) return 'FAIL no-data';
     return 'OK';
   } catch (error) {
-    return `FAIL error=${error instanceof Error ? error.message : String(error)}`;
+    const aborted = error instanceof Error && error.name === 'AbortError';
+    return aborted
+      ? `FAIL timeout after ${PROBE_TIMEOUT_MS}ms`
+      : `FAIL error=${error instanceof Error ? error.message : String(error)}`;
   }
 }
 
@@ -120,4 +133,19 @@ console.log(
 );
 
 await tick();
-setInterval(() => void tick(), INTERVAL_SECONDS * 1_000);
+/**
+ * Self-scheduling rather than `setInterval`.
+ *
+ * A detached interval starts a new authenticated request every tick regardless of whether
+ * the previous one finished. If a probe stalls — which is exactly what a soak is watching
+ * for — pending requests pile up without bound and hammer HEB precisely when it is already
+ * unhappy. Waiting for each probe also makes the recorded cadence honest.
+ */
+async function loop(): Promise<void> {
+  for (;;) {
+    await new Promise((resolve) => setTimeout(resolve, INTERVAL_SECONDS * 1_000));
+    await tick();
+  }
+}
+
+void loop();

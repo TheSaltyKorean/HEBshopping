@@ -68,7 +68,8 @@ stored. They last 30–365 days (see *What discovery changed*), so it's a rare c
 | W3 login tool | ✅ `npm run login` — headed login straight into the `Store` |
 | W5.1 search recovery | ✅ bilingual matching + broadened re-search |
 | W8 Alexa skill | ✅ handler, interaction model, verified against the real list |
-| W10 deploy, W11 harden | not started |
+| W10 deploy | ✅ Terraform, DynamoDB store, MCP HTTP endpoint — see `docs/deploy.md` (not applied) |
+| W11 harden | not started |
 
 The full plan lives at `~/.claude/plans/frolicking-strolling-crab.md`.
 
@@ -91,8 +92,8 @@ plain Lambda, one small table, and a human login every month or two.
 ```
 packages/heb-core/        session, GraphQL client, matching, list ops   (pure lib, no deps)
 packages/mcp-server/      MCP tools over stdio; HTTP transport at W10
-packages/lambda-api/      Alexa handler + interaction model
-infra/                    Terraform                                     (not started)
+packages/lambda-api/      Alexa handler, MCP HTTP endpoint, DynamoDbStore
+infra/                    Terraform: DynamoDB, Lambda, SSM, SNS, alarms
 tools/                    capture, drive, verify, soak, scan CLIs
 docs/                     heb-api.md — output of W0
 fixtures/                 scrubbed request/response pairs for offline tests
@@ -115,6 +116,8 @@ npm run verify          # add → read → remove against the real list
 npm run verify:mcp      # drive the MCP server as a real client would
 npm run verify:alexa    # drive the Alexa skill as an Echo would
 npm run mcp             # run the MCP server over stdio
+npm run bundle          # esbuild → infra/build/lambda.zip
+npm run push:session    # upload the local session to DynamoDB (after every login)
 npm run scan            # secret + PII scan of committable files
 npm run capture         # W0 discovery: watch HEB's own GraphQL traffic (advanced)
 ```
@@ -140,7 +143,7 @@ Then pick a method:
 | **Claude Code** | already wired via `.mcp.json`; start Claude Code here, run `/mcp` | [setup.md § Method A](docs/setup.md) |
 | **Gemini CLI** | add the server to `~/.gemini/settings.json` | [setup.md § Method B](docs/setup.md) |
 | **Command line** | `npm run verify`, `npm run verify:mcp` | [setup.md § Method C](docs/setup.md) |
-| **Alexa** | skill built; run it locally with `npm run verify:alexa`. Hosting it needs W10 | [setup.md § Method D](docs/setup.md) |
+| **Alexa** | deploy to your own AWS + Amazon accounts | [deploy.md](docs/deploy.md) |
 
 Logging in is the one genuinely manual step, and no amount of engineering removes it: HEB
 offers password, emailed OTP, and passkey, and the latter two cannot be replayed headlessly.

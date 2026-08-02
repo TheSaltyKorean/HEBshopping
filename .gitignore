@@ -62,3 +62,8 @@ Thumbs.db
 .vscode/*
 !.vscode/extensions.json
 *.swp
+
+# Terraform state contains the session table name, ARNs, and the generated MCP token.
+infra/build/
+infra/.terraform/
+infra/terraform.tfvars

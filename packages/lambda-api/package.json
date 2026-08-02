@@ -6,10 +6,27 @@
   "description": "Alexa custom skill over the HEB shopping list. Invoked directly by the Alexa trigger.",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
-  "exports": { ".": { "types": "./dist/index.d.ts", "default": "./dist/index.js" } },
-  "scripts": { "build": "tsc --build", "clean": "tsc --build --clean" },
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    },
+    "./store": {
+      "types": "./dist/store/dynamodb-store.d.ts",
+      "default": "./dist/store/dynamodb-store.js"
+    }
+  },
+  "scripts": {
+    "build": "tsc --build",
+    "clean": "tsc --build --clean"
+  },
   "dependencies": {
+    "@aws-sdk/client-dynamodb": "^3.1101.0",
+    "@aws-sdk/client-ssm": "^3.1101.0",
+    "@aws-sdk/lib-dynamodb": "^3.1101.0",
     "@heb/core": "*",
-    "ask-sdk-core": "^2.14.0"
+    "ask-sdk-core": "^2.14.0",
+    "@heb/mcp-server": "*",
+    "@modelcontextprotocol/sdk": "^1.30.0"
   }
 }

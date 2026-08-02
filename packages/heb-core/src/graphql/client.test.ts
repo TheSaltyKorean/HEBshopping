@@ -242,3 +242,34 @@ describe('union rejection is not an empty result', () => {
     await expect(ops2.searchProducts('milk')).rejects.toThrow();
   });
 });
+
+describe('throttle under upstream slowdown', () => {
+  it('does not burst when occupied slots free up', async () => {
+    // The failure this guards, measured before the fix: with both slots held by slow
+    // requests, every waiter resumed with `lastStart` far in the past, so each computed
+    // "start now" and they went together — 2, 201, 1703, 1703, 1714, 1714ms at a 200ms
+    // floor. A burst aimed at Imperva exactly when the upstream is already struggling.
+    const starts: number[] = [];
+    let served = 0;
+
+    const client = new HebClient({
+      store: storeWith(session({ capturedAt: Date.now() })),
+      minDelayMs: 60,
+      fetchImpl: (async () => {
+        starts.push(Date.now());
+        const slow = served++ < 2; // occupy both slots for far longer than the interval
+        await new Promise((resolve) => setTimeout(resolve, slow ? 400 : 5));
+        return new Response(JSON.stringify({ data: { ok: 1 } }), { status: 200 });
+      }) as unknown as typeof fetch,
+    });
+
+    await Promise.all(
+      Array.from({ length: 6 }, () => client.execute(getShoppingListsDocument())),
+    );
+
+    expect(starts).toHaveLength(6);
+    for (const [index, start] of starts.slice(1).entries()) {
+      expect(start - starts[index]!).toBeGreaterThanOrEqual(55);
+    }
+  });
+});

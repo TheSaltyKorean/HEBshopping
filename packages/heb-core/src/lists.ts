@@ -505,9 +505,22 @@ export class HebListOps implements ListOps {
         // is unknown, and `setQuantity` invalidated the cache before writing so a read here
         // reaches HEB. Reporting the stale payload's quantity of one would understate what
         // is on the list and invite another add, over-incrementing it.
-        const actual = (await this.getList(listId)).items.find(
-          (item) => item.lineId === added.lineId,
-        );
+        let seen: HebList;
+        try {
+          seen = await this.getList(listId);
+        } catch {
+          // Both the quantity write and the readback failed, most likely because the first
+          // timeout spent the budget. A line definitely exists and its quantity is unknown,
+          // so an unmarked error here would reach Alexa's generic "please try again" — and
+          // the retry finds that line and increments it by the whole requested amount.
+          throw new HebError(
+            'UPSTREAM_ERROR',
+            `Added ${added.text}, but could not confirm the amount. Check the list before asking again.`,
+            { cause: error, retryable: false, details: { partialAdd: true } },
+          );
+        }
+
+        const actual = seen.items.find((item) => item.lineId === added.lineId);
 
         // A *definitive* refusal is not an indeterminate failure: there is nothing to
         // reconcile, and reporting success would claim five units while one is on the

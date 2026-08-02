@@ -23,12 +23,34 @@ export function cookieIsExpired(cookie: Pick<Cookie, 'expires'>, nowMs: number):
   return cookie.expires * 1_000 <= nowMs;
 }
 
-/** Build the `Cookie` header a browser would send to `host`. */
-export function cookieHeaderFor(session: SessionState, host: string): string {
-  return session.cookies
-    .filter((cookie) => cookieMatchesHost(cookie, host))
-    .map((cookie) => `${cookie.name}=${cookie.value}`)
-    .join('; ');
+/**
+ * Build the `Cookie` header a browser would send to `host`.
+ *
+ * Expired copies are dropped, and where a name appears more than once the longest-lived
+ * survivor wins — the same choice `checkSession` makes. Otherwise the two disagree: health
+ * would accept a jar on the strength of a live duplicate while the header still led with
+ * the dead one, and a server resolving the first copy would reject a session we had just
+ * declared usable. Browsers do not send expired cookies either.
+ */
+export function cookieHeaderFor(session: SessionState, host: string, nowMs = Date.now()): string {
+  const best = new Map<string, Cookie>();
+
+  for (const cookie of session.cookies) {
+    if (!cookieMatchesHost(cookie, host)) continue;
+    if (cookieIsExpired(cookie, nowMs)) continue;
+
+    const incumbent = best.get(cookie.name);
+    if (incumbent === undefined || outlives(cookie, incumbent)) best.set(cookie.name, cookie);
+  }
+
+  return [...best.values()].map((cookie) => `${cookie.name}=${cookie.value}`).join('; ');
+}
+
+/** -1 means a session cookie: no expiry, so it outlives every dated one. */
+function outlives(candidate: Cookie, incumbent: Cookie): boolean {
+  if (candidate.expires === -1) return true;
+  if (incumbent.expires === -1) return false;
+  return candidate.expires > incumbent.expires;
 }
 
 export interface SessionHealth {

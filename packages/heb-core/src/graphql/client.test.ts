@@ -305,3 +305,24 @@ describe('session health prefers the longest-lived duplicate', () => {
     await expect(client(fetchImpl, jar).execute(getShoppingListsDocument())).resolves.toBeDefined();
   });
 });
+
+describe('outgoing cookie header', () => {
+  it('omits an expired duplicate and keeps the live one', async () => {
+    // checkSession accepts the jar on the strength of the live copy; if the header still
+    // led with the dead one, a server resolving the first duplicate would reject a session
+    // we had just declared usable.
+    const past = NOW / 1_000 - 3_600;
+    const base = session();
+    const dead = { ...base.cookies.find((c) => c.name === 'sat')!, domain: '.heb.com', expires: past };
+
+    const fetchImpl = respond(JSON.stringify({ data: { ok: 1 } }));
+    await client(fetchImpl, session({ cookies: [dead, ...base.cookies] })).execute(
+      getShoppingListsDocument(),
+    );
+
+    const [, init] = (fetchImpl as unknown as ReturnType<typeof vi.fn>).mock.calls[0];
+    const header = (init.headers as Record<string, string>).Cookie;
+    expect(header).toContain('sat=fixture-sat');
+    expect(header.match(/sat=/g)).toHaveLength(1);
+  });
+});

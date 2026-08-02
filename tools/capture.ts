@@ -141,6 +141,18 @@ async function recordGraphqlTraffic(context: BrowserContext): Promise<void> {
         operations.set(operationName, captured);
         timeline.push(captured);
 
+        // Authenticated traffic means the cookie jar just changed — refresh the snapshot
+        // now rather than waiting for the next tick, so a close straight after logging in
+        // still saves the session that login produced.
+        if (isNew) {
+          void context
+            .storageState()
+            .then((state) => {
+              lastStorageState = state;
+            })
+            .catch(() => undefined);
+        }
+
         const marker = isNew ? 'NEW ' : '    ';
         const errorFlag =
           ownResponse &&
@@ -210,6 +222,12 @@ async function main(): Promise<void> {
 
   const page = context.pages()[0] ?? (await context.newPage());
   await page.goto(START_URL, { waitUntil: 'domcontentloaded' });
+
+  // Snapshot immediately, not on the first 15-second tick. Closing the browser is a
+  // supported way to end a capture, and doing it before the first tick left `flush` with
+  // nothing — so an early close, or a close right after logging in, either failed the run
+  // or wrote a pre-login jar.
+  lastStorageState = await context.storageState().catch(() => undefined);
 
   console.log(`
 ────────────────────────────────────────────────────────────────────────

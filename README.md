@@ -149,6 +149,25 @@ Logging in is the one genuinely manual step, and no amount of engineering remove
 offers password, emailed OTP, and passkey, and the latter two cannot be replayed headlessly.
 Sessions last about a month, so it's a roughly monthly two-minute chore.
 
+## Known limitations
+
+**Concurrent adds of the same product can lose one increment.** If two people say "add
+milk" within the same second — two Echoes, or an Echo and an agent — and that milk is
+already on the list, both invocations can read quantity 1 and both write 2, so the list
+ends at 2 rather than 3.
+
+It is left unfixed deliberately. H-E-B's `updateShoppingListItem` takes an *absolute*
+quantity with no ETag, version, or compare-and-set, so there is no atomic increment to use.
+The available fixes each cost more than the problem:
+
+- Serialising Alexa to one invocation would make Lambda *reject* the second person to
+  speak, turning a rare miscount into a dropped command with no spoken response.
+- A lock in DynamoDB would reintroduce write access for two internet-facing functions —
+  authority deliberately removed — and add a round trip to every add inside an ~8s ceiling.
+
+The failure is visible on the list and correctable in a second. If H-E-B ever exposes a
+delta or conditional update, it becomes a small change.
+
 ## Security
 
 **This handles live session cookies for an account with a saved payment method.** Anyone

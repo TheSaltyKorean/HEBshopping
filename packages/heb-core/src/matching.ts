@@ -119,6 +119,10 @@ export function parseSpokenRequest(text: string): SpokenRequest {
 
   const isCount =
     numeric !== undefined &&
+    // Zero is not a count, it is a refusal. "add 0 bananas" would otherwise reach
+    // `addItem` with quantity 0, and the initial mutation adds a line regardless —
+    // only quantities above one get adjusted — so asking for none would add one.
+    numeric > 0 &&
     tokens.length > 1 &&
     !(second !== undefined && MEASURE_WORDS.has(second));
 

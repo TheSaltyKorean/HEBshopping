@@ -92,8 +92,13 @@ export class HebListOps implements ListOps {
 
   async getLists(): Promise<HebList[]> {
     const data = await this.client.execute<{
-      getShoppingListsV2: { lists?: HebListPayload[] };
+      getShoppingListsV2: { __typename?: string; lists?: HebListPayload[] };
     }>(getShoppingListsDocument());
+
+    // A refused read returns a different union member carrying only `__typename`, and the
+    // `?? []` below would turn that into "this account has no shopping lists" — a
+    // confident, wrong, and unactionable answer to a question we never got to ask.
+    assertUnion(data.getShoppingListsV2, 'ShoppingListsWithHeaderPageV2', 'list your lists');
 
     return (data.getShoppingListsV2.lists ?? []).map((list) => ({
       listId: list.id,
@@ -166,8 +171,13 @@ export class HebListOps implements ListOps {
     const storeId = await this.resolveStoreId(listId);
 
     const data = await this.client.execute<{
-      productSearchItems: { searchGrid?: { items?: HebProduct[] } };
+      productSearchItems: { __typename?: string; searchGrid?: { items?: HebProduct[] } };
     }>(searchProductsDocument(query, storeId));
+
+    // The *outer* union, distinct from the item union filtered below. A refused search
+    // would otherwise read as "no products matched", so we would tell the user to try
+    // different words when the words were never the problem.
+    assertUnion(data.productSearchItems, 'ProductSearchItemsResult', 'search the catalog');
 
     // `searchGrid.items` is a union — sponsored placements and banners appear alongside
     // products. Those come back as a bare `__typename`, and mapping one produces a
@@ -431,6 +441,29 @@ export class HebListOps implements ListOps {
  * an error because the user stops thinking about it.
  */
 const MUTATION_SUCCESS_TYPENAME = 'ShoppingListV2';
+
+/**
+ * Fail unless a union payload is the member that means success.
+ *
+ * HEB signals refusal by returning a *different* member rather than a GraphQL error, so
+ * every one of these reads structurally fine to `HebClient` while carrying nothing but a
+ * `__typename`. Mapping one produces a confident empty answer — no lists, no search
+ * results, an empty shopping list — which is worse than an error, because the user stops
+ * looking for the problem.
+ */
+function assertUnion(
+  payload: { __typename?: string } | undefined,
+  expected: string,
+  attempted: string,
+): void {
+  const typename = payload?.__typename;
+  // Absent means the selection did not ask for one; that is not evidence of failure.
+  if (typename === undefined || typename === expected) return;
+
+  throw new HebError('UPSTREAM_ERROR', `HEB refused to ${attempted}.`, {
+    details: { returned: typename },
+  });
+}
 
 function assertMutationSucceeded(
   payload: { __typename?: string } | undefined,

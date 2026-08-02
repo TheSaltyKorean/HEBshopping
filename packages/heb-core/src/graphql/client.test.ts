@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { HebClient } from './client.js';
 import { addItemsDocument, getShoppingListsDocument } from './operations.js';
 import { HebError, hasCode } from '../errors.js';
+import { HebListOps } from '../lists.js';
 import type { SessionState, Store } from '../types.js';
 
 const NOW = 1_800_000_000_000; // fixed clock; no wall-clock dependence in tests
@@ -200,5 +201,44 @@ describe('politeness throttle', () => {
     const gaps = starts.slice(1).map((start, index) => start - starts[index]!);
     expect(starts).toHaveLength(4);
     for (const gap of gaps) expect(gap).toBeGreaterThanOrEqual(45);
+  });
+});
+
+describe('union rejection is not an empty result', () => {
+  it('does not report "no lists" when HEB refuses the read', async () => {
+    // The refusal arrives as a different union member carrying only __typename, which is a
+    // structurally valid data envelope. Mapping it would produce a confident, wrong, and
+    // unactionable "this account has no shopping lists".
+    const fetchImpl = respond(
+      JSON.stringify({ data: { getShoppingListsV2: { __typename: 'ShoppingListErrorV2' } } }),
+    );
+    const ops = new HebListOps({ client: client(fetchImpl) });
+    await expect(ops.getLists()).rejects.toSatisfy((error: unknown) =>
+      hasCode(error, 'UPSTREAM_ERROR'),
+    );
+  });
+
+  it('does not report "no products" when HEB refuses the search', async () => {
+    const fetchImpl = respond(
+      JSON.stringify({
+        data: {
+          getShoppingListV2: {
+            __typename: 'ShoppingListV2',
+            id: 'l',
+            name: 'Shopping',
+            fulfillment: { store: { storeNumber: 1 } },
+            itemPage: { items: [] },
+          },
+        },
+      }),
+    );
+    const ops = new HebListOps({ client: client(fetchImpl), listId: 'l' });
+    await ops.getList();
+
+    const refused = respond(
+      JSON.stringify({ data: { productSearchItems: { __typename: 'SearchErrorV2' } } }),
+    );
+    const ops2 = new HebListOps({ client: client(refused), listId: 'l' });
+    await expect(ops2.searchProducts('milk')).rejects.toThrow();
   });
 });

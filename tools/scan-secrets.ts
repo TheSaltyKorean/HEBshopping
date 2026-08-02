@@ -31,7 +31,7 @@ const RULES: Rule[] = [
   },
   {
     name: 'HEB session cookie',
-    pattern: /\b(reese84|sat|sst|_session|visid_incap_\d+)\s*=\s*[A-Za-z0-9%_.+/-]{16,}/g,
+    pattern: /\b(reese84|sat|sst\.sig|sst|_session|visid_incap_\d+)\s*=\s*[A-Za-z0-9%_.+/-]{16,}/g,
     note: 'live credential — rotate immediately if this ever reached a remote',
   },
   {

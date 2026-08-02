@@ -57,6 +57,11 @@ describe('parseSpokenRequest', () => {
     ['a dozen eggs', 1, 'dozen eggs'],
     ['a couple of lemons', 2, 'lemons'],
     ['12 eggs', 12, 'eggs'],
+    // Zero is a refusal, not a count. Treating it as one would reach addItem with
+    // quantity 0, and the initial mutation adds a line regardless — so asking for none
+    // would put one on the list.
+    ['0 bananas', 1, '0 bananas'],
+    ['zero bananas', 1, 'zero bananas'],
   ])('%s → quantity %i, query "%s"', (input, quantity, query) => {
     expect(parseSpokenRequest(input)).toEqual({ quantity, query });
   });

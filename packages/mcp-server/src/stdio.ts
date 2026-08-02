@@ -19,15 +19,18 @@ import { createHebMcpServer, SERVER_NAME, SERVER_VERSION } from './server.js';
 const sessionPath = resolve(process.env['HEB_SESSION_PATH'] ?? '.session/session.json');
 const listId = process.env['HEB_LIST_ID'];
 
-// A factory, not an instance: this process outlives every tool call, and a shared
-// `HebListOps` would keep serving its first list snapshot for the whole session.
+// One client, many list-ops.
+//
+// `HebListOps` must be per-call, because it caches the resolved list and this process
+// outlives every tool call. `HebClient` must NOT be: it owns the concurrency cap and the
+// inter-request spacing, and a fresh instance per call starts with empty throttle state —
+// so concurrent tool calls would hit HEB simultaneously, which is exactly the burst the
+// politeness gate exists to prevent.
 const store = new FileStore(sessionPath);
+const client = new HebClient({ store });
+
 const server = createHebMcpServer({
-  createListOps: () =>
-    new HebListOps({
-      client: new HebClient({ store }),
-      ...(listId === undefined ? {} : { listId }),
-    }),
+  createListOps: () => new HebListOps({ client, ...(listId === undefined ? {} : { listId }) }),
 });
 
 // stderr, deliberately — see the note above.

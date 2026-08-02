@@ -28,6 +28,7 @@ import {
   isHebError,
   type Cookie,
   type SessionState,
+  type Store,
 } from '@heb/core';
 import { launchBrowser, PROFILE_DIR } from './lib/browser.js';
 
@@ -99,6 +100,26 @@ function describe(session: SessionState): void {
   }
 }
 
+/**
+ * Does this cookie jar actually authenticate, right now?
+ *
+ * Deliberately checked against an in-memory store so nothing is persisted until it is
+ * known good — the stored session is the valuable artifact and must not be clobbered by a
+ * candidate that turns out to be dead.
+ */
+async function worksAgainstHeb(candidate: SessionState): Promise<boolean> {
+  const memory: Store = {
+    getSession: async () => candidate,
+    putSession: async () => undefined,
+  };
+  try {
+    await new HebClient({ store: memory }).execute(getShoppingListsDocument());
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 async function main(): Promise<void> {
   const options = parseArgs(process.argv.slice(2));
 
@@ -137,8 +158,23 @@ async function main(): Promise<void> {
     const health = checkSession(candidate, Date.now());
 
     if (health.usable) {
-      session = candidate;
-      break;
+      // Cookie expiry is a client-side claim, not proof. A profile can hold every required
+      // cookie, all unexpired, while HEB or Imperva has already invalidated the session
+      // server-side — and then this poll would exit instantly, overwrite the stored
+      // session with the dead jar, fail verification, and exit. Re-running would repeat
+      // that forever, never giving the human a chance to log in.
+      //
+      // So prove the jar works *before* keeping it, and keep waiting when it does not.
+      if (await worksAgainstHeb(candidate)) {
+        session = candidate;
+        break;
+      }
+      if (lastReason !== 'stale') {
+        console.log('  … cookies look complete but HEB rejects them — please log in again');
+        lastReason = 'stale';
+      }
+      await sleep(POLL_INTERVAL_MS);
+      continue;
     }
     if (health.reason !== undefined && health.reason !== lastReason) {
       console.log(`  … ${health.reason}`);

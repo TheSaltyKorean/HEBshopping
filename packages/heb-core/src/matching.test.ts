@@ -307,3 +307,12 @@ describe('personal preferences break ties the words cannot', () => {
     }
   });
 });
+
+describe('a sole list line is unambiguous', () => {
+  it('does not treat one candidate as separated on its own', () => {
+    // Catalog semantics: a lone search result usually means an over-constrained query hid
+    // better ones, so it must not auto-write. Removal is the opposite case — see
+    // HebListOps.rankLines, which special-cases a one-item list.
+    expect(separation([0.9])).toBe(0);
+  });
+});

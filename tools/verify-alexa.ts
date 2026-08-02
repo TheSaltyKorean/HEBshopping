@@ -21,6 +21,9 @@ const store = new FileStore(SESSION_PATH);
 /** Lines this run created. Only these may be deleted. */
 const createdLines = new Set<string>();
 
+/** lineId -> the quantity it had before this run incremented it. */
+const raisedQuantities = new Map<string, number>();
+
 /**
  * `HebListOps` that physically cannot delete a line this run did not create.
  *
@@ -36,8 +39,22 @@ function guardedListOps(): HebListOps {
   const realRemove = ops.removeItem.bind(ops);
 
   ops.addItem = async (input) => {
+    // Capture the pre-existing quantity *before* the mutation, because afterwards there is
+    // no way to know what it was. An `already_present` add increments a real household
+    // line, and tracking only created line ids would leave that increment behind on a run
+    // that otherwise reports success.
+    const before = new Map(
+      (await ops.getList()).items.map((item) => [item.lineId, item.quantity] as const),
+    );
+
     const result = await realAdd(input);
     if (result.status === 'added') createdLines.add(result.item.lineId);
+    if (result.status === 'already_present') {
+      const previous = before.get(result.item.lineId);
+      if (previous !== undefined && !raisedQuantities.has(result.item.lineId)) {
+        raisedQuantities.set(result.item.lineId, previous);
+      }
+    }
     return result;
   };
 
@@ -128,7 +145,17 @@ async function cleanUp(before: ReadonlySet<string>): Promise<void> {
     await listOps.removeItem({ lineId: item.lineId });
     console.log(`\n🧹 cleaned up: ${item.product?.name ?? item.text}`);
   }
-  if (added.length === 0) console.log('\n🧹 nothing to clean up.');
+
+  // Increments are undone by restoring the old quantity, never by deleting the line: it
+  // belongs to the household, not to this run.
+  for (const [lineId, previous] of raisedQuantities) {
+    await listOps.setItemQuantity(lineId, previous);
+    console.log(`\n🧹 restored quantity ${previous} on a pre-existing line`);
+  }
+
+  if (added.length === 0 && raisedQuantities.size === 0) {
+    console.log('\n🧹 nothing to clean up.');
+  }
 }
 
 async function main(): Promise<void> {
@@ -147,42 +174,52 @@ async function main(): Promise<void> {
     ),
   );
 
-  await say('(open the skill)', {
-    type: 'LaunchRequest',
-    requestId: 'r',
-    timestamp: new Date().toISOString(),
-    locale: 'en-US',
-  });
+  // Everything from here can mutate the real list, so cleanup must be unconditional: an
+  // assertion failure or a timed-out call would otherwise jump straight to the top-level
+  // catch and leave a new grocery sitting on someone's list.
+  try {
+    await say('(open the skill)', {
+      type: 'LaunchRequest',
+      requestId: 'r',
+      timestamp: new Date().toISOString(),
+      locale: 'en-US',
+    });
 
-  await say('what is on my list', intent('ReadListIntent'));
+    await say('what is on my list', intent('ReadListIntent'));
 
-  // A deliberately vague request: this should ask rather than write.
-  const asked = await say('add green chili enchilada sauce', intent('AddItemIntent', 'green chili enchilada sauce'));
-  if (!asked.startsWith('Did you mean')) {
-    throw new Error('expected a vague request to be confirmed rather than written');
-  }
+    // A deliberately vague request: this should ask rather than write.
+    const asked = await say('add green chili enchilada sauce', intent('AddItemIntent', 'green chili enchilada sauce'));
+    if (!asked.startsWith('Did you mean')) {
+      throw new Error('expected a vague request to be confirmed rather than written');
+    }
 
-  await say('no', intent('AMAZON.NoIntent'));
-  const added = await say('yes', intent('AMAZON.YesIntent'));
-  if (!/^Added |already on your list/.test(added)) {
-    throw new Error(`expected "yes" to add the offered product, got: ${added}`);
-  }
-
-  await say('what is on my list', intent('ReadListIntent'));
-
-  // Exercise spoken removal for real. `guardedListOps` refuses any line this run did not
-  // create, so a mis-ranked confident removal fails loudly instead of destroying data.
-  const removal = await say('remove enchilada sauce', intent('RemoveItemIntent', 'enchilada sauce'));
-  if (!/Removed|Did you mean|could not find/.test(removal)) {
-    throw new Error(`removal did not engage, got: ${removal}`);
-  }
-  if (removal.startsWith('Did you mean')) {
     await say('no', intent('AMAZON.NoIntent'));
+    const added = await say('yes', intent('AMAZON.YesIntent'));
+    if (!/^Added |already on your list/.test(added)) {
+      throw new Error(`expected "yes" to add the offered product, got: ${added}`);
+    }
+
+    await say('what is on my list', intent('ReadListIntent'));
+
+    // Exercise spoken removal for real. `guardedListOps` refuses any line this run did not
+    // create, so a mis-ranked confident removal fails loudly instead of destroying data.
+    const removal = await say('remove enchilada sauce', intent('RemoveItemIntent', 'enchilada sauce'));
+    if (!/Removed|Did you mean|could not find/.test(removal)) {
+      throw new Error(`removal did not engage, got: ${removal}`);
+    }
+    if (removal.startsWith('Did you mean')) {
+      await say('no', intent('AMAZON.NoIntent'));
+    }
+
+    await say('stop', intent('AMAZON.StopIntent'));
+
+
+  } finally {
+    await cleanUp(before).catch((error: unknown) => {
+      console.error('\n⛔ CLEANUP FAILED — the list may still hold test data:', error);
+    });
   }
 
-  await say('stop', intent('AMAZON.StopIntent'));
-
-  await cleanUp(before);
   await say('what is on my list', intent('ReadListIntent'));
 
   console.log('\n✅ Alexa skill verified against the real list: launch, read, ambiguous-add');

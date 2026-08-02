@@ -119,14 +119,27 @@ export function extractSize(name: string): string | null {
  */
 export function speakableOffers(products: readonly Product[]): string[] {
   const base = products.map(speakableProduct);
-  const counts = new Map<string, number>();
-  for (const name of base) counts.set(name, (counts.get(name) ?? 0) + 1);
+  const tally = (names: readonly string[]): Map<string, number> => {
+    const counts = new Map<string, number>();
+    for (const name of names) counts.set(name, (counts.get(name) ?? 0) + 1);
+    return counts;
+  };
 
-  return base.map((name, index) => {
-    if ((counts.get(name) ?? 0) < 2) return name;
+  const initial = tally(base);
+  const withSizes = base.map((name, index) => {
+    if ((initial.get(name) ?? 0) < 2) return name;
     const size = extractSize(products[index]!.name);
     return size === null ? name : `${name}, ${size}`;
   });
+
+  // Re-check, because adding the size does not always separate them: two products can
+  // share a size ("Acme Original Tomato Sauce, 12 oz" and "Acme Classic ..., 12 oz" both
+  // shorten to the same words), or neither may carry one. Falling back to the full name is
+  // verbose, but a long question the user can answer beats a short one they cannot.
+  const after = tally(withSizes);
+  return withSizes.map((name, index) =>
+    (after.get(name) ?? 0) < 2 ? name : products[index]!.name,
+  );
 }
 
 /**

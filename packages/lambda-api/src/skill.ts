@@ -416,6 +416,19 @@ function errorHandler(): ErrorHandler {
     canHandle: () => true,
     handle(input, error) {
       if (isHebError(error)) {
+        // AMBIGUOUS_LIST covers both "several lists" and "none at all", and the remedies
+        // are opposites. Telling someone with no lists to pick one is advice they cannot
+        // act on, so branch on the count the error carries.
+        if (error.code === 'AMBIGUOUS_LIST' && error.details?.['listCount'] === 0) {
+          console.error('HebError AMBIGUOUS_LIST (no lists)');
+          return input.responseBuilder
+            .speak(
+              'You do not have an H-E-B shopping list yet. Create one in the H-E-B app, ' +
+                'then ask me again.',
+            )
+            .withShouldEndSession(true)
+            .getResponse();
+        }
         // The CODE only. Not the message, and not `details`: PRODUCT_NOT_FOUND embeds the
         // spoken grocery query and AMBIGUOUS_LIST embeds list names, so logging either
         // would retain a household's shopping in CloudWatch indefinitely.

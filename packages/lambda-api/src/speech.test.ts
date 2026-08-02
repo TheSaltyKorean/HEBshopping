@@ -197,3 +197,23 @@ describe('free-text lines have no product', () => {
     expect(cardList([freeText('pico de gallo')])).toContain('pico de gallo');
   });
 });
+
+describe('offers are always distinguishable', () => {
+  it('falls back to full names when the size does not separate them', () => {
+    // Adding the size is not always enough: these two share it, so the shortened forms
+    // stay identical and "yes" would pick a product the user could not choose.
+    const spoken = speakableOffers([
+      product('Acme Original Tomato Sauce, 12 oz'),
+      product('Acme Classic Tomato Sauce, 12 oz'),
+    ]);
+    expect(spoken[0]).not.toBe(spoken[1]);
+  });
+
+  it('falls back when neither candidate carries a size', () => {
+    const spoken = speakableOffers([
+      product('Acme Original Tomato Sauce'),
+      product('Acme Classic Tomato Sauce'),
+    ]);
+    expect(spoken[0]).not.toBe(spoken[1]);
+  });
+});

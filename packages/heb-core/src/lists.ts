@@ -84,6 +84,17 @@ export class HebListOps implements ListOps {
   /** Which list `cachedStoreId` belongs to — stores are per-list, not per-account. */
   private cachedStoreListId: string | undefined;
   private cachedPurchasedIds: ReadonlySet<string> | undefined;
+  /** Which store `cachedPurchasedIds` was fetched for — the carousel is per-store. */
+  private cachedPurchasedStoreId: number | undefined;
+  /**
+   * The list request currently in flight, if any.
+   *
+   * `resolveQuery` deliberately runs the search and the purchase-history fetch in
+   * parallel, and both need the list first. Without this they each miss the empty cache
+   * and issue an identical `getShoppingListV2` — a redundant round trip on Alexa's
+   * critical path, plus the throttle delay it earns.
+   */
+  private inFlightList: Promise<HebList> | undefined;
 
   constructor(options: HebListOpsOptions) {
     this.client = options.client;
@@ -122,7 +133,11 @@ export class HebListOps implements ListOps {
     const lists = await this.getLists();
     if (lists.length === 1) return lists[0]!.listId;
     if (lists.length === 0) {
-      throw new HebError('AMBIGUOUS_LIST', 'This HEB account has no shopping lists.');
+      // Same code, different remedy — `listCount` is what lets a surface tell the two
+      // apart. "Pick one of your lists" is impossible advice for an account that has none.
+      throw new HebError('AMBIGUOUS_LIST', 'This HEB account has no shopping lists.', {
+        details: { listCount: 0 },
+      });
     }
     throw new HebError(
       'AMBIGUOUS_LIST',
@@ -140,7 +155,15 @@ export class HebListOps implements ListOps {
     // + mutation, because `resolveStoreId` already fetched the list a moment earlier. Two
     // redundant round trips is a large fraction of Alexa's ~8s ceiling.
     if (this.cachedList !== undefined && this.cachedList.listId === id) return this.cachedList;
+    if (this.inFlightList !== undefined) return this.inFlightList;
 
+    this.inFlightList = this.fetchList(id).finally(() => {
+      this.inFlightList = undefined;
+    });
+    return this.inFlightList;
+  }
+
+  private async fetchList(id: string): Promise<HebList> {
     const data = await this.client.execute<{
       getShoppingListV2: HebListPayload & { __typename?: string };
     }>(getShoppingListDocument(id));
@@ -195,10 +218,14 @@ export class HebListOps implements ListOps {
    * error here degrades to "no purchase history" rather than propagating.
    */
   private async purchasedIds(listId?: string): Promise<ReadonlySet<string>> {
-    if (this.cachedPurchasedIds !== undefined) return this.cachedPurchasedIds;
+    const storeId = await this.resolveStoreId(listId);
+    // Keyed by store, because the carousel is queried by store: reusing list A's history
+    // for list B would personalise B's ranking with products bought somewhere else.
+    if (this.cachedPurchasedIds !== undefined && this.cachedPurchasedStoreId === storeId) {
+      return this.cachedPurchasedIds;
+    }
 
     try {
-      const storeId = await this.resolveStoreId(listId);
       const data = await this.client.execute<{
         getBuyItAgainCarousel?: { items?: Array<{ id?: string }> };
       }>(buyItAgainDocument(storeId));
@@ -211,6 +238,7 @@ export class HebListOps implements ListOps {
     } catch {
       this.cachedPurchasedIds = new Set();
     }
+    this.cachedPurchasedStoreId = storeId;
     return this.cachedPurchasedIds;
   }
 
@@ -420,7 +448,13 @@ export class HebListOps implements ListOps {
     );
     if (match === null) return [];
 
-    const confident = isConfident(match);
+    // Catalog separation semantics are wrong for a one-item list. `separation()` returns
+    // zero for a singleton — correct for search, where a lone result usually means an
+    // over-constrained query hid better ones — but a list is a closed set: if exactly one
+    // line matches the words at all, there is nothing it could be confused with. Without
+    // this, "remove the milk" from a one-item list asks a pointless question, and MCP
+    // claims several items match when only one exists.
+    const confident = list.items.length === 1 || isConfident(match);
     const byLineId = new Map(list.items.map((item) => [item.lineId, item] as const));
 
     return [match.product, ...match.alternatives]

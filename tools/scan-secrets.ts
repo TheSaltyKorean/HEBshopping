@@ -108,27 +108,41 @@ function contentToScan(path: string, staged: ReadonlySet<string>): string | null
     try {
       return execFileSync('git', ['show', `:${path}`], {
         encoding: 'utf8',
-        maxBuffer: 32 * 1024 * 1024,
+        maxBuffer: MAX_SCAN_BYTES,
       });
     } catch {
-      return null; // binary or unreadable from the index
+      return null;
     }
   }
 
   try {
-    if (statSync(path).size > 2_000_000) return null;
+    if (statSync(path).size > MAX_SCAN_BYTES) return null;
     return readFileSync(path, 'utf8');
   } catch {
     return null;
   }
 }
 
+/**
+ * Files this gate could not read.
+ *
+ * Silently skipping them is the one failure mode a secret scanner must not have: a large
+ * capture full of live cookies is *exactly* the file that trips a size limit, and reporting
+ * "no secrets found" over it is worse than not running at all. Unreadable is treated as
+ * unproven, and unproven fails the gate.
+ */
+const MAX_SCAN_BYTES = 32 * 1024 * 1024;
+const unscanned: string[] = [];
+
 let findings = 0;
 const staged = stagedPaths();
 
 for (const path of committableFiles()) {
   const content = contentToScan(path, staged);
-  if (content === null) continue;
+  if (content === null) {
+    unscanned.push(path);
+    continue;
+  }
 
   for (const rule of RULES) {
     for (const match of content.matchAll(rule.pattern)) {
@@ -141,6 +155,14 @@ for (const path of committableFiles()) {
       findings += 1;
     }
   }
+}
+
+if (unscanned.length > 0) {
+  console.error(`\n⛔ ${unscanned.length} committable file(s) could not be inspected:`);
+  for (const path of unscanned) console.error(`   ${path}`);
+  console.error('   A scanner that skips files cannot certify them. Exclude them via');
+  console.error('   .gitignore if they do not belong in the repo, or make them readable.');
+  process.exit(1);
 }
 
 if (findings > 0) {

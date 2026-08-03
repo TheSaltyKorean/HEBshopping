@@ -260,10 +260,35 @@ Worth knowing before you're surprised by it.
 | Clear match | Added, and confirmed back using the **resolved product name** — not what you said. |
 | Vague request | **Nothing is written.** You get candidate products and a question. |
 | Already on the list | Quantity increases; it doesn't duplicate the line. |
-| No match at all | Says so. **Known gap:** the H-E-B mobile app offers `Add "<what you typed>" to your list` for free text; that mutation has not been found yet, so this project cannot yet fall back to it. |
+| No match at all | Falls back to a **plain written line** — the same thing H-E-B's own `Add "<what you typed>" to list` button creates. You get a line saying what you asked for, with no product attached. |
+| Asked for by weight | "Two pounds of sliced turkey" orders **two pounds**, not two turkeys. See below. |
 
 The bias is deliberate: an unnecessary "did you mean?" costs two seconds, while silently
 adding the wrong product costs a wasted trip to the store.
+
+### Buying by the pound
+
+Deli meat and cheese sliced to order, and seafood, are priced per pound, so you can ask for
+an amount:
+
+> "Alexa, ask my grocery list to add two pounds of honey smoked turkey breast"
+> "…add half a pound of sliced cheddar"
+> "…add a pound and a half of jumbo shrimp"
+
+H-E-B accepts weights on a fixed ladder — quarter-pound steps — so your amount is rounded to
+the nearest rung, ties rounding **up**. The confirmation says what actually landed, and the
+list reads back in pounds: *"2 pounds of H-E-B Deli Honey-Smoked Turkey Breast."*
+
+Two things this deliberately does **not** do:
+
+- **Packaged goods ignore the weight.** "Two pounds of chicken breasts" gets you one package
+  of chicken breasts, because that is how they are sold — you cannot buy 2 lb of a 2.85 lb
+  package. The spoken confirmation names the package, so you always hear which happened.
+- **Ounces aren't understood.** The ladder has no rung for "six ounces", and rounding your
+  order without saying so would be worse than not trying. Ask in pounds instead.
+
+A phrase only counts as an amount when it reads like one — "two pounds **of** turkey".
+"1.5 lb ground beef" and "pound cake" are product names and are searched as written.
 
 ### It learns your habits
 

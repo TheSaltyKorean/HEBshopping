@@ -156,6 +156,93 @@ export interface SpokenRequest {
   quantity: number;
   /** The product description, with any leading count removed. */
   query: string;
+  /**
+   * Pounds, when the phrase asked for an amount by weight ("two pounds of sliced turkey").
+   *
+   * Only meaningful for counter goods; `addItem` drops it for packaged products, which are
+   * bought by the package. When present, `quantity` is 1.
+   */
+  weight?: number;
+}
+
+/** Units that mean pounds. Ounces are deliberately absent — see `parseWeightPhrase`. */
+const POUND_WORDS = new Set(['pound', 'pounds', 'lb', 'lbs']);
+
+/** Spoken fractions of a pound. A quarter is H-E-B's own smallest deli increment. */
+const FRACTION_WORDS: Readonly<Record<string, number>> = { half: 0.5, quarter: 0.25 };
+
+/** Articles skipped while reading a weight phrase; everything else is significant. */
+const ARTICLES = new Set(['a', 'an', 'the']);
+
+/**
+ * Read a leading "two pounds of …" phrase, if that is what this is.
+ *
+ * ── Why the "of" is required ────────────────────────────────────────────────────────
+ * "Two pounds **of** sliced turkey" is an order for an amount. "1.5 lb ground beef" is the
+ * name of a package — the number describes the product, exactly like "two percent milk",
+ * and stripping it would search for plain "ground beef" and lose the size the speaker
+ * asked for. English marks the difference with `of`, so this does too. The one exception
+ * is an explicit fraction ("half a pound turkey"), which is never a package name.
+ *
+ * "Pound cake" survives for the same reason: no `of` follows, so it stays in the query.
+ *
+ * Ounces are not handled. H-E-B's ladder is in quarter-pound steps, so an ounce request
+ * cannot be honoured precisely, and silently rounding "six ounces" to half a pound is a
+ * worse answer than searching for it as written.
+ *
+ * Returns null when the phrase is not a weight request, leaving the caller's normal
+ * count-and-query parse untouched.
+ */
+function parseWeightPhrase(raw: readonly string[]): { pounds: number; rest: string[] } | null {
+  let index = 0;
+  const skipArticles = (): void => {
+    while (index < raw.length && ARTICLES.has(raw[index]!)) index += 1;
+  };
+
+  skipArticles();
+  if (index >= raw.length) return null;
+
+  const first = raw[index]!;
+  const fraction = FRACTION_WORDS[first];
+  const numeric = NUMBER_WORDS[first] ?? (/^\d+(?:\.\d+)?$/.test(first) ? Number(first) : undefined);
+
+  // No leading amount at all means an implicit one: "a pound of ham".
+  let pounds = fraction ?? numeric ?? 1;
+  const explicitFraction = fraction !== undefined;
+  if (fraction !== undefined || numeric !== undefined) index += 1;
+
+  // "two and a half pounds" — the fraction can precede the unit as well as follow it.
+  const readAndAHalf = (): boolean => {
+    let cursor = index;
+    if (raw[cursor] !== 'and') return false;
+    cursor += 1;
+    while (cursor < raw.length && ARTICLES.has(raw[cursor]!)) cursor += 1;
+    const extra = FRACTION_WORDS[raw[cursor] ?? ''];
+    if (extra === undefined) return false;
+    pounds += extra;
+    index = cursor + 1;
+    return true;
+  };
+  const fractionBeforeUnit = readAndAHalf();
+
+  skipArticles();
+  if (index >= raw.length || !POUND_WORDS.has(raw[index]!)) return null;
+  index += 1;
+
+  // "a pound and a half of turkey" — same fraction, on the other side of the unit.
+  const fractionAfterUnit = fractionBeforeUnit ? false : readAndAHalf();
+
+  skipArticles();
+  // The `of` is what distinguishes an amount from a package name. An explicit fraction
+  // carries the same signal on its own, since no product is called "half a pound turkey".
+  const ordered = raw[index] === 'of' || explicitFraction || fractionBeforeUnit || fractionAfterUnit;
+  if (raw[index] === 'of') index += 1;
+  if (!ordered) return null;
+
+  const rest = raw.slice(index).filter((token) => !FILLER.has(token));
+  if (rest.length === 0 || !(pounds > 0)) return null;
+
+  return { pounds, rest };
 }
 
 /**
@@ -166,6 +253,13 @@ export interface SpokenRequest {
  */
 export function parseSpokenRequest(text: string): SpokenRequest {
   const raw = tokenize(text);
+
+  // Weight first: "two pounds of sliced turkey" is one order for an amount, not two
+  // turkeys, and the count parse below would otherwise read the two as a quantity.
+  const weighed = parseWeightPhrase(raw);
+  if (weighed !== null) {
+    return { quantity: 1, query: weighed.rest.join(' '), weight: weighed.pounds };
+  }
 
   // "A 3 Musketeers bar" is one bar. The article is filtered as filler a line later, which
   // makes that phrase indistinguishable from "3 Musketeers bars" — and the brand cannot be
@@ -419,8 +513,8 @@ export function confidenceFrom(topCoverage: number, sep: number): number {
  * Rank candidates and report the best with a calibrated confidence.
  *
  * Returns `null` when nothing matches at all, which callers surface as
- * `PRODUCT_NOT_FOUND`. NOTE: the HEB mobile app does offer a free-text add, so this is a
- * gap in this project rather than a limit of the platform — see errors.ts.
+ * `PRODUCT_NOT_FOUND` — a recoverable state, since `addItem({ text })` can still put the
+ * request on the list as a plain written line. See errors.ts.
  */
 export function matchProducts(
   query: string,

@@ -27,6 +27,9 @@ const text = (body: string, isError = false): TextResult =>
   isError ? { content: [{ type: 'text', text: body }], isError: true } : { content: [{ type: 'text', text: body }] };
 
 function describeItem(item: ListItem): string {
+  // A counter line is measured in pounds; its `quantity` is an artefact of how HEB stores
+  // the row and reporting "1 ×" beside a 2 lb order of sliced turkey is simply wrong.
+  if (item.weight !== undefined) return `${item.weight} lb ${item.text}`;
   return item.quantity > 1 ? `${item.quantity} × ${item.text}` : item.text;
 }
 
@@ -59,8 +62,9 @@ function toErrorText(error: unknown): TextResult {
     BOT_CHALLENGE: 'HEB served a bot check. Wait a moment and try once more.',
     PRODUCT_NOT_FOUND:
       'No catalog product matched. Try a brand name, or Spanish wording — much of this ' +
-      'catalog is named in Spanish. (HEB lists can hold free text, but only the mobile ' +
-      'app can create such lines today.)',
+      'catalog is named in Spanish. If nothing matches, call heb_add_item again with ' +
+      '`text` to put the request on the list as a plain written line, exactly as the ' +
+      "H-E-B app's own \"Add … to list\" button does.",
     AMBIGUOUS_LIST_EMPTY:
       'This HEB account has no shopping lists at all. Tell the user to create one in the ' +
       'H-E-B app; nothing can be added until they do.',
@@ -91,7 +95,9 @@ function describeAddResult(result: AddResult): TextResult {
       return text(`Added to the HEB list: ${describeItem(result.item)}`);
     case 'already_present':
       return text(
-        `Already on the list — quantity is now ${result.item.quantity}: ${result.item.text}`,
+        result.item.weight === undefined
+          ? `Already on the list — quantity is now ${result.item.quantity}: ${result.item.text}`
+          : `Already on the list — now ${result.item.weight} lb of ${result.item.text}`,
       );
     case 'needs_confirmation': {
       // Candidates are returned inline precisely so the model does not need a separate
@@ -184,7 +190,8 @@ export function createHebMcpServer({ createListOps }: CreateServerOptions): McpS
       title: 'Add an item to the HEB shopping list',
       description:
         'WRITES to the H-E-B shopping list. Supply exactly one of `query` (free text to be ' +
-        'matched) or `productId` (an exact product, e.g. from heb_search_product). ' +
+        'matched against the catalog), `productId` (an exact product, e.g. from ' +
+        'heb_search_product), or `text` (a plain written line, matched against nothing). ' +
         'If `query` is too vague, nothing is written and candidate products are returned — ' +
         'ask the user which they meant and call again with that productId. ' +
         'Adding something already on the list increases its quantity rather than duplicating it.',
@@ -193,24 +200,53 @@ export function createHebMcpServer({ createListOps }: CreateServerOptions): McpS
           .string()
           .min(1)
           .optional()
-          .describe('Free text to match, e.g. "oat milk". Mutually exclusive with productId.'),
+          .describe('Free text to match, e.g. "oat milk". Mutually exclusive with productId and text.'),
         productId: z
           .string()
           .min(1)
           .optional()
-          .describe('Exact HEB product id. Mutually exclusive with query.'),
+          .describe('Exact HEB product id. Mutually exclusive with query and text.'),
+        text: z
+          .string()
+          .min(1)
+          .optional()
+          .describe(
+            'Add a plain written line instead of a catalog product — no search, no ' +
+              'matching. Use this when the catalog has nothing (PRODUCT_NOT_FOUND) or the ' +
+              'user asks for something generic like "birthday candles". Mutually ' +
+              'exclusive with query and productId.',
+          ),
         quantity: z.number().int().min(1).max(20).optional().describe('How many (default 1).'),
+        weight: z
+          .number()
+          .positive()
+          .max(20)
+          .optional()
+          .describe(
+            'Pounds, for counter goods sold by weight (deli meat and cheese sliced to ' +
+              'order, seafood) — e.g. 2 for "two pounds of sliced turkey". Rounded to the ' +
+              'nearest weight H-E-B accepts, usually a quarter pound. Ignored for packaged ' +
+              'goods, which are bought by the package; the reply says which happened.',
+          ),
       },
     },
-    async ({ query, productId, quantity }): Promise<TextResult> => {
-      if ((query === undefined) === (productId === undefined)) {
-        return text('Provide exactly one of `query` or `productId`.', true);
+    async ({ query, productId, text: line, quantity, weight }): Promise<TextResult> => {
+      const given = [query, productId, line].filter((value) => value !== undefined).length;
+      if (given !== 1) {
+        return text('Provide exactly one of `query`, `productId`, or `text`.', true);
+      }
+      if (line !== undefined && weight !== undefined) {
+        // A written line has no product behind it, so there is nothing that could be sold
+        // by the pound. Silently dropping the weight would misreport what landed.
+        return text('`weight` needs a catalog product; use `query` or `productId`.', true);
       }
       try {
         const result = await createListOps().addItem({
           ...(query === undefined ? {} : { query }),
           ...(productId === undefined ? {} : { productId }),
+          ...(line === undefined ? {} : { text: line }),
           ...(quantity === undefined ? {} : { quantity }),
+          ...(weight === undefined ? {} : { weight }),
         });
         return describeAddResult(result);
       } catch (error) {

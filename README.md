@@ -69,7 +69,9 @@ stored. They last 30–365 days (see *What discovery changed*), so it's a rare c
 | W5.1 search recovery | ✅ bilingual matching + broadened re-search |
 | W8 Alexa skill | ✅ handler, interaction model, verified against the real list |
 | W10 deploy | ✅ Terraform, DynamoDB store, MCP HTTP endpoint — see `docs/deploy.md` (not applied) |
-| W11 harden | not started |
+| W12 free-text lines | ✅ read and write — the same `Add "…" to list` line H-E-B's own UI creates |
+| W13 weight-based items | ✅ "two pounds of sliced turkey", snapped to H-E-B's quarter-pound ladder |
+| W11 harden | not started — needs a deployment (soak, latency, cost) |
 
 The full plan lives at `~/.claude/plans/frolicking-strolling-crab.md`.
 
@@ -150,6 +152,17 @@ offers password, emailed OTP, and passkey, and the latter two cannot be replayed
 Sessions last about a month, so it's a roughly monthly two-minute chore.
 
 ## Known limitations
+
+**One account, one household.** There are no named login profiles: the deployment is bound
+to whichever H-E-B account ran `npm run login`, and switching accounts means re-running it
+with `--switch`. Multi-profile support is a possible future update, not a current feature —
+see "Why there's no password field" above for why it is not simply a login form.
+
+**Ounces aren't understood.** H-E-B's counter ladder is in quarter-pound steps, so "six
+ounces of ham" cannot be honoured exactly. Rather than silently rounding someone's order,
+the phrase is left in the search query. Ask in pounds — "half a pound", "a pound and a
+half" — and the whole ladder is available.
+
 
 **Concurrent adds of the same product can lose one increment.** If two people say "add
 milk" within the same second — two Echoes, or an Echo and an agent — and that milk is

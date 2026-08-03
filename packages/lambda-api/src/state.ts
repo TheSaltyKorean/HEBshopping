@@ -37,6 +37,13 @@ export interface PendingChoice {
   spokenQuery: string;
   /** Only meaningful for an add. */
   quantity: number;
+  /**
+   * Pounds, when the add was phrased by weight. Only meaningful for an add.
+   *
+   * Carried across the dialog so answering "yes" to the second offer still orders two
+   * pounds — dropping it here would quietly turn the confirmation into a one-unit add.
+   */
+  weight?: number;
   offers: Offer[];
   /** Which offer is currently on the table. */
   index: number;

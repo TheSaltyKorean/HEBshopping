@@ -17,10 +17,10 @@ export type HebErrorCode =
   /**
    * No catalog match for the query.
    *
-   * Terminal *for now*. The HEB mobile app offers `Add "<text>" to your list` for exactly
-   * this case, so a free-text line is possible on the platform — the mutation behind that
-   * button has not been found yet (the web UI does not expose it, and the schema has both
-   * introspection and did-you-mean suggestions disabled).
+   * Recoverable, not terminal: H-E-B's own `Add "<text>" to list` affordance puts the
+   * request on the list as a plain written line, and this project can now create those —
+   * `addItem({ text })`, `heb_add_item` with `text`. Surfaces should offer that rather
+   * than reporting a dead end, because a line saying what someone asked for beats no line.
    */
   | 'PRODUCT_NOT_FOUND'
   /** Several lists exist and none is clearly the default. */

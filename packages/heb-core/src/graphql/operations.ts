@@ -44,6 +44,21 @@ function strList(values: readonly string[]): string {
   return `[${values.map(str).join(', ')}]`;
 }
 
+/**
+ * How a product declares that it is sold by the pound.
+ *
+ * `pricedByWeight` is true for counter goods — deli meat and cheese sliced to order,
+ * seafood — and false for everything packaged, *including* items whose name quotes a
+ * weight ("Boneless Chicken Breasts, Avg. 2.85 lbs" is one package, not 2.85 units).
+ * `weightSelectionIncrements` is the ladder H-E-B will accept, in pounds; at this store
+ * it is 0.25-lb steps. Asking for a weight off the ladder is rejected, so it is the
+ * authority on both the step and the minimum and maximum.
+ *
+ * Recovered from HEB's own captured responses after a field-name sweep found nothing —
+ * guessing at `isWeighted`/`soldByWeight`/`unitOfMeasure` was wrong on all counts.
+ */
+const WEIGHT_FIELDS = 'pricedByWeight SKUs { weightSelectionIncrements }';
+
 /** Sort applied to every list read. CATEGORY groups items the way the HEB app does. */
 const PAGE = '{ sort: CATEGORY, sortDirection: ASC }';
 
@@ -72,16 +87,22 @@ const LIST_FIELDS = `
         id
         quantity
         maximumQuantity
-        product { id fullDisplayName brand { name } }
+        # Pounds, for a line whose product is sold at the deli or seafood counter.
+        # Null on everything else — an ordinary packaged good has a quantity, not a weight.
+        weight
+        product { id fullDisplayName brand { name } ${WEIGHT_FIELDS} }
       }
       # Free-text lines. HEB's mobile app offers 'Add "<what you typed>" to your list'
       # for an unmatched search, and those lines come back as this member with the text
-      # in "note" and no product at all. Omitting the fragment does not omit the item —
+      # in \`genericName\` and no product at all. (\`note\` is a *separate* annotation,
+      # the "Add note" button in HEB's UI, and is normally null.) Omitting the fragment
+      # does not omit the item —
       # it arrives with only a __typename and is silently dropped, so Alexa and MCP
       # under-report a list that the H-E-B app shows correctly.
       ... on GenericShoppingListItemV2 {
         id
         quantity
+        genericName
         note
         checked
       }
@@ -183,7 +204,7 @@ export function searchProductsDocument(query: string, storeId: number): GraphqlD
             total
             items {
               __typename
-              ... on Product { id fullDisplayName brand { name } }
+              ... on Product { id fullDisplayName brand { name } ${WEIGHT_FIELDS} }
             }
           }
         }
@@ -195,6 +216,32 @@ export function searchProductsDocument(query: string, storeId: number): GraphqlD
 // ---------------------------------------------------------------------------
 // Mutations
 // ---------------------------------------------------------------------------
+
+/**
+ * Add a free-text line — the "Add \"<what you typed>\" to list" affordance.
+ *
+ * Same mutation as a product add; only the item shape differs — `genericName` where a
+ * product add sends `productId`. Captured from the web drawer, which offers this as soon
+ * as the search box has text.
+ *
+ * The capture's operation name is `addToShoppingListV2`, but that is the *browser's* name
+ * for the document, not the schema field — sending it verbatim fails validation with
+ * `Cannot query field "addToShoppingListV2" on type "Mutation"`. The field is
+ * `addShoppingListItemsV2`, the same one a product add uses (§2.1: operation names and
+ * field names differ).
+ */
+export function addTextDocument(listId: string, text: string): GraphqlDocument {
+  return {
+    operationName: 'HebAddShoppingListText',
+    query: `mutation HebAddShoppingListText {
+      ${listResult(`addShoppingListItemsV2(input: {
+        listId: ${str(listId)}
+        listItems: [{ item: { genericName: ${str(text)} } }]
+        page: ${PAGE}
+      })`)}
+    }`,
+  };
+}
 
 export function addItemsDocument(listId: string, productIds: readonly string[]): GraphqlDocument {
   // `listItems` is an array, so batch adds cost one round trip rather than N.
@@ -223,6 +270,32 @@ export function updateItemQuantityDocument(
         itemId: ${str(itemId)}
         listId: ${str(listId)}
         quantityOrWeight: { quantity: ${Math.trunc(quantity)} }
+        page: ${PAGE}
+      })`)}
+    }`,
+  };
+}
+
+/**
+ * Set a line's weight, in pounds — the counter-goods counterpart of the quantity update.
+ *
+ * `QuantityOrWeightInputV2` carries both `quantity` and `weight` (verified against the
+ * validator, which named the type); which one applies is a property of the product, not
+ * of the caller. Callers must snap `pounds` onto the product's
+ * `weightSelectionIncrements` first — an off-ladder value is refused.
+ */
+export function updateItemWeightDocument(
+  listId: string,
+  itemId: string,
+  pounds: number,
+): GraphqlDocument {
+  return {
+    operationName: 'HebUpdateShoppingListItemWeight',
+    query: `mutation HebUpdateShoppingListItemWeight {
+      ${listResult(`updateShoppingListItemV2(input: {
+        itemId: ${str(itemId)}
+        listId: ${str(listId)}
+        quantityOrWeight: { weight: ${pounds} }
         page: ${PAGE}
       })`)}
     }`,

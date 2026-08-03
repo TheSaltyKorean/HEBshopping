@@ -9,7 +9,9 @@ import { HebError, isHebError } from './errors.js';
 import { HebClient } from './graphql/client.js';
 import {
   addItemsDocument,
+  addTextDocument,
   buyItAgainDocument,
+  updateItemWeightDocument,
   deleteItemsDocument,
   getShoppingListDocument,
   getShoppingListsDocument,
@@ -73,12 +75,20 @@ interface HebProduct {
   /** Object on list items, plain string in search results. */
   brand?: string | { name?: string };
   maximumOrderQuantity?: number;
+  /** True for counter goods sold per pound. See `WEIGHT_FIELDS` in operations.ts. */
+  pricedByWeight?: boolean;
+  /** One entry per SKU; the accepted weights live inside. */
+  SKUs?: Array<{ weightSelectionIncrements?: number[] }>;
 }
 
 interface HebListItem {
   id: string;
   quantity?: number;
-  /** Free-text content on a GenericShoppingListItemV2; absent on product lines. */
+  /** Pounds, on a counter line. Null on everything else. */
+  weight?: number | null;
+  /** The text of a free-text line (GenericShoppingListItemV2). */
+  genericName?: string;
+  /** A separate annotation — HEB's "Add note" button. Normally null, even on text lines. */
   note?: string;
   maximumQuantity?: number;
   product?: HebProduct;
@@ -355,9 +365,14 @@ export class HebListOps implements ListOps {
   }
 
   async addItem(input: AddItemInput): Promise<AddResult> {
-    if ((input.query === undefined) === (input.productId === undefined)) {
-      throw new TypeError('addItem requires exactly one of `query` or `productId`.');
+    const given = [input.query, input.productId, input.text].filter(
+      (value) => value !== undefined,
+    ).length;
+    if (given !== 1) {
+      throw new TypeError('addItem requires exactly one of `query`, `productId`, or `text`.');
     }
+
+    if (input.text !== undefined) return this.addText(input.text, input.listId);
 
     const listId = await this.resolveListId(input.listId);
     const quantity = input.quantity ?? 1;
@@ -387,6 +402,20 @@ export class HebListOps implements ListOps {
     );
 
     if (existing !== undefined) {
+      // A counter line is measured in pounds, so "add another pound of turkey" adds weight
+      // rather than a second line-unit — the same increment semantics, different unit.
+      // Never below what is already there, for the same reason quantity is floored.
+      if (input.weight !== undefined && existing.product?.pricedByWeight === true) {
+        const target = Math.max(
+          existing.weight ?? 0,
+          snapWeight((existing.weight ?? 0) + input.weight, existing.product.weightIncrements),
+        );
+        return {
+          status: 'already_present',
+          item: await this.adjustWeight(listId, existing, target),
+        };
+      }
+
       const ceiling = existing.maximumQuantity ?? Number.POSITIVE_INFINITY;
       // Never below what is already there. If HEB lowers a product's ceiling after the
       // line was created, clamping alone turns "add one more" into "take four away" —
@@ -495,6 +524,18 @@ export class HebListOps implements ListOps {
       }
     }
 
+    // A weight request only means something if the product is genuinely sold by the pound.
+    // For a packaged good ("Chicken Breasts, Avg. 2.85 lbs") it is not expressible — you
+    // buy the package — so the weight is dropped and one package is added. The caller can
+    // tell which happened: a weighted line comes back with `weight` set.
+    if (input.weight !== undefined && added.product?.pricedByWeight === true) {
+      const target = Math.max(
+        added.weight ?? 0,
+        snapWeight(input.weight, added.product.weightIncrements),
+      );
+      return { status: 'added', item: await this.adjustWeight(listId, added, target) };
+    }
+
     if (quantity > 1) {
       // Floored by what the add actually returned, exactly as the existing-line branch is.
       // The opening read found no line, but a household member can create the same product
@@ -561,6 +602,52 @@ export class HebListOps implements ListOps {
   }
 
   /**
+   * Add a free-text line.
+   *
+   * No search, no matching, no confirmation: the text is the item. This is what H-E-B's
+   * own "Add \"…\" to list" affordance does, and it is the right answer when the catalog
+   * has nothing — a line saying what someone asked for beats no line at all.
+   */
+  private async addText(text: string, listId?: string): Promise<AddResult> {
+    const trimmed = text.trim();
+    if (trimmed === '') throw new TypeError('addItem `text` cannot be blank.');
+
+    const id = await this.resolveListId(listId);
+    this.cachedList = undefined;
+
+    let payload: HebListPayload;
+    try {
+      const data = await this.client.execute<{ addShoppingListItemsV2: HebListPayload }>(
+        addTextDocument(id, trimmed),
+      );
+      assertMutationSucceeded(data.addShoppingListItemsV2, 'add the note');
+      payload = data.addShoppingListItemsV2;
+    } catch (error) {
+      // Indeterminate exactly like a product add: the line may exist. Match on the text,
+      // which is the only identity a free-text line has.
+      if (isHebError(error) && error.code === 'SESSION_EXPIRED') throw error;
+
+      const seen = await this.getList(id).catch(() => null);
+      const committed = seen?.items.find(
+        (item) => item.product === undefined && item.text === trimmed,
+      );
+      if (committed === undefined) throw error;
+      return { status: 'added', item: committed };
+    }
+
+    const added = toHebList(payload).items.find(
+      (item) => item.product === undefined && item.text === trimmed,
+    );
+    if (added === undefined) {
+      throw new HebError('UPSTREAM_ERROR', 'HEB accepted the note but did not return it.', {
+        retryable: false,
+        details: { indeterminate: true },
+      });
+    }
+    return { status: 'added', item: added };
+  }
+
+  /**
    * Set a line's quantity outright.
    *
    * Exposed for callers that need to *restore* prior state rather than add to it — the
@@ -568,6 +655,67 @@ export class HebListOps implements ListOps {
    */
   async setItemQuantity(lineId: string, quantity: number, listId?: string): Promise<void> {
     await this.setQuantity(await this.resolveListId(listId), lineId, quantity);
+  }
+
+  /**
+   * Drive a counter line to `pounds`, reconciling an indeterminate write.
+   *
+   * Same hazard as the quantity path and the same answer: a lost response may still have
+   * committed, and a bare failure makes the surface say "try again", whereupon the retry
+   * adds the requested weight *on top of* what already landed. So re-read and report what
+   * is actually on the list.
+   */
+  private async adjustWeight(
+    listId: string,
+    line: ListItem,
+    pounds: number,
+  ): Promise<ListItem> {
+    if (pounds === line.weight) return line;
+
+    try {
+      await this.setWeight(listId, line.lineId, pounds);
+      return { ...line, weight: pounds };
+    } catch (error) {
+      let current: HebList;
+      try {
+        current = await this.getList(listId);
+      } catch {
+        throw new HebError(
+          'UPSTREAM_ERROR',
+          'HEB did not confirm the weight. Check the list before asking again — it may have worked.',
+          { cause: error, retryable: false, details: { indeterminate: true } },
+        );
+      }
+
+      const actual = current.items.find((item) => item.lineId === line.lineId);
+      // At or above, for the same reason as the quantity path: a household member bumping
+      // the same line leaves it heavier than asked, and calling that a failure sends the
+      // user to retry a request that was already fulfilled.
+      if (actual?.weight !== undefined && actual.weight >= pounds) return actual;
+      throw new HebError(
+        'UPSTREAM_ERROR',
+        actual === undefined
+          ? 'HEB did not confirm the weight; check the list before trying again.'
+          : `HEB did not confirm the weight. The list still shows ${actual.weight ?? 0} lb.`,
+        { cause: error, retryable: false },
+      );
+    }
+  }
+
+  /**
+   * Set a counter line's weight, in pounds.
+   *
+   * Same cache and success-union discipline as `setQuantity`; `pounds` must already be
+   * snapped onto the product's ladder.
+   */
+  private async setWeight(listId: string, lineId: string, pounds: number): Promise<void> {
+    this.cachedList = undefined;
+
+    const data = await this.client.execute<{
+      updateShoppingListItemV2?: { __typename?: string };
+    }>(updateItemWeightDocument(listId, lineId, pounds));
+
+    assertMutationSucceeded(data.updateShoppingListItemV2, 'change the weight');
   }
 
   private async setQuantity(listId: string, lineId: string, quantity: number): Promise<void> {
@@ -844,24 +992,70 @@ function brandName(brand: HebProduct['brand']): string | undefined {
 export function toProduct(product: HebProduct): Product {
   const name = product.fullDisplayName ?? product.displayName ?? 'Unknown product';
   const brand = brandName(product.brand);
-  return brand === undefined ? { id: product.id, name } : { id: product.id, name, brand };
+  const mapped: Product = { id: product.id, name };
+  if (brand !== undefined) mapped.brand = brand;
+
+  if (product.pricedByWeight === true) {
+    mapped.pricedByWeight = true;
+    // Flattened across SKUs and de-duplicated: the ladder is a property of the product as
+    // the shopper experiences it, and every SKU we have seen carries the same steps.
+    const increments = [
+      ...new Set(
+        (product.SKUs ?? []).flatMap((sku) => sku.weightSelectionIncrements ?? []),
+      ),
+    ]
+      .filter((pounds) => Number.isFinite(pounds) && pounds > 0)
+      .sort((left, right) => left - right);
+    if (increments.length > 0) mapped.weightIncrements = increments;
+  }
+
+  return mapped;
+}
+
+/**
+ * Round a requested weight onto what HEB will actually accept.
+ *
+ * The increments are a closed ladder, not a step size — an off-ladder weight is refused
+ * outright, so this is the difference between "two pounds of turkey" working and failing.
+ * Ties round *up*: sending someone home with less deli meat than they asked for is the
+ * worse of the two errors, and the overshoot is a quarter pound.
+ *
+ * With no ladder (a weighted product that reported none) the request passes through
+ * unchanged; HEB is then the judge, which is the honest fallback.
+ */
+export function snapWeight(pounds: number, increments?: readonly number[]): number {
+  if (increments === undefined || increments.length === 0) return pounds;
+
+  let best = increments[0]!;
+  for (const candidate of increments) {
+    const closer = Math.abs(candidate - pounds) < Math.abs(best - pounds);
+    const tieButLarger =
+      Math.abs(candidate - pounds) === Math.abs(best - pounds) && candidate > best;
+    if (closer || tieButLarger) best = candidate;
+  }
+  return best;
 }
 
 function toListItem(item: HebListItem): ListItem | null {
   const quantity = item.quantity ?? 1;
   const ceiling = item.maximumQuantity === undefined ? {} : { maximumQuantity: item.maximumQuantity };
 
-  // A free-text line: created in the H-E-B mobile app for a search that matched nothing,
-  // carrying its text in `note` and no product. Dropping it would under-report a list the
-  // app itself displays correctly, and would let removal claim the item is not there.
+  // A free-text line: what H-E-B's own "Add \"<text>\" to list" affordance creates, in the
+  // app and on the web. The text is in `genericName`; `note` is a separate annotation and
+  // is normally null, so reading that instead silently dropped these lines — under-
+  // reporting a list H-E-B displays correctly, and letting removal claim the item is not
+  // there. `note` is kept only as a fallback.
   if (item.product === undefined) {
-    const note = item.note?.trim();
-    if (note === undefined || note === '') return null;
-    return { lineId: item.id, text: note, quantity, ...ceiling };
+    const name = (item.genericName ?? item.note)?.trim();
+    if (name === undefined || name === '') return null;
+    return { lineId: item.id, text: name, quantity, ...ceiling };
   }
 
   const product = toProduct(item.product);
-  return { lineId: item.id, product, text: product.name, quantity, ...ceiling };
+  // `weight` is null on every packaged line, so only a real number becomes a weight.
+  const weight =
+    typeof item.weight === 'number' && item.weight > 0 ? { weight: item.weight } : {};
+  return { lineId: item.id, product, text: product.name, quantity, ...weight, ...ceiling };
 }
 
 export function toHebList(payload: HebListPayload): HebList {

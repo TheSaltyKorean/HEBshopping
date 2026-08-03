@@ -152,12 +152,50 @@ export function speakableItem(item: ListItem): string {
   return item.product === undefined ? item.text : speakableProduct(item.product);
 }
 
+/**
+ * Say a weight the way a person does: "two pounds", "half a pound", "a pound and a half".
+ *
+ * H-E-B's ladder is in quarter-pound steps, so the fractions that actually occur are a
+ * small closed set. Alexa reads a bare "0.25 pounds" as "zero point two five pounds",
+ * which is not how anyone orders deli meat.
+ */
+export function speakablePounds(pounds: number): string {
+  const FRACTIONS: Readonly<Record<string, string>> = {
+    '0.25': 'a quarter pound',
+    '0.5': 'half a pound',
+    '0.75': 'three quarters of a pound',
+  };
+  const whole = Math.floor(pounds);
+  const remainder = Number((pounds - whole).toFixed(2));
+
+  if (whole === 0) return FRACTIONS[String(remainder)] ?? `${pounds} pounds`;
+
+  const unit = whole === 1 ? 'a pound' : `${whole} pounds`;
+  if (remainder === 0) return unit;
+
+  const TAILS: Readonly<Record<string, string>> = {
+    '0.25': 'and a quarter',
+    '0.5': 'and a half',
+    '0.75': 'and three quarters',
+  };
+  const tail = TAILS[String(remainder)];
+  return tail === undefined ? `${pounds} pounds` : `${unit} ${tail}`;
+}
+
 /** Join a list the way a person would say it: "a, b, and c". */
 export function speakableJoin(parts: readonly string[]): string {
   if (parts.length === 0) return '';
   if (parts.length === 1) return parts[0]!;
   if (parts.length === 2) return `${parts[0]} and ${parts[1]}`;
   return `${parts.slice(0, -1).join(', ')}, and ${parts.at(-1)}`;
+}
+
+/** One line of a read-back: "two pounds of sliced turkey", "3 avocados", "milk". */
+function spokenLine(item: ListItem): string {
+  if (item.weight !== undefined) {
+    return `${speakablePounds(item.weight)} of ${speakableItem(item)}`;
+  }
+  return item.quantity > 1 ? `${item.quantity} ${speakableItem(item)}` : speakableItem(item);
 }
 
 /** How many list items to read before deferring the rest to the card. */
@@ -173,10 +211,7 @@ export const MAX_SPOKEN_ITEMS = 7;
 export function speakableList(items: readonly ListItem[]): string {
   if (items.length === 0) return 'Your H-E-B list is empty.';
 
-  const spoken = items.slice(0, MAX_SPOKEN_ITEMS).map((item) => {
-    const name = speakableItem(item);
-    return item.quantity > 1 ? `${item.quantity} ${name}` : name;
-  });
+  const spoken = items.slice(0, MAX_SPOKEN_ITEMS).map(spokenLine);
 
   const count = `${items.length} item${items.length === 1 ? '' : 's'}`;
   if (items.length <= MAX_SPOKEN_ITEMS) {
@@ -206,7 +241,13 @@ export function cardList(items: readonly ListItem[]): string {
   let used = 0;
 
   for (const [index, item] of items.entries()) {
-    const line = `${item.quantity > 1 ? `${item.quantity} × ` : ''}${item.product?.name ?? item.text}`;
+    const amount =
+      item.weight !== undefined
+        ? `${item.weight} lb — `
+        : item.quantity > 1
+          ? `${item.quantity} × `
+          : '';
+    const line = `${amount}${item.product?.name ?? item.text}`;
     const remaining = items.length - index;
     // Reserve room for the footer, so the truncation notice itself cannot overflow.
     const footer = `\n… and ${remaining} more (${items.length} items in total).`;

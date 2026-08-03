@@ -13,6 +13,7 @@ import {
   speakableJoin,
   speakableList,
   speakableOffers,
+  speakablePounds,
   speakableProduct,
 } from './speech.js';
 
@@ -236,5 +237,41 @@ describe('the card must fit inside Alexa limits', () => {
     const card = cardList([line('Fresh Bananas'), line('H-E-B Half & Half, 32 oz')]);
     expect(card.split('\n')).toHaveLength(2);
     expect(card).not.toContain('more (');
+  });
+});
+
+describe('speakablePounds', () => {
+  // Alexa reads a bare 0.25 as "zero point two five", which is not how deli meat is ordered.
+  it('says the fractions a quarter-pound ladder actually produces', () => {
+    expect(speakablePounds(0.25)).toBe('a quarter pound');
+    expect(speakablePounds(0.5)).toBe('half a pound');
+    expect(speakablePounds(0.75)).toBe('three quarters of a pound');
+  });
+
+  it('says whole pounds naturally', () => {
+    expect(speakablePounds(1)).toBe('a pound');
+    expect(speakablePounds(2)).toBe('2 pounds');
+  });
+
+  it('combines a whole part with its fraction', () => {
+    expect(speakablePounds(1.5)).toBe('a pound and a half');
+    expect(speakablePounds(2.25)).toBe('2 pounds and a quarter');
+  });
+
+  it('falls back to plain pounds for a weight off the ladder', () => {
+    expect(speakablePounds(1.3)).toBe('1.3 pounds');
+  });
+});
+
+describe('speakableList — weighted lines', () => {
+  it('reads a counter line in pounds, not as one unit', () => {
+    const item = {
+      lineId: 'l1',
+      product: { id: 'p1', name: 'H-E-B Deli Honey-Smoked Turkey Breast, Custom Sliced, lb' },
+      text: 'H-E-B Deli Honey-Smoked Turkey Breast, Custom Sliced, lb',
+      quantity: 1,
+      weight: 2,
+    };
+    expect(speakableList([item])).toContain('2 pounds of');
   });
 });

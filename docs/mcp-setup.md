@@ -83,12 +83,22 @@ Treat that token like the session file: anyone holding it can read and change yo
 |---|---|---|
 | `heb_read_list` | no | returns items with their `lineId` |
 | `heb_search_product` | no | resolves free text to `productId`s |
-| `heb_add_item` | **yes** | takes exactly one of `query` or `productId` |
+| `heb_add_item` | **yes** | takes exactly one of `query`, `productId`, or `text`; optional `quantity` or `weight` |
 | `heb_remove_item` | **yes** | takes exactly one of `lineId` or `item` |
 
 A vague `heb_add_item({query})` **writes nothing** — it returns candidate products and asks
 you to call again with a `productId`. That is deliberate: an unnecessary question costs two
 seconds, whereas silently adding the wrong product costs a wasted trip.
+
+Two extras worth knowing:
+
+- **`text`** adds a plain written line, matched against nothing — the same thing H-E-B's
+  own `Add "…" to list` button creates. Use it when the catalog genuinely has nothing
+  (`PRODUCT_NOT_FOUND`) or the request is generic ("birthday candles").
+- **`weight`** is pounds, for counter goods sold by the pound (deli meat and cheese sliced
+  to order, seafood). It is rounded to the nearest weight H-E-B accepts — a quarter pound —
+  and ignored for packaged goods, which are bought by the package. The reply says which
+  happened: a weighted line reads `2 lb …`.
 
 ## Troubleshooting
 

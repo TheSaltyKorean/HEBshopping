@@ -61,6 +61,20 @@ export interface Product {
   brand?: string;
   size?: string;
   price?: number;
+  /**
+   * Sold at a counter and priced per pound — deli meat and cheese sliced to order,
+   * seafood. These lines carry a `weight`, not a `quantity`.
+   *
+   * A name that quotes a weight does not make a product weighted: "Boneless Chicken
+   * Breasts, Avg. 2.85 lbs" is one package and this is false for it.
+   */
+  pricedByWeight?: boolean;
+  /**
+   * The weights H-E-B will accept for this product, in pounds, ascending. 0.25-lb steps
+   * in practice. An off-ladder weight is refused, so callers must snap onto it — see
+   * `snapWeight`. Only meaningful when `pricedByWeight` is true.
+   */
+  weightIncrements?: number[];
 }
 
 export interface MatchResult {
@@ -88,15 +102,21 @@ export interface ListItem {
   /**
    * Absent for a free-text line.
    *
-   * HEB's mobile app offers `Add "<what you typed>" to your list` for an unmatched search,
-   * producing a `GenericShoppingListItemV2` with its text in `note` and no product at all.
-   * This project cannot create those yet, but a household member can, and a list read that
-   * dropped them would under-report a list the H-E-B app shows correctly.
+   * H-E-B offers `Add "<what you typed>" to list` — in the app and on the web — producing
+   * a `GenericShoppingListItemV2` whose text is in `genericName` and which has no product
+   * at all. This project both reads and creates them; see `AddItemInput.text`.
    */
   product?: Product;
   /** What to speak back. Always populated — for a free-text line this is the note itself. */
   text: string;
   quantity: number;
+  /**
+   * Pounds, for a counter line (`product.pricedByWeight`). Absent on everything else.
+   *
+   * When present this — not `quantity` — is what the shopper actually asked for, and it is
+   * what a surface should speak back.
+   */
+  weight?: number;
   /** Server-side upper bound for this line. Respect it rather than letting HEB reject the write. */
   maximumQuantity?: number;
 }
@@ -113,6 +133,14 @@ export interface HebList {
 // ---------------------------------------------------------------------------
 
 export interface AddItemInput {
+  /**
+   * Add a free-text line instead of a catalog product.
+   *
+   * H-E-B's own UI offers this the moment the search box has text, and it is the only
+   * honest answer when nothing in the catalog matches — better a line saying what you
+   * asked for than no line at all. Mutually exclusive with `query` and `productId`.
+   */
+  text?: string;
   listId?: string;
   /** Spoken or typed text that still needs matching. Mutually exclusive with `productId`. */
   query?: string;
@@ -124,6 +152,15 @@ export interface AddItemInput {
    */
   productId?: string;
   quantity?: number;
+  /**
+   * Pounds, for "add two pounds of sliced turkey".
+   *
+   * Applied only if the resolved product is actually `pricedByWeight`; for a packaged good
+   * a weight is meaningless (you cannot buy 2 lb of a 2.85 lb package), so it is ignored
+   * and one package is added. The returned item says which happened — a weighted line
+   * comes back with `weight` set.
+   */
+  weight?: number;
 }
 
 export type AddResult =

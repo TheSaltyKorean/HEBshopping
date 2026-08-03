@@ -228,16 +228,63 @@ From an `addToShoppingListV2` response:
 
 Also worth honouring: `maximumQuantity` (20 here) is a real server-side bound.
 
+## Free-text lines
+
+H-E-B offers `Add "<what you typed>" to list` as soon as its search box has text — in the
+app *and* on the web, in the "Add items" drawer. It is the same `addShoppingListItemsV2`
+mutation as a product add, with a different item shape:
+
+```graphql
+addShoppingListItemsV2(input: {
+  listId: "<listId>"
+  listItems: [{ item: { genericName: "what you typed" } }]
+  page: { sort: CATEGORY, sortDirection: ASC }
+})
+```
+
+Two traps, both found the hard way:
+
+- The browser's **operation name** is `addToShoppingListV2`; the **schema field** is
+  `addShoppingListItemsV2`. Sending the capture verbatim fails validation.
+- These come back as `GenericShoppingListItemV2` with the text in **`genericName`**, not
+  `note`. `note` is H-E-B's separate "Add note" annotation and is null even on text lines,
+  so reading it instead silently drops every free-text line from the list.
+
+## Weight-based items
+
+Counter goods — deli meat and cheese sliced to order, seafood — are priced per pound.
+
+| Field | Type | Where |
+|---|---|---|
+| `pricedByWeight` | `Boolean` | `Product` |
+| `weightSelectionIncrements` | `[Float]` | `Product.SKUs[]` |
+| `weight` | `Float` | `ProductShoppingListItemV2` |
+| `QuantityOrWeightInputV2` | `{ quantity, weight: Float }` | update input |
+
+Set one with the ordinary update mutation:
+
+```graphql
+updateShoppingListItemV2(input: {
+  itemId: "<lineId>"  listId: "<listId>"
+  quantityOrWeight: { weight: 2 }
+  page: { sort: CATEGORY, sortDirection: ASC }
+})
+```
+
+`weightSelectionIncrements` is a **closed ladder**, not a step size — 0.25-lb rungs at this
+store — and an off-ladder weight is refused, so snap onto it before writing.
+
+Note what `pricedByWeight` is *not*: a name that quotes a weight. "H-E-B Natural Boneless
+Chicken Breasts, Avg. 2.85 lbs" is `false` — one package. Only counter goods are `true`.
+A field-name sweep (`isWeighted`, `soldByWeight`, `unitOfMeasure`, `salesUom`, …) found
+none of them; these names came from HEB's own captured responses.
+
 ## Open questions
 
 1. **Does a cookie-only session survive past ~11 minutes?** Being measured by
    `tools/soak.ts` → `captures/soak.log`. This single answer decides whether the refresher
    is a 10-minute Playwright cycle or an occasional top-up.
-2. **Weight-based items** — `quantityOrWeight` suggests a `{ weight: … }` variant for
-   by-the-pound products. Not captured.
-3. **Truly free-text items** — HEB's help pages mention "Siri to List". If that creates
-   text-only lines, there is another mutation we haven't seen.
-4. **Reconciling list store vs. shopping store** when they differ.
+2. **Reconciling list store vs. shopping store** when they differ.
 
 ## Reproducing
 

@@ -33,6 +33,7 @@ import {
   cardList,
   escapeSsml,
   speakableItem,
+  speakablePounds,
   speakableJoin,
   speakableList,
   speakableOffers,
@@ -122,9 +123,15 @@ function confirmAdded(input: HandlerInput, item: ListItem, wasPresent: boolean):
   // Confirm with the *resolved* product name, never the spoken text: the whole point of
   // the dialog is that those two can differ, and echoing the request back would hide it.
   const name = escapeSsml(speakableItem(item));
+  // A counter line is measured in pounds, so speak pounds. Its `quantity` is an artefact
+  // of how HEB stores the row, and "you now have 1" beside two pounds of turkey is wrong.
   const speech = wasPresent
-    ? `${name} was already on your list. You now have ${item.quantity}.`
-    : `Added ${item.quantity > 1 ? `${item.quantity} ` : ''}${name}.`;
+    ? item.weight === undefined
+      ? `${name} was already on your list. You now have ${item.quantity}.`
+      : `${name} was already on your list. You now have ${speakablePounds(item.weight)}.`
+    : item.weight === undefined
+      ? `Added ${item.quantity > 1 ? `${item.quantity} ` : ''}${name}.`
+      : `Added ${speakablePounds(item.weight)} of ${name}.`;
 
   return input.responseBuilder
     .speak(`${speech} Anything else?`)
@@ -168,8 +175,12 @@ function addItemHandler(options: CreateSkillOptions): RequestHandler {
       // Quantity is parsed from the spoken phrase rather than a separate slot: "two
       // avocados" arrives as one AMAZON.SearchQuery, and heb-core already knows that
       // "two percent milk" is one carton rather than two.
-      const { quantity, query } = parseSpokenRequest(spoken);
-      const result = await options.createListOps().addItem({ query, quantity });
+      const { quantity, query, weight } = parseSpokenRequest(spoken);
+      const result = await options.createListOps().addItem({
+        query,
+        quantity,
+        ...(weight === undefined ? {} : { weight }),
+      });
 
       if (result.status === 'added') return confirmAdded(input, result.item, false);
       if (result.status === 'already_present') return confirmAdded(input, result.item, true);
@@ -178,6 +189,7 @@ function addItemHandler(options: CreateSkillOptions): RequestHandler {
         kind: 'add',
         spokenQuery: query,
         quantity,
+        ...(weight === undefined ? {} : { weight }),
         offers: offersFor(result.match.product, result.match.alternatives),
         index: 0,
       };
@@ -285,6 +297,7 @@ function yesHandler(options: CreateSkillOptions): RequestHandler {
       const result = await listOps.addItem({
         productId: offer.productId!,
         quantity: pending.quantity,
+        ...(pending.weight === undefined ? {} : { weight: pending.weight }),
       });
       if (result.status === 'needs_confirmation') {
         return giveUp(input, pending); // unreachable via productId, but never guess

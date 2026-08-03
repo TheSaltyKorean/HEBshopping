@@ -314,3 +314,43 @@ describe('malformed reads are errors, not empty results', () => {
     );
   });
 });
+
+describe('search refusals name the real problem', () => {
+  it('reports an authentication refusal from search as SESSION_EXPIRED', async () => {
+    // The search runs on every query-based add, often after a list read that still
+    // succeeded — so a generic error here suggests a retry that cannot work and keeps the
+    // expiry alarm silent.
+    const fetchImpl = (async (_url: unknown, init: { body?: string }) => {
+      const body = String(init.body ?? '');
+      if (body.includes('productSearchItems')) {
+        return new Response(
+          JSON.stringify({ data: { productSearchItems: { __typename: 'AuthErrorV2' } } }),
+          { status: 200 },
+        );
+      }
+      return new Response(
+        JSON.stringify({
+          data: {
+            getShoppingListV2: {
+              __typename: 'ShoppingListV2',
+              id: 'list-1',
+              name: 'Shopping',
+              fulfillment: { store: { storeNumber: 1 } },
+              itemPage: { items: [] },
+            },
+          },
+        }),
+        { status: 200 },
+      );
+    }) as unknown as typeof fetch;
+
+    const ops = new HebListOps({
+      client: new HebClient({ store: storeWith(), fetchImpl, now: () => NOW, minDelayMs: 0 }),
+      listId: 'list-1',
+    });
+
+    await expect(ops.searchProducts('milk')).rejects.toSatisfy((error: unknown) =>
+      hasCode(error, 'SESSION_EXPIRED'),
+    );
+  });
+});

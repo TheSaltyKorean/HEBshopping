@@ -182,7 +182,16 @@ async function recordGraphqlTraffic(context: BrowserContext): Promise<void> {
   });
 }
 
+/** The autosave currently in flight, and its timer, so shutdown can settle both. */
+let autosave: Promise<void> | undefined;
+let autosaveTimer: ReturnType<typeof setInterval> | undefined;
+
 async function flush(context: BrowserContext): Promise<void> {
+  // Stop the interval and let any in-flight write finish before this one starts, so the
+  // two cannot interleave on the same file.
+  if (autosaveTimer !== undefined) clearInterval(autosaveTimer);
+  if (autosave !== undefined) await autosave.catch(() => undefined);
+
   // Let in-flight body reads finish first, or the capture can omit the very last call.
   if (pending.size > 0) {
     console.log(`\nWaiting for ${pending.size} response(s) still being read …`);
@@ -278,11 +287,15 @@ async function main(): Promise<void> {
   context.on('close', () => void shutdown());
 
   // Periodic autosave, so a crash or an accidental window close doesn't lose the session.
-  setInterval(() => {
-    void mkdir(CAPTURE_DIR, { recursive: true }).then(() =>
+  autosaveTimer = setInterval(() => {
+    // Tracked, so shutdown can settle it. An untracked autosave can finish *after* the
+    // final flush and overwrite the complete capture with an older snapshot — losing
+    // exactly the last operation, which is usually the one the run was performed to see.
+    autosave = mkdir(CAPTURE_DIR, { recursive: true }).then(() =>
       writeSecret(resolve(CAPTURE_DIR, 'operations.json'),
         JSON.stringify(Object.fromEntries(operations), null, 2)),
     );
+    void autosave.catch(() => undefined);
     // Keep a live snapshot of the cookie jar: it is the expensive thing to reacquire, and
     // it cannot be read once the context starts closing.
     void context

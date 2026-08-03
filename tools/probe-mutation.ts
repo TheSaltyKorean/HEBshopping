@@ -86,7 +86,14 @@ async function main(): Promise<void> {
   // Check BEFORE mutating. Guarding after the add is no guard at all: `addItem` has
   // already incremented the real line by then, and the probe leaves the household list
   // changed even as it refuses to continue.
-  const onList = new Set(list.items.map((item) => item.product?.id).filter(Boolean));
+  // Re-read through a *fresh* instance. The one above cached the list before the search,
+  // and if a household member added this exact product in the meantime the cached copy
+  // still calls it absent — H-E-B then increments their line instead of creating ours,
+  // and the probe would delete a grocery it did not create.
+  const fresh = new HebListOps({ client: new HebClient({ store: new FileStore(SESSION_PATH) }) });
+  const current = await fresh.getList();
+  const onList = new Set(current.items.map((item) => item.product?.id).filter(Boolean));
+
   const disposable = candidates.find((product) => !onList.has(product.id));
   if (disposable === undefined) {
     throw new Error('Every candidate product is already on the list; nothing safe to probe with.');
@@ -97,7 +104,7 @@ async function main(): Promise<void> {
   // line still on a real household list.
   let lineId: string | null = null;
   try {
-    const added = await lists.addItem({ productId: disposable.id });
+    const added = await fresh.addItem({ productId: disposable.id });
     if (added.status !== 'added') {
       throw new Error(`expected a fresh line, got ${added.status}`);
     }

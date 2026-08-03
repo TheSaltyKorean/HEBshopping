@@ -770,6 +770,16 @@ function assertUnion(
   const typename = payload?.__typename;
   if (typename === expected) return;
 
+  // A dead session is diagnosed, not generic. The catalog search is reached on every
+  // query-based add, and often *after* a list read that still succeeded on cached
+  // credentials — so classifying it as UPSTREAM_ERROR costs the login-and-upload remedy,
+  // suggests a retry no retry can fix, and keeps the expiry alarm silent.
+  if (/auth|unauthori|forbidden|session|login|denied/i.test(typename ?? '')) {
+    throw new HebError('SESSION_EXPIRED', 'HEB rejected the stored session.', {
+      details: { returned: typename },
+    });
+  }
+
   // Absent is a failure, not a shrug: every document here selects `__typename`, so its
   // absence means a null or malformed payload. Accepting it let `productSearchItems`
   // report "no products matched" for a response that contained nothing at all.

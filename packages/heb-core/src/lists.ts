@@ -372,7 +372,14 @@ export class HebListOps implements ListOps {
       throw new TypeError('addItem requires exactly one of `query`, `productId`, or `text`.');
     }
 
-    if (input.text !== undefined) return this.addText(input.text, input.listId);
+    if (input.text !== undefined) {
+      if (input.weight !== undefined) {
+        // A written line has no product behind it, so nothing about it can be sold by the
+        // pound. Silently dropping the weight would misreport what landed.
+        throw new TypeError('addItem `weight` needs a product; it cannot apply to `text`.');
+      }
+      return this.addText(input.text, input.quantity ?? 1, input.listId);
+    }
 
     const listId = await this.resolveListId(input.listId);
     const quantity = input.quantity ?? 1;
@@ -405,7 +412,15 @@ export class HebListOps implements ListOps {
       // A counter line is measured in pounds, so "add another pound of turkey" adds weight
       // rather than a second line-unit — the same increment semantics, different unit.
       // Never below what is already there, for the same reason quantity is floored.
-      if (input.weight !== undefined && existing.product?.pricedByWeight === true) {
+      if (existing.product?.pricedByWeight === true) {
+        if (input.weight === undefined) {
+          // "Add sliced turkey" when a counter line already exists. There is no honest
+          // amount to add: this line is measured in pounds, and a quantity update on it
+          // either gets refused or changes a number nobody buys by. Report what is on the
+          // list and let the surface say it — "you already have two pounds" invites the
+          // amount, whereas a bogus write invents one.
+          return { status: 'already_present', item: existing };
+        }
         const target = Math.max(
           existing.weight ?? 0,
           snapWeight((existing.weight ?? 0) + input.weight, existing.product.weightIncrements),
@@ -528,12 +543,21 @@ export class HebListOps implements ListOps {
     // For a packaged good ("Chicken Breasts, Avg. 2.85 lbs") it is not expressible — you
     // buy the package — so the weight is dropped and one package is added. The caller can
     // tell which happened: a weighted line comes back with `weight` set.
-    if (input.weight !== undefined && added.product?.pricedByWeight === true) {
+    if (added.product?.pricedByWeight === true) {
+      if (input.weight === undefined) {
+        // Counter goods have no unit to multiply. HEB assigned this line its own default
+        // weight on creation, and that is what the surface confirms — the spoken reply
+        // states pounds, so the shopper hears the real amount rather than a silent "1".
+        return { status: 'added', item: added };
+      }
       const target = Math.max(
         added.weight ?? 0,
         snapWeight(input.weight, added.product.weightIncrements),
       );
-      return { status: 'added', item: await this.adjustWeight(listId, added, target) };
+      return {
+        status: 'added',
+        item: await this.adjustWeight(listId, added, target, true),
+      };
     }
 
     if (quantity > 1) {
@@ -608,7 +632,7 @@ export class HebListOps implements ListOps {
    * own "Add \"…\" to list" affordance does, and it is the right answer when the catalog
    * has nothing — a line saying what someone asked for beats no line at all.
    */
-  private async addText(text: string, listId?: string): Promise<AddResult> {
+  private async addText(text: string, quantity: number, listId?: string): Promise<AddResult> {
     const trimmed = text.trim();
     if (trimmed === '') throw new TypeError('addItem `text` cannot be blank.');
 
@@ -627,12 +651,26 @@ export class HebListOps implements ListOps {
       // which is the only identity a free-text line has.
       if (isHebError(error) && error.code === 'SESSION_EXPIRED') throw error;
 
-      const seen = await this.getList(id).catch(() => null);
-      const committed = seen?.items.find(
+      let seen: HebList;
+      try {
+        seen = await this.getList(id);
+      } catch {
+        // The reconciliation read failed too, most likely because the first timeout spent
+        // the budget. Nothing is known, and "try again" is the one answer that can make it
+        // worse: the retry would write a *second* copy of the same line, since a written
+        // line has no product id to deduplicate against.
+        throw new HebError(
+          'UPSTREAM_ERROR',
+          'HEB did not confirm the note. Check the list before asking again — it may have worked.',
+          { cause: error, retryable: false, details: { indeterminate: true } },
+        );
+      }
+
+      const committed = seen.items.find(
         (item) => item.product === undefined && item.text === trimmed,
       );
       if (committed === undefined) throw error;
-      return { status: 'added', item: committed };
+      return this.applyTextQuantity(id, committed, quantity);
     }
 
     const added = toHebList(payload).items.find(
@@ -644,7 +682,45 @@ export class HebListOps implements ListOps {
         details: { indeterminate: true },
       });
     }
-    return { status: 'added', item: added };
+    return this.applyTextQuantity(id, added, quantity);
+  }
+
+  /**
+   * Raise a freshly written line to the requested quantity.
+   *
+   * Generic lines carry a quantity just as product lines do — verified against the live
+   * list, which accepted an update and read back 3 — so "add three birthday candles"
+   * is honoured rather than silently becoming one.
+   *
+   * A failure here is a *partial* add: the line exists, only the amount is wrong. Saying
+   * "try again" would write a second copy, because a written line has no product id to
+   * deduplicate against.
+   */
+  private async applyTextQuantity(
+    listId: string,
+    line: ListItem,
+    quantity: number,
+  ): Promise<AddResult> {
+    const target = Math.max(line.quantity, Math.trunc(quantity));
+    if (target <= line.quantity) return { status: 'added', item: line };
+
+    try {
+      await this.setQuantity(listId, line.lineId, target);
+      return { status: 'added', item: { ...line, quantity: target } };
+    } catch (error) {
+      if (isHebError(error) && error.code === 'SESSION_EXPIRED') throw error;
+
+      const seen = await this.getList(listId).catch(() => null);
+      const actual = seen?.items.find((item) => item.lineId === line.lineId);
+      if (actual !== undefined && actual.quantity >= target) {
+        return { status: 'added', item: actual };
+      }
+      throw new HebError(
+        'UPSTREAM_ERROR',
+        `Wrote ${line.text} on the list, but could not set the amount to ${target}.`,
+        { cause: error, retryable: false, details: { partialAdd: true } },
+      );
+    }
   }
 
   /**
@@ -669,6 +745,15 @@ export class HebListOps implements ListOps {
     listId: string,
     line: ListItem,
     pounds: number,
+    /**
+     * True when this line was created moments ago by the caller.
+     *
+     * It changes what a failure *means*. On a pre-existing line, "try again" is safe. On a
+     * line the add just created, HEB has already assigned its default weight, so a retry
+     * takes the existing-line path and adds the whole request on top of that default —
+     * 0.25 lb becomes 2.25 lb. Callers must be told to look instead of repeat.
+     */
+    justCreated = false,
   ): Promise<ListItem> {
     if (pounds === line.weight) return line;
 
@@ -676,6 +761,11 @@ export class HebListOps implements ListOps {
       await this.setWeight(listId, line.lineId, pounds);
       return { ...line, weight: pounds };
     } catch (error) {
+      // An expired session must survive as itself. The reconciliation read below would hit
+      // the same refusal and be reported as an indeterminate upstream failure, costing both
+      // the "run the login tool" remedy and the log line the expiry alarm matches on.
+      if (isHebError(error) && error.code === 'SESSION_EXPIRED') throw error;
+
       let current: HebList;
       try {
         current = await this.getList(listId);
@@ -683,7 +773,11 @@ export class HebListOps implements ListOps {
         throw new HebError(
           'UPSTREAM_ERROR',
           'HEB did not confirm the weight. Check the list before asking again — it may have worked.',
-          { cause: error, retryable: false, details: { indeterminate: true } },
+          {
+            cause: error,
+            retryable: false,
+            details: { indeterminate: true, ...(justCreated ? { partialAdd: true } : {}) },
+          },
         );
       }
 
@@ -697,7 +791,11 @@ export class HebListOps implements ListOps {
         actual === undefined
           ? 'HEB did not confirm the weight; check the list before trying again.'
           : `HEB did not confirm the weight. The list still shows ${actual.weight ?? 0} lb.`,
-        { cause: error, retryable: false },
+        {
+          cause: error,
+          retryable: false,
+          ...(justCreated ? { details: { partialAdd: true } } : {}),
+        },
       );
     }
   }

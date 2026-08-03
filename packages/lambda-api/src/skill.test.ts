@@ -516,6 +516,29 @@ describe('adding — the free-text fallback', () => {
     expect(addItem).toHaveBeenLastCalledWith({ text: 'two pounds of goat barbacoa' });
   });
 
+  it('reuses one list client, so the fallback cannot reset the invocation budget', async () => {
+    // `createListOps` builds a fresh HebClient with a fresh 6.5s budget. Calling it twice
+    // lets a slow search plus a fallback add run past Alexa's ~8s ceiling, and a mutation
+    // that commits at the cutoff is confirmed to nobody — inviting a repeat that writes a
+    // second line.
+    const ops = fakeOps({
+      addItem: vi.fn(async (input: { text?: string }) => {
+        if (input.text === undefined) throw new HebError('PRODUCT_NOT_FOUND', 'no match');
+        return { status: 'added' as const, item: { lineId: 'l9', text: input.text, quantity: 1 } };
+      }) as unknown as FakeOps['addItem'],
+    });
+    const createListOps = vi.fn(() => ops as unknown as HebListOps);
+    const skill = createSkill({ createListOps });
+
+    await skill.invoke(
+      envelope(intent('AddItemIntent', { item: 'sourdough starter' }), {}) as never,
+      {} as never,
+    );
+
+    expect(ops.addItem).toHaveBeenCalledTimes(2);
+    expect(createListOps).toHaveBeenCalledTimes(1);
+  });
+
   it('does not swallow other failures', async () => {
     // Only PRODUCT_NOT_FOUND is recoverable this way. An expired session must still reach
     // the error handler, or the user is told a line was written when none was.

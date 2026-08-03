@@ -291,8 +291,9 @@ Two things this deliberately does **not** do:
 - **Ounces aren't understood.** The ladder has no rung for "six ounces", and rounding your
   order without saying so would be worse than not trying. Ask in pounds instead.
 
-A phrase only counts as an amount when it reads like one — "two pounds **of** turkey".
-"1.5 lb ground beef" and "pound cake" are product names and are searched as written.
+A phrase only counts as an amount when it reads like one — "two pounds **of** turkey". The
+word *of* is the whole test, fractions included: "1.5 lb ground beef", "half pound ground
+beef patties" and "pound cake" are all product names, and are searched as written.
 
 ### It learns your habits
 

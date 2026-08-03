@@ -181,10 +181,11 @@ const ARTICLES = new Set(['a', 'an', 'the']);
  * "Two pounds **of** sliced turkey" is an order for an amount. "1.5 lb ground beef" is the
  * name of a package — the number describes the product, exactly like "two percent milk",
  * and stripping it would search for plain "ground beef" and lose the size the speaker
- * asked for. English marks the difference with `of`, so this does too. The one exception
- * is an explicit fraction ("half a pound turkey"), which is never a package name.
+ * asked for. English marks the difference with `of`, so this does too, without exception.
  *
- * "Pound cake" survives for the same reason: no `of` follows, so it stays in the query.
+ * Fractions are not exempt: "half pound ground beef patties" describes a package every bit
+ * as much as "1.5 lb" does, and H-E-B really does sell half-pound patties. "Pound cake"
+ * survives on the same rule — no `of` follows, so it stays in the query.
  *
  * Ounces are not handled. H-E-B's ladder is in quarter-pound steps, so an ounce request
  * cannot be honoured precisely, and silently rounding "six ounces" to half a pound is a
@@ -208,36 +209,34 @@ function parseWeightPhrase(raw: readonly string[]): { pounds: number; rest: stri
 
   // No leading amount at all means an implicit one: "a pound of ham".
   let pounds = fraction ?? numeric ?? 1;
-  const explicitFraction = fraction !== undefined;
   if (fraction !== undefined || numeric !== undefined) index += 1;
 
   // "two and a half pounds" — the fraction can precede the unit as well as follow it.
-  const readAndAHalf = (): boolean => {
+  const readAndAHalf = (): void => {
     let cursor = index;
-    if (raw[cursor] !== 'and') return false;
+    if (raw[cursor] !== 'and') return;
     cursor += 1;
     while (cursor < raw.length && ARTICLES.has(raw[cursor]!)) cursor += 1;
     const extra = FRACTION_WORDS[raw[cursor] ?? ''];
-    if (extra === undefined) return false;
+    if (extra === undefined) return;
     pounds += extra;
     index = cursor + 1;
-    return true;
   };
-  const fractionBeforeUnit = readAndAHalf();
+  readAndAHalf();
 
   skipArticles();
   if (index >= raw.length || !POUND_WORDS.has(raw[index]!)) return null;
   index += 1;
 
   // "a pound and a half of turkey" — same fraction, on the other side of the unit.
-  const fractionAfterUnit = fractionBeforeUnit ? false : readAndAHalf();
+  readAndAHalf();
 
   skipArticles();
-  // The `of` is what distinguishes an amount from a package name. An explicit fraction
-  // carries the same signal on its own, since no product is called "half a pound turkey".
-  const ordered = raw[index] === 'of' || explicitFraction || fractionBeforeUnit || fractionAfterUnit;
-  if (raw[index] === 'of') index += 1;
-  if (!ordered) return null;
+  // The `of` is the whole test. No exception for fractions: "half pound beef patties" is a
+  // package name, and treating it as an amount both loses the size from the search and
+  // risks ordering by weight something that is not sold that way.
+  if (raw[index] !== 'of') return null;
+  index += 1;
 
   const rest = raw.slice(index).filter((token) => !FILLER.has(token));
   if (rest.length === 0 || !(pounds > 0)) return null;

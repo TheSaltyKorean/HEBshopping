@@ -43,6 +43,10 @@ describe('parseSpokenRequest — phrases that only look like weights', () => {
     ['1.5 lb ground beef', '1.5 lb ground beef'],
     // A cake, not an amount.
     ['pound cake', 'pound cake'],
+    // H-E-B really does sell half-pound patties, so "half pound" describes the package
+    // every bit as much as "1.5 lb" does. Fractions get no exemption from the `of` rule.
+    ['half pound ground beef patties', 'half pound ground beef patties'],
+    ['quarter pound burger', 'quarter pound burger'],
     // "bag", not "of", follows the unit — a package name. ("of" drops out either way; it
     // is ordinary filler, like "the".)
     ['2 lb bag of sugar', '2 lb bag sugar'],

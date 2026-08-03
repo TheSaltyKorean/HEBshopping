@@ -199,9 +199,16 @@ function addItemHandler(options: CreateSkillOptions): RequestHandler {
       // "two percent milk" is one carton rather than two.
       const { quantity, query, weight } = parseSpokenRequest(spoken);
 
+      // ONE client for the whole invocation, reused by the fallback below. A second
+      // `createListOps()` builds a fresh `HebClient` and hands it a fresh 6.5-second
+      // budget, so a slow search followed by a fallback add can run past Alexa's ~8s
+      // ceiling and the Lambda timeout — and a text mutation that commits at the cutoff
+      // is confirmed to nobody, inviting a repeat that writes a second line.
+      const listOps = options.createListOps();
+
       let result: AddResult;
       try {
-        result = await options.createListOps().addItem({
+        result = await listOps.addItem({
           query,
           quantity,
           ...(weight === undefined ? {} : { weight }),
@@ -217,7 +224,7 @@ function addItemHandler(options: CreateSkillOptions): RequestHandler {
         // there is no product name to prefer — and the stripped parts are exactly the ones
         // worth keeping here: "two avocados" and "two pounds of brisket" must survive as
         // written, or the line understates the order.
-        const written = await options.createListOps().addItem({ text: spoken.trim() });
+        const written = await listOps.addItem({ text: spoken.trim() });
         if (written.status !== 'added') throw error; // a text add cannot need confirming
         return confirmWritten(input, written.item);
       }

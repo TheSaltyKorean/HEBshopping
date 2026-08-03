@@ -381,6 +381,13 @@ export class HebListOps implements ListOps {
       return this.addText(input.text, input.quantity ?? 1, input.listId);
     }
 
+    if (input.query !== undefined && input.query.trim() === '') {
+      // "Add some" reduces to nothing once filler is stripped. Searching for an empty
+      // string cannot match, and the resulting PRODUCT_NOT_FOUND would reach the voice
+      // fallback and write the filler itself onto the list.
+      throw new TypeError('addItem `query` cannot be blank.');
+    }
+
     const listId = await this.resolveListId(input.listId);
     const quantity = input.quantity ?? 1;
 
@@ -637,6 +644,19 @@ export class HebListOps implements ListOps {
     if (trimmed === '') throw new TypeError('addItem `text` cannot be blank.');
 
     const id = await this.resolveListId(listId);
+    // Snapshot BEFORE the write. Verified against the live list: adding a genericName that
+    // is already on the list does NOT create a second line — HEB merges it into the
+    // existing one and increments its quantity. So neither the text nor a new line id can
+    // prove this mutation committed; the quantity of any pre-existing line is the only
+    // evidence there is. Without this, a failed add reconciles against somebody else's
+    // identical line and is reported as a success that never happened.
+    const before = (await this.getList(id)).items.find(isTextLine(trimmed));
+    const base = before?.quantity ?? 0;
+    // Absolute, and consistent with the product path: "add three" onto an existing two
+    // means five, not three. The mutation itself contributes the first unit.
+    const target = base + Math.max(1, Math.trunc(quantity));
+    const wasPresent = before !== undefined;
+
     this.cachedList = undefined;
 
     let payload: HebListPayload;
@@ -647,18 +667,17 @@ export class HebListOps implements ListOps {
       assertMutationSucceeded(data.addShoppingListItemsV2, 'add the note');
       payload = data.addShoppingListItemsV2;
     } catch (error) {
-      // Indeterminate exactly like a product add: the line may exist. Match on the text,
-      // which is the only identity a free-text line has.
-      if (isHebError(error) && error.code === 'SESSION_EXPIRED') throw error;
-
+      // An expired session is rethrown as itself further down, once we know whether a line
+      // was created — the remedy and the partial state are both needed, and neither alone
+      // is enough to stop a retry from writing more.
       let seen: HebList;
       try {
         seen = await this.getList(id);
       } catch {
         // The reconciliation read failed too, most likely because the first timeout spent
         // the budget. Nothing is known, and "try again" is the one answer that can make it
-        // worse: the retry would write a *second* copy of the same line, since a written
-        // line has no product id to deduplicate against.
+        // worse: the retry merges another unit into the line.
+        if (isHebError(error) && error.code === 'SESSION_EXPIRED') throw error;
         throw new HebError(
           'UPSTREAM_ERROR',
           'HEB did not confirm the note. Check the list before asking again — it may have worked.',
@@ -666,23 +685,29 @@ export class HebListOps implements ListOps {
         );
       }
 
-      const committed = seen.items.find(
-        (item) => item.product === undefined && item.text === trimmed,
-      );
-      if (committed === undefined) throw error;
-      return this.applyTextQuantity(id, committed, quantity);
+      const now = seen.items.find(isTextLine(trimmed));
+      // Strictly greater than the snapshot: an unchanged line is the one already there,
+      // not evidence that this write landed.
+      if (now === undefined || now.quantity <= base) throw error;
+      return this.applyTextQuantity(id, now, target, wasPresent);
     }
 
-    const added = toHebList(payload).items.find(
-      (item) => item.product === undefined && item.text === trimmed,
-    );
+    let added = toHebList(payload).items.find(isTextLine(trimmed));
+    if (added === undefined) {
+      // The mutation succeeded; the returned page simply does not contain the line — a
+      // long category-sorted list can place it outside the page. The product path already
+      // re-reads here, and reporting an indeterminate failure for a write that plainly
+      // committed sends the user to add it again, merging a second unit.
+      this.cachedList = undefined;
+      added = (await this.getList(id).catch(() => null))?.items.find(isTextLine(trimmed));
+    }
     if (added === undefined) {
       throw new HebError('UPSTREAM_ERROR', 'HEB accepted the note but did not return it.', {
         retryable: false,
         details: { indeterminate: true },
       });
     }
-    return this.applyTextQuantity(id, added, quantity);
+    return this.applyTextQuantity(id, added, target, wasPresent);
   }
 
   /**
@@ -699,25 +724,36 @@ export class HebListOps implements ListOps {
   private async applyTextQuantity(
     listId: string,
     line: ListItem,
-    quantity: number,
+    requested: number,
+    wasPresent: boolean,
   ): Promise<AddResult> {
-    const target = Math.max(line.quantity, Math.trunc(quantity));
-    if (target <= line.quantity) return { status: 'added', item: line };
+    const status = wasPresent ? 'already_present' : 'added';
+    // Never below what is on the list: a household member merging into the same line
+    // leaves it higher, and writing an absolute target would take their units away.
+    const goal = Math.max(line.quantity, Math.trunc(requested));
+    if (goal <= line.quantity) return { status, item: line };
 
     try {
-      await this.setQuantity(listId, line.lineId, target);
-      return { status: 'added', item: { ...line, quantity: target } };
+      await this.setQuantity(listId, line.lineId, goal);
+      return { status, item: { ...line, quantity: goal } };
     } catch (error) {
-      if (isHebError(error) && error.code === 'SESSION_EXPIRED') throw error;
-
       const seen = await this.getList(listId).catch(() => null);
       const actual = seen?.items.find((item) => item.lineId === line.lineId);
-      if (actual !== undefined && actual.quantity >= target) {
-        return { status: 'added', item: actual };
+      if (actual !== undefined && actual.quantity >= goal) return { status, item: actual };
+
+      // The line exists either way, so a retry merges another unit into it rather than
+      // failing cleanly. That has to be said even when the cause is an expired session:
+      // the login remedy alone would send someone back to repeat the whole request.
+      if (isHebError(error) && error.code === 'SESSION_EXPIRED') {
+        throw new HebError('SESSION_EXPIRED', error.message, {
+          cause: error,
+          retryable: false,
+          details: { ...error.details, partialAdd: true },
+        });
       }
       throw new HebError(
         'UPSTREAM_ERROR',
-        `Wrote ${line.text} on the list, but could not set the amount to ${target}.`,
+        `Wrote ${line.text} on the list, but could not set the amount to ${goal}.`,
         { cause: error, retryable: false, details: { partialAdd: true } },
       );
     }
@@ -761,10 +797,22 @@ export class HebListOps implements ListOps {
       await this.setWeight(listId, line.lineId, pounds);
       return { ...line, weight: pounds };
     } catch (error) {
-      // An expired session must survive as itself. The reconciliation read below would hit
+      // An expired session must survive as itself: the reconciliation read below would hit
       // the same refusal and be reported as an indeterminate upstream failure, costing both
       // the "run the login tool" remedy and the log line the expiry alarm matches on.
-      if (isHebError(error) && error.code === 'SESSION_EXPIRED') throw error;
+      //
+      // But on a line the add just created, the remedy alone is not enough. HEB has already
+      // given that line its default weight, so repeating the request after logging in takes
+      // the existing-line path and adds the whole amount on top — 0.25 lb becomes 2.25 lb.
+      // Both facts have to travel together.
+      if (isHebError(error) && error.code === 'SESSION_EXPIRED') {
+        if (!justCreated) throw error;
+        throw new HebError('SESSION_EXPIRED', error.message, {
+          cause: error,
+          retryable: false,
+          details: { ...error.details, partialAdd: true },
+        });
+      }
 
       let current: HebList;
       try {
@@ -1132,6 +1180,16 @@ export function snapWeight(pounds: number, increments?: readonly number[]): numb
     if (closer || tieButLarger) best = candidate;
   }
   return best;
+}
+
+/**
+ * A written line carrying exactly this text.
+ *
+ * Free-text lines have no product id, so the text is their whole identity — which is
+ * precisely why matching on it cannot, on its own, prove a mutation committed.
+ */
+function isTextLine(text: string): (item: ListItem) => boolean {
+  return (item) => item.product === undefined && item.text === text;
 }
 
 function toListItem(item: HebListItem): ListItem | null {

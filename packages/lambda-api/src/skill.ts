@@ -199,6 +199,16 @@ function addItemHandler(options: CreateSkillOptions): RequestHandler {
       // "two percent milk" is one carton rather than two.
       const { quantity, query, weight } = parseSpokenRequest(spoken);
 
+      // "Add some" is filler all the way down: the parse leaves nothing to search for.
+      // Falling through would reach PRODUCT_NOT_FOUND and write "some" onto the list as a
+      // written line — a request nobody made, from a sentence that was never finished.
+      if (query.trim() === '') {
+        return input.responseBuilder
+          .speak('What would you like to add?')
+          .reprompt('What would you like to add?')
+          .getResponse();
+      }
+
       // ONE client for the whole invocation, reused by the fallback below. A second
       // `createListOps()` builds a fresh `HebClient` and hands it a fresh 6.5-second
       // budget, so a slow search followed by a fallback add can run past Alexa's ~8s
@@ -500,13 +510,16 @@ function errorHandler(): ErrorHandler {
         // and telling someone their item was added when nothing was added is worse than
         // the generic apology. The core sets `partialAdd` only where a line really exists.
         if (error.details?.['partialAdd'] === true) {
-          return input.responseBuilder
-            .speak(
-              'That went through only partly — the item is on your list, but H-E-B would ' +
-                'not set the amount. Please check the quantity in the H-E-B app.',
-            )
-            .withShouldEndSession(true)
-            .getResponse();
+          // Both facts, when both apply. The login remedy on its own invites repeating the
+          // whole request, and the item is already on the list — so the repeat adds more.
+          const speech =
+            error.code === 'SESSION_EXPIRED'
+              ? 'The item is on your list, but my H-E-B login expired before I could set ' +
+                'the amount. Someone needs to run the login tool. Do not ask me again ' +
+                'afterwards — the item is already there; just fix the amount in the app.'
+              : 'That went through only partly — the item is on your list, but H-E-B would ' +
+                'not set the amount. Please check the quantity in the H-E-B app.';
+          return input.responseBuilder.speak(speech).withShouldEndSession(true).getResponse();
         }
 
         // Schema drift is permanent until someone changes the code. Suggesting a retry

@@ -539,6 +539,19 @@ describe('adding — the free-text fallback', () => {
     expect(createListOps).toHaveBeenCalledTimes(1);
   });
 
+  it('asks again for a filler-only request instead of writing it down', async () => {
+    // "Add some" parses to an empty query. Falling through reaches PRODUCT_NOT_FOUND and
+    // the fallback would write "some" onto the list — a request nobody made, from a
+    // sentence that was never finished.
+    const ops = fakeOps();
+    const say = conversation(ops);
+
+    const turn = await say(intent('AddItemIntent', { item: 'some' }));
+
+    expect(turn.speech).toContain('What would you like to add?');
+    expect(ops.addItem).not.toHaveBeenCalled();
+  });
+
   it('does not swallow other failures', async () => {
     // Only PRODUCT_NOT_FOUND is recoverable this way. An expired session must still reach
     // the error handler, or the user is told a line was written when none was.

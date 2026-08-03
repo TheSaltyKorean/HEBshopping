@@ -10,7 +10,7 @@
 import { describe, expect, it } from 'vitest';
 import { HebClient } from './graphql/client.js';
 import { HebListOps, snapWeight } from './lists.js';
-import { hasCode } from './errors.js';
+import { HebError, hasCode } from './errors.js';
 import type { SessionState, Store } from './types.js';
 
 const NOW = 1_800_000_000_000;
@@ -53,7 +53,12 @@ const CATALOG: Record<string, { name: string; pricedByWeight: boolean; increment
   'p-milk': { name: 'H-E-B Half & Half, 32 oz', pricedByWeight: false, increments: [] },
 };
 
-function scripted(lines: FakeLine[]) {
+interface Hooks {
+  /** Return a successful union member whose page does not contain the new line. */
+  omitAddedLine?: boolean;
+}
+
+function scripted(lines: FakeLine[], hooks: Hooks = {}) {
   /** Every query document sent, in order. The assertions read these. */
   const sent: string[] = [];
 
@@ -81,6 +86,15 @@ function scripted(lines: FakeLine[]) {
       },
     };
   };
+
+  /** A successful `ShoppingListV2` whose page happens not to include the new line. */
+  const empty = () => ({
+    __typename: 'ShoppingListV2',
+    id: 'list-1',
+    name: 'Shopping',
+    fulfillment: { store: { storeNumber: 1 } },
+    itemPage: { items: [] },
+  });
 
   const payload = () => ({
     __typename: 'ShoppingListV2',
@@ -113,8 +127,12 @@ function scripted(lines: FakeLine[]) {
 
       case 'HebAddShoppingListText': {
         const text = /genericName: "([^"]+)"/.exec(body.query)?.[1];
-        lines.push({ id: `line-${lines.length}`, quantity: 1, genericName: text! });
-        return json({ addShoppingListItemsV2: payload() });
+        // Real behaviour, verified against the live list: a duplicate genericName does not
+        // create a second line, it merges into the existing one and increments it.
+        const existing = lines.find((line) => line.genericName === text);
+        if (existing !== undefined) existing.quantity += 1;
+        else lines.push({ id: `line-${lines.length}`, quantity: 1, genericName: text! });
+        return json({ addShoppingListItemsV2: hooks.omitAddedLine === true ? empty() : payload() });
       }
 
       case 'HebUpdateShoppingListItem': {
@@ -311,5 +329,119 @@ describe('failed writes never invite a duplicating retry', () => {
 describe('snapWeight rounds toward the shopper', () => {
   it('never returns a rung the product does not offer', () => {
     expect([0.25, 0.5, 0.75]).toContain(snapWeight(0.4, [0.25, 0.5, 0.75]));
+  });
+});
+
+describe('written lines merge rather than duplicate', () => {
+  it('adds to a line that is already there, and says so', async () => {
+    // Verified live: HEB merges a duplicate genericName into the existing line. So the
+    // result is not a new line, and reporting `added` would misdescribe it.
+    const { ops } = scripted([{ id: 'line-0', quantity: 2, genericName: 'birthday candles' }]);
+
+    const result = await ops.addItem({ text: 'birthday candles', quantity: 3 });
+
+    // Consistent with the product path: "add three" onto an existing two means five.
+    expect(result.status).toBe('already_present');
+    expect(result.status === 'already_present' && result.item.quantity).toBe(5);
+  });
+
+  it('does not claim success when a failed add leaves a pre-existing line untouched', async () => {
+    // The trap: reconciling on text alone finds somebody else's identical line and calls
+    // the failed write a success — and then edits their line's quantity.
+    const { ops, sent, lines } = scripted([
+      { id: 'line-0', quantity: 2, genericName: 'birthday candles' },
+    ]);
+    const client = (ops as unknown as { client: { execute: (d: unknown) => Promise<unknown> } })
+      .client;
+    const real = client.execute.bind(client);
+    client.execute = async (document: unknown) => {
+      if ((document as { operationName: string }).operationName === 'HebAddShoppingListText') {
+        throw new Error('connection reset');
+      }
+      return real(document);
+    };
+
+    // The original transport error, not a fabricated success.
+    await expect(ops.addItem({ text: 'birthday candles', quantity: 3 })).rejects.toThrow(
+      'connection reset',
+    );
+    // And the stranger's line is untouched — no quantity update was ever issued.
+    expect(quantityUpdates(sent)).toHaveLength(0);
+    expect(lines[0]!.quantity).toBe(2);
+  });
+
+  it('re-reads when the successful response page omits the new line', async () => {
+    // A long category-sorted list can place the new line outside the returned page. The
+    // add plainly committed, so an indeterminate failure here would send the user to add
+    // it again — merging a second unit.
+    const { ops } = scripted([], { omitAddedLine: true });
+
+    const result = await ops.addItem({ text: 'birthday candles' });
+
+    expect(result.status).toBe('added');
+    expect(result.status === 'added' && result.item.text).toBe('birthday candles');
+  });
+});
+
+describe('an expired session still reports what was already written', () => {
+  /** Fail one operation with SESSION_EXPIRED; everything else works. */
+  function expireOn(operation: string, lines: FakeLine[]) {
+    const { ops } = scripted(lines);
+    const client = (ops as unknown as { client: { execute: (d: unknown) => Promise<unknown> } })
+      .client;
+    const real = client.execute.bind(client);
+    client.execute = async (document: unknown) => {
+      if ((document as { operationName: string }).operationName === operation) {
+        throw new HebError('SESSION_EXPIRED', 'HEB rejected the stored session.');
+      }
+      return real(document);
+    };
+    return ops;
+  }
+
+  it('keeps both the login remedy and the partial add for a written line', async () => {
+    // The line exists at quantity one. The remedy alone would send someone back to repeat
+    // the request after logging in, merging another unit into it.
+    const ops = expireOn('HebUpdateShoppingListItem', []);
+
+    await expect(ops.addItem({ text: 'birthday candles', quantity: 3 })).rejects.toSatisfy(
+      (error: unknown) =>
+        hasCode(error, 'SESSION_EXPIRED') &&
+        (error as { details?: Record<string, unknown> }).details?.['partialAdd'] === true,
+    );
+  });
+
+  it('keeps both for a counter line the add just created', async () => {
+    // HEB already gave the line its default weight; repeating adds the request on top.
+    const ops = expireOn('HebUpdateShoppingListItemWeight', []);
+
+    await expect(ops.addItem({ productId: 'p-turkey', weight: 2 })).rejects.toSatisfy(
+      (error: unknown) =>
+        hasCode(error, 'SESSION_EXPIRED') &&
+        (error as { details?: Record<string, unknown> }).details?.['partialAdd'] === true,
+    );
+  });
+
+  it('does NOT claim a partial add when the line already existed', async () => {
+    // Nothing was created here, so the plain login remedy is the whole story.
+    const ops = expireOn('HebUpdateShoppingListItemWeight', [
+      { id: 'line-0', quantity: 1, weight: 0.5, productId: 'p-turkey' },
+    ]);
+
+    await expect(ops.addItem({ productId: 'p-turkey', weight: 1 })).rejects.toSatisfy(
+      (error: unknown) =>
+        hasCode(error, 'SESSION_EXPIRED') &&
+        (error as { details?: Record<string, unknown> }).details?.['partialAdd'] === undefined,
+    );
+  });
+});
+
+describe('a blank query is not a search', () => {
+  it('rejects it rather than letting it become a written line', async () => {
+    // "Add some" parses to nothing. Searching for it cannot match, and the resulting
+    // PRODUCT_NOT_FOUND would reach the voice fallback and write "some" onto the list.
+    const { ops } = scripted([]);
+
+    await expect(ops.addItem({ query: '   ' })).rejects.toThrow(TypeError);
   });
 });

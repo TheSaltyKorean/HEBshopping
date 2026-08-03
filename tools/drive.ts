@@ -62,6 +62,29 @@ async function listedProducts(page: Page): Promise<Set<string>> {
 }
 
 /**
+ * Line ids, in list order, from the most recent captured response that carries them.
+ *
+ * The DOM exposes only product labels, and a label is not an identity: once the throwaway
+ * is removed and a household member adds the same product, the replacement carries the
+ * same label. HEB's own responses carry the item UUIDs, and the capture already has them.
+ */
+function lineIdsFromCapture(capture: Capture): string[] {
+  for (const call of [...capture.since()].reverse()) {
+    const items = (
+      call.responseBody as
+        | { data?: Record<string, { itemPage?: { items?: Array<{ id?: string }> } }> }
+        | undefined
+    )?.data;
+    if (items === undefined) continue;
+    for (const payload of Object.values(items)) {
+      const ids = payload?.itemPage?.items?.map((item) => item.id).filter(Boolean);
+      if (ids !== undefined && ids.length > 0) return ids as string[];
+    }
+  }
+  return [];
+}
+
+/**
  * How many lines the list holds right now.
  *
  * A name-only diff cannot tell a created line from a merged one: if a household member
@@ -73,12 +96,31 @@ async function lineCount(page: Page): Promise<number> {
   return page.locator('input[type="checkbox"][aria-label^="Select "]').count();
 }
 
-async function isThrowawayLine(page: Page): Promise<boolean> {
+async function isThrowawayLine(page: Page, capture?: Capture): Promise<boolean> {
   const marker = await readFile(THROWAWAY_PATH, 'utf8').catch(() => null);
   if (marker === null) return false;
 
-  const { label = '', at = 0 } = JSON.parse(marker) as { label?: string; at?: number };
+  const {
+    label = '',
+    at = 0,
+    lineId = null,
+  } = JSON.parse(marker) as { label?: string; at?: number; lineId?: string | null };
   if (label === '') return false;
+
+  // Identity, not just a name. A label survives its line: remove the throwaway through the
+  // H-E-B app, let a household member add the same product inside the marker's hour, and a
+  // label-only check happily authorises deleting *their* replacement. The recorded id
+  // cannot be reused that way.
+  if (lineId !== null && capture !== undefined) {
+    const ids = lineIdsFromCapture(capture);
+    if (ids.length > 0 && ids[0] !== lineId) {
+      console.error(
+        '⛔ The first list line is not the one this marker describes — the throwaway is\n' +
+          '   gone, or something else now sits at the top. Refusing to treat it as ours.',
+      );
+      return false;
+    }
+  }
 
   // Markers expire. One left over from yesterday says nothing about what is on the list
   // today, and the whole claim being made is that *this* exercise created the line.
@@ -192,7 +234,7 @@ async function main(): Promise<void> {
       console.log('\nScreenshot: captures/list-page.png');
     } else if (command === 'add') {
       capture.mark();
-      await addItem(page, argument);
+      await addItem(page, argument, capture);
       console.log('\n=== calls provoked by the add flow ===');
       for (const call of capture.since()) {
         console.log(`  ${call.operationName}  status=${call.responseStatus}`);
@@ -222,12 +264,13 @@ async function main(): Promise<void> {
  *
  * Each step reports what it found, so a partial failure still teaches us the DOM.
  */
-async function addItem(page: Page, text: string): Promise<void> {
+async function addItem(page: Page, text: string, capture: Capture): Promise<void> {
   if (!text) throw new Error('add requires text, e.g. add "oat milk"');
 
   // Before anything is clicked: what is already on this list?
   const alreadyListed = await listedProducts(page);
   const linesBefore = await lineCount(page);
+  const idsBefore = lineIdsFromCapture(capture);
   console.log(`\nList currently holds ${linesBefore} product line(s).`);
 
   console.log(`\nClicking "Add an item" …`);
@@ -318,9 +361,20 @@ async function addItem(page: Page, text: string): Promise<void> {
 
   // Record what this run put on the list, so `remove` can prove the line it is about to
   // delete is a throwaway rather than somebody's actual shopping.
+  // The id of the line that appeared, taken from HEB's own response rather than the DOM.
+  // Without it the marker names a product, and products outlive the lines that hold them.
+  const idsNow = lineIdsFromCapture(capture);
+  const createdId = idsNow.find((id) => !idsBefore.includes(id)) ?? null;
+
   await mkdir(dirname(THROWAWAY_PATH), { recursive: true });
-  await writeFile(THROWAWAY_PATH, JSON.stringify({ label, at: Date.now() }, null, 2));
-  console.log(`Recorded throwaway marker at ${THROWAWAY_PATH}`);
+  await writeFile(
+    THROWAWAY_PATH,
+    JSON.stringify({ label, lineId: createdId, at: Date.now() }, null, 2),
+  );
+  console.log(
+    `Recorded throwaway marker at ${THROWAWAY_PATH}` +
+      (createdId === null ? ' (no line id seen — label only)' : ` (line ${createdId})`),
+  );
 }
 
 /**
@@ -346,7 +400,7 @@ async function exerciseQuantity(page: Page, capture: Capture): Promise<void> {
   // decrements to zero, which removes it — so "quantity is 1" is not a safety check, it is
   // a description of most groceries. Prove ownership from the marker, exactly as `remove`
   // does, and put the quantity back regardless of what happens.
-  if (!(await isThrowawayLine(page))) {
+  if (!(await isThrowawayLine(page, capture))) {
     console.error('⛔ The first line is not the item this run added — refusing to mutate it.');
     console.error('   Run `npx tsx tools/drive.ts add "<something>"` against an empty list first.');
     return;
@@ -392,7 +446,7 @@ async function exerciseQuantity(page: Page, capture: Capture): Promise<void> {
   // dropping the marker that authorizes removing it.
   await page.reload({ waitUntil: 'domcontentloaded' }).catch(() => undefined);
   await page.waitForTimeout(2_000);
-  if (await isThrowawayLine(page)) {
+  if (await isThrowawayLine(page, capture)) {
     console.error(
       '\n⛔ The marked line survived the decrements — keeping the ownership marker so\n' +
         '   `drive.ts remove` can clean it up.',
@@ -416,7 +470,7 @@ async function removeItem(page: Page, capture: Capture): Promise<void> {
   // instructions advertise the command — so it must prove the line belongs to this
   // exercise rather than to the household. "The list has one item" is not proof: a normal
   // list with one real grocery satisfies it just as well.
-  if (!(await isThrowawayLine(page))) {
+  if (!(await isThrowawayLine(page, capture))) {
     console.error('⛔ The first line is not the item this run added — refusing to delete it.');
     console.error('   Run `npx tsx tools/drive.ts add "<something>"` first.');
     return;
@@ -482,7 +536,7 @@ async function removeItem(page: Page, capture: Capture): Promise<void> {
   // delete control that produced no confirmation dialog, leaves the throwaway line on a
   // real household list — and clearing the marker there discards the only thing that
   // authorizes a later cleanup, stranding test data nothing is allowed to remove.
-  if (await isThrowawayLine(page)) {
+  if (await isThrowawayLine(page, capture)) {
     console.error(
       '\n⛔ The marked line is still on the list — the removal did not take effect.\n' +
         '   Keeping the ownership marker so `remove` can be run again.',

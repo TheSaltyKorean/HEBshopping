@@ -196,6 +196,18 @@ async function cleanUp(): Promise<void> {
   const added = (await listOps.getList()).items.filter((item) => createdLines.has(item.lineId));
 
   for (const item of added) {
+    // Created by this run, yes — but that was proved when the add returned, and a
+    // household member merging into the same line since then leaves it above one.
+    // Deleting it now would take their unit with it. Creation-time proof is not
+    // cleanup-time proof.
+    if (item.quantity !== 1) {
+      console.error(
+        `\n⚠ "${item.product?.name ?? item.text}" was created by this run but now reads ` +
+          `${item.quantity}.\n  Somebody added to it, so it is NOT being deleted. ` +
+          'Reconcile by hand.',
+      );
+      continue;
+    }
     await listOps.removeItem({ lineId: item.lineId });
     console.log(`\n🧹 cleaned up: ${item.product?.name ?? item.text}`);
   }

@@ -149,11 +149,17 @@ async function main(): Promise<void> {
 
   const added = [...lineIdsIn(listed)].filter((lineId) => !before.has(lineId));
 
-  // Arm cleanup only when exactly one line appeared. If a household member added
-  // something between the snapshot and this read, the diff holds several ids and picking
-  // "the first" would arm deletion of *their* grocery — the cleanup would then destroy
-  // real data precisely because something unexpected happened.
-  if (added.length === 1 && addReply.includes('Added')) {
+  /** The quantity MCP reported, e.g. "Added to the HEB list: 2 × Milk" → 2. */
+  const reportedQuantity = Number(/:\s*(\d+)\s*×/.exec(addReply)?.[1] ?? '1');
+
+  // Arm cleanup only when exactly one line appeared *and* it holds exactly one unit.
+  //
+  // `includes('Added')` alone does not prove creation: if a household member created this
+  // product between HebListOps' internal snapshot and its mutation, HEB merges our unit
+  // into their line and the reply still reads "Added to the HEB list: 2 × …", with exactly
+  // one unfamiliar line id in the diff. A created line reads one; anything higher was
+  // merged and belongs to somebody else.
+  if (added.length === 1 && addReply.includes('Added') && reportedQuantity === 1) {
     createdLine = added[0]!;
   }
 
@@ -218,29 +224,24 @@ main()
     process.exitCode = 1;
   })
   .finally(async () => {
-    // Unconditional: whatever went wrong, the household list must not keep test data.
-    // Resolve the line late if the read that would have identified it never happened.
+    // Deliberately NOT resolving ownership late from the product name.
+    //
+    // That branch existed for the case where the add committed but the read identifying
+    // its line never happened. It cannot survive the current contract: a thrown add is
+    // explicitly indeterminate — the write may never have reached HEB — and a household
+    // member adding the same product leaves a line matching the name just as well. Deleting
+    // on a name match would destroy their grocery in exactly the situation the uncertainty
+    // was created by.
+    //
+    // The cost is a line left behind after a failed run, which is visible, reported, and
+    // removable by hand. The alternative cost is deleting somebody's shopping.
     if (createdLine === null && createdProductId !== null) {
-      const listing = await call('heb_read_list').catch(() => '');
-
-      // Match the *product*, not "the only new line". A household member adding one item
-      // after the opening snapshot also leaves exactly one unfamiliar line, and deleting
-      // it would destroy their grocery in the name of cleaning up ours.
-      const mine = listing
-        .split('\n')
-        .find(
-          (line) =>
-            createdProductName !== null &&
-            line.includes(createdProductName) &&
-            !before.has(line.match(/lineId: ([0-9a-f-]{36})/)?.[1] ?? ''),
-        );
-
-      const found = mine?.match(/lineId: ([0-9a-f-]{36})/)?.[1];
-      if (found !== undefined) createdLine = found;
-      else {
-        console.error('⛔ Could not identify our line; leaving the list alone. Check it by hand.');
-        process.exitCode = 1;
-      }
+      console.error(
+        `⛔ The add for "${createdProductName ?? createdProductId}" did not confirm, so this\n` +
+          '   run cannot prove which line — if any — it created. Leaving the list untouched.\n' +
+          '   Check it by hand: there may be one extra unit of that product.',
+      );
+      process.exitCode = 1;
     }
 
     if (createdLine !== null) {

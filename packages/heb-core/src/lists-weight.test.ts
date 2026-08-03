@@ -369,9 +369,17 @@ describe('written lines merge rather than duplicate', () => {
       return real(document);
     };
 
-    // The original transport error, not a fabricated success.
-    await expect(ops.addItem({ text: 'birthday candles', quantity: 3 })).rejects.toThrow(
-      'connection reset',
+    // Indeterminate, not a fabricated success — and not retryable, because if the write
+    // did land the retry merges another unit into the line.
+    await expect(ops.addItem({ text: 'birthday candles', quantity: 3 })).rejects.toSatisfy(
+      (error: unknown) => {
+        const typed = error as { retryable?: boolean; details?: Record<string, unknown> };
+        return (
+          hasCode(error, 'UPSTREAM_ERROR') &&
+          typed.retryable === false &&
+          typed.details?.['indeterminate'] === true
+        );
+      },
     );
     // And the stranger's line is untouched — no quantity update was ever issued.
     expect(quantityUpdates(sent)).toHaveLength(0);
@@ -635,5 +643,28 @@ describe('an add never lowers a concurrently raised line', () => {
 
     expect(result.status).toBe('already_present');
     expect(sent.filter((q) => q.includes('addShoppingListItemsV2'))).toHaveLength(0);
+  });
+});
+
+describe('the weight re-read actually reaches HEB', () => {
+  it('does not compute the target from a cached snapshot', async () => {
+    // The previous "refresh" called getList(), which served cachedList — so the fix was a
+    // no-op and a concurrently raised weight could still be overwritten. The re-read must
+    // drop the cache first.
+    const lines: FakeLine[] = [
+      { id: 'line-0', quantity: 1, weight: 1, productId: 'p-turkey' },
+    ];
+    const { ops, sent } = scripted(lines);
+
+    // Warm the cache, exactly as a real caller would by resolving the list first.
+    await ops.getList();
+    // A household member raises the deli order after that read.
+    lines[0]!.weight = 2;
+
+    await ops.addItem({ productId: 'p-turkey', weight: 0.25 });
+
+    // 2 lb seen fresh, plus the quarter asked for — not 1 lb from the stale snapshot.
+    expect(sent.some((query) => query.includes('weight: 2.25'))).toBe(true);
+    expect(lines[0]!.weight).toBe(2.25);
   });
 });

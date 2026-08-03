@@ -428,6 +428,10 @@ export class HebListOps implements ListOps {
       // atomic, so the best available is to shrink the window between observing the weight
       // and overwriting it — otherwise a household member raising 1 lb to 2 lb between the
       // opening read and here has most of their order removed.
+      //
+      // The cache must be dropped first, or `getList` serves the very snapshot this is
+      // trying to get past and the "refresh" changes nothing at all.
+      this.cachedList = undefined;
       const fresh =
         (await this.getList(listId).catch(() => null))?.items.find(
           (item) => item.lineId === existing.lineId,
@@ -608,36 +612,25 @@ export class HebListOps implements ListOps {
       assertMutationSucceeded(data.addShoppingListItemsV2, 'add the note');
       payload = data.addShoppingListItemsV2;
     } catch (error) {
-      // A *definitive* refusal has nothing to reconcile: HEB returned a non-success union
-      // member, so this write conclusively did not happen. Running the quantity check
-      // anyway would let a household member's concurrent merge — which raises the same
-      // line above the snapshot — stand in as proof, reporting a refused request as a
-      // success and then editing their line.
+      // Definitive failures keep their own classification: an expired session never
+      // authenticated, and a `rejected` union member is HEB saying no. Neither wrote
+      // anything, and neither needs evidence gathered about it.
+      if (isHebError(error) && error.code === 'SESSION_EXPIRED') throw error;
       if (isHebError(error) && error.details?.['rejected'] === true) throw error;
 
-      // An expired session is rethrown as itself further down, once we know whether a line
-      // was created — the remedy and the partial state are both needed, and neither alone
-      // is enough to stop a retry from writing more.
-      let seen: HebList;
-      try {
-        seen = await this.getList(id);
-      } catch {
-        // The reconciliation read failed too, most likely because the first timeout spent
-        // the budget. Nothing is known, and "try again" is the one answer that can make it
-        // worse: the retry merges another unit into the line.
-        if (isHebError(error) && error.code === 'SESSION_EXPIRED') throw error;
-        throw new HebError(
-          'UPSTREAM_ERROR',
-          'HEB did not confirm the note. Check the list before asking again — it may have worked.',
-          { cause: error, retryable: false, details: { indeterminate: true } },
-        );
-      }
-
-      const now = seen.items.find(isTextLine(trimmed));
-      // Strictly greater than the snapshot: an unchanged line is the one already there,
-      // not evidence that this write landed.
-      if (now === undefined || now.quantity <= base) throw error;
-      return this.applyTextQuantity(id, now, remaining, wasPresent);
+      // Everything else is a transport failure, and the list cannot resolve it. A quantity
+      // above the snapshot is not proof this write landed: a household member merging the
+      // same text produces exactly the same observation, and the two are indistinguishable
+      // — the identical reasoning that made the product path stop guessing. Claiming it
+      // reports a write that may never have happened, and a multi-unit request then edits
+      // their line.
+      //
+      // Non-retryable, because if the write *did* land the retry merges another unit.
+      throw new HebError(
+        'UPSTREAM_ERROR',
+        'HEB did not confirm the note. Check the list before asking again — it may have worked.',
+        { cause: error, retryable: false, details: { indeterminate: true } },
+      );
     }
 
     let added = toHebList(payload).items.find(isTextLine(trimmed));

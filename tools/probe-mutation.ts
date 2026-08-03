@@ -17,7 +17,16 @@
 
 import { readFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
-import { FileStore, HebClient, HebListOps, HEB_GRAPHQL_URL, HEB_ORIGIN, type Cookie, type SessionState } from '@heb/core';
+import {
+  FileStore,
+  HebClient,
+  HebListOps,
+  HEB_GRAPHQL_URL,
+  HEB_ORIGIN,
+  cookieHeaderFor,
+  type Cookie,
+  type SessionState,
+} from '@heb/core';
 
 const SESSION_PATH = resolve('.session/session.json');
 
@@ -40,10 +49,13 @@ async function currentSession(): Promise<SessionState> {
 }
 
 async function rawGraphql(session: SessionState, body: unknown): Promise<any> {
-  const cookies = session.cookies
-    .filter((c) => c.domain === 'www.heb.com' || c.domain === '.heb.com')
-    .map((c) => `${c.name}=${c.value}`)
-    .join('; ');
+  // The same builder the production client uses. A hand-rolled domain filter sends
+  // expired, path-ineligible and duplicate copies that `HebClient` omits — so the server
+  // can reject this request while the real client stays authenticated, and the probe then
+  // concludes that the GraphQL syntax under test does not work. This tool exists to decide
+  // exactly that question, so measuring something other than production is worse than not
+  // measuring.
+  const cookies = cookieHeaderFor(session, 'www.heb.com', '/graphql');
 
   const response = await fetch(HEB_GRAPHQL_URL, {
     method: 'POST',
@@ -113,6 +125,14 @@ async function main(): Promise<void> {
   // here, and outside the try that failure would exit through the outer catch with the
   // line still on a real household list.
   let lineId: string | null = null;
+  /**
+   * A line this probe incremented but did not create.
+   *
+   * Deleting it would destroy somebody's grocery; leaving it silently raised is the other
+   * half of the same mistake. Cleanup restores it instead — but only while it still reads
+   * what the probe left, since a further change is not this probe's to undo.
+   */
+  let mergedLine: { lineId: string; produced: number } | null = null;
   try {
     const added = await fresh.addItem({ productId: disposable.id });
     if (added.status !== 'added') {
@@ -124,9 +144,13 @@ async function main(): Promise<void> {
     // `added` and returns their line id. Marking it disposable would hand it to the raw
     // deletion below. A genuinely new line reads exactly one.
     if (added.item.quantity !== 1) {
+      // Refusing to delete is not enough on its own: the probe still added a unit to a
+      // line it does not own, and simply throwing here would leave that increment behind.
+      // Record it so the cleanup can put the line back rather than remove it.
+      mergedLine = { lineId: added.item.lineId, produced: added.item.quantity };
       throw new Error(
         `the add merged into an existing line (quantity ${added.item.quantity}) rather than ` +
-          'creating one — nothing marked disposable, list left untouched',
+          'creating one — nothing will be deleted; the extra unit is undone in cleanup',
       );
     }
     lineId = added.item.lineId;
@@ -216,6 +240,31 @@ async function main(): Promise<void> {
         console.error('⛔ CLEANUP may have failed — check the list:', error);
         process.exitCode = 1;
       });
+    }
+
+    // The probe merged into somebody else's line. Take back exactly the unit it added,
+    // and only while a fresh read still shows what it left — a further change belongs to
+    // whoever made it.
+    if (mergedLine !== null) {
+      const { lineId: merged, produced } = mergedLine;
+      const now = (await reader().getList().catch(() => null))?.items.find(
+        (item) => item.lineId === merged,
+      );
+      if (now === undefined) {
+        console.log('\n🧹 the merged line is gone; nothing to undo.');
+      } else if (now.quantity !== produced) {
+        console.error(
+          `\n⚠ the merged line reads ${now.quantity}, not the ${produced} this probe left.\n` +
+            '  Somebody changed it since; NOT undoing. Reconcile by hand.',
+        );
+        process.exitCode = 1;
+      } else {
+        console.log(`\n🧹 undoing the probe's extra unit (${produced} → ${produced - 1})`);
+        await lists.setItemQuantity(merged, produced - 1).catch((error: unknown) => {
+          console.error('⛔ Could not undo the increment — check the list:', error);
+          process.exitCode = 1;
+        });
+      }
     }
   }
 }

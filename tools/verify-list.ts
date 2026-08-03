@@ -64,14 +64,31 @@ async function restoreLine(
   // have been created here; anything higher was merged, and deleting it would take their
   // grocery with it.
   if (preExisting === undefined) {
-    if (produced === 1) {
-      await time('removeItem', () => lists.removeItem({ lineId }));
+    if (produced !== 1) {
+      console.error(
+        `   ⚠ "${label}" is not in the opening snapshot but reads ${produced}, so this run\n` +
+          '     merged into a line somebody else created. NOT deleting it; reconcile by hand.',
+      );
       return;
     }
-    console.error(
-      `   ⚠ "${label}" is not in the opening snapshot but reads ${produced}, so this run\n` +
-        '     merged into a line somebody else created. NOT deleting it; reconcile by hand.',
-    );
+
+    // One unit *at the time the add returned* proves this run created the line. It does
+    // not prove the line is still only this run's: a household member merging into it
+    // during the read-back and find steps leaves it at two, and deleting it then takes
+    // their unit as well. Re-check before destroying anything.
+    const current = (await freshList(lists)).items.find((item) => item.lineId === lineId);
+    if (current === undefined) {
+      console.log(`   "${label}" is already gone; nothing to remove.`);
+      return;
+    }
+    if (current.quantity !== 1) {
+      console.error(
+        `   ⚠ "${label}" was created by this run but now reads ${current.quantity}, so\n` +
+          '     somebody added to it. NOT deleting it; reconcile by hand.',
+      );
+      return;
+    }
+    await time('removeItem', () => lists.removeItem({ lineId }));
     return;
   }
 

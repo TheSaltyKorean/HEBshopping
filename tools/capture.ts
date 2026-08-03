@@ -288,13 +288,20 @@ async function main(): Promise<void> {
 
   // Periodic autosave, so a crash or an accidental window close doesn't lose the session.
   autosaveTimer = setInterval(() => {
-    // Tracked, so shutdown can settle it. An untracked autosave can finish *after* the
-    // final flush and overwrite the complete capture with an older snapshot — losing
-    // exactly the last operation, which is usually the one the run was performed to see.
-    autosave = mkdir(CAPTURE_DIR, { recursive: true }).then(() =>
-      writeSecret(resolve(CAPTURE_DIR, 'operations.json'),
-        JSON.stringify(Object.fromEntries(operations), null, 2)),
-    );
+    // *Chained*, not merely tracked. Tracking one promise is enough only while writes
+    // finish inside the interval: a write slower than 15 seconds gets its reference
+    // overwritten by the next tick, so shutdown awaits only the newest one and the older
+    // write can land after the final flush — overwriting the complete capture with an
+    // earlier snapshot, and losing exactly the last operation, which is usually the one
+    // the run was performed to see.
+    const previous = autosave ?? Promise.resolve();
+    autosave = previous
+      .catch(() => undefined)
+      .then(() => mkdir(CAPTURE_DIR, { recursive: true }))
+      .then(() =>
+        writeSecret(resolve(CAPTURE_DIR, 'operations.json'),
+          JSON.stringify(Object.fromEntries(operations), null, 2)),
+      );
     void autosave.catch(() => undefined);
     // Keep a live snapshot of the cookie jar: it is the expensive thing to reacquire, and
     // it cannot be read once the context starts closing.

@@ -56,10 +56,16 @@ export function readPending(input: HandlerInput): PendingChoice | null {
   // Session attributes survive a round trip as plain JSON, so nothing about their shape is
   // guaranteed. Validate rather than trust: a malformed value should read as "no pending
   // question" and let the user start over, not throw mid-conversation.
+  // `index` must be a real position, not merely a number. `-1`, `NaN` and `1.5` all pass a
+  // bare `typeof` check and a `>= length` check, and `currentOffer` then returns undefined
+  // while the yes/no handlers assert an offer exists — so a malformed attribute throws
+  // mid-dialog instead of quietly reading as "no pending question", which is the whole
+  // point of validating here.
   if (
     pending === undefined ||
     !Array.isArray(pending.offers) ||
-    typeof pending.index !== 'number' ||
+    !Number.isInteger(pending.index) ||
+    pending.index < 0 ||
     pending.index >= pending.offers.length
   ) {
     return null;

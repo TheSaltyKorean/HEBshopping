@@ -167,19 +167,20 @@ async function main(): Promise<void> {
       productIds: ReadonlySet<string>,
       error: unknown,
     ): Promise<never> => {
-      if (productIds.size > 0) {
-        const after = await lists.getList().catch(() => null);
-        const mine = after?.items.find(
-          (item) =>
-            item.product !== undefined &&
-            productIds.has(item.product.id) &&
-            !before.items.some((original) => original.lineId === item.lineId),
-        );
-        if (mine !== undefined) {
-          touchedLine = mine.lineId;
-          touchedQuantity = mine.quantity;
-        }
-      }
+      // Deliberately claims nothing.
+      //
+      // `HebListOps` now reports a transport failure as *indeterminate* because a line
+      // appearing afterwards is equally well explained by a household member's concurrent
+      // add. This readback matched on "any plausible product, absent from the snapshot",
+      // which is an even looser rule — and `restoreLine` deletes what it is handed when the
+      // quantity is one. Inferring ownership here would reinstate exactly the guess the
+      // core stopped making, at the one point where being wrong destroys data.
+      void productIds;
+      console.error(
+        '\n⚠ The add did not confirm, so this run cannot prove what it wrote.\n' +
+          '  Nothing is claimed for restoration. Check the list by hand: there may be an\n' +
+          '  extra unit of whatever the query resolved to.',
+      );
       throw error;
     };
 

@@ -68,21 +68,31 @@ async function listedProducts(page: Page): Promise<Set<string>> {
  * is removed and a household member adds the same product, the replacement carries the
  * same label. HEB's own responses carry the item UUIDs, and the capture already has them.
  */
-function lineIdsFromCapture(capture: Capture): string[] {
+function linesFromCapture(capture: Capture): Array<{ id: string; quantity: number }> {
   for (const call of [...capture.since()].reverse()) {
     const items = (
       call.responseBody as
-        | { data?: Record<string, { itemPage?: { items?: Array<{ id?: string }> } }> }
+        | {
+            data?: Record<
+              string,
+              { itemPage?: { items?: Array<{ id?: string; quantity?: number }> } }
+            >;
+          }
         | undefined
     )?.data;
     if (items === undefined) continue;
     for (const payload of Object.values(items)) {
-      const ids = payload?.itemPage?.items?.map((item) => item.id).filter(Boolean);
-      if (ids !== undefined && ids.length > 0) return ids as string[];
+      const rows = payload?.itemPage?.items
+        ?.filter((item) => typeof item.id === 'string')
+        .map((item) => ({ id: item.id!, quantity: item.quantity ?? 1 }));
+      if (rows !== undefined && rows.length > 0) return rows;
     }
   }
   return [];
 }
+
+const lineIdsFromCapture = (capture: Capture): string[] =>
+  linesFromCapture(capture).map((line) => line.id);
 
 /**
  * How many lines the list holds right now.
@@ -104,7 +114,13 @@ async function isThrowawayLine(page: Page, capture?: Capture): Promise<boolean> 
     label = '',
     at = 0,
     lineId = null,
-  } = JSON.parse(marker) as { label?: string; at?: number; lineId?: string | null };
+    quantity = null,
+  } = JSON.parse(marker) as {
+    label?: string;
+    at?: number;
+    lineId?: string | null;
+    quantity?: number | null;
+  };
   if (label === '') return false;
 
   // Identity, not just a name. A label survives its line: remove the throwaway through the
@@ -112,13 +128,26 @@ async function isThrowawayLine(page: Page, capture?: Capture): Promise<boolean> 
   // label-only check happily authorises deleting *their* replacement. The recorded id
   // cannot be reused that way.
   if (lineId !== null && capture !== undefined) {
-    const ids = lineIdsFromCapture(capture);
-    if (ids.length > 0 && ids[0] !== lineId) {
-      console.error(
-        '⛔ The first list line is not the one this marker describes — the throwaway is\n' +
-          '   gone, or something else now sits at the top. Refusing to treat it as ours.',
-      );
-      return false;
+    const lines = linesFromCapture(capture);
+    if (lines.length > 0) {
+      if (lines[0]!.id !== lineId) {
+        console.error(
+          '⛔ The first list line is not the one this marker describes — the throwaway is\n' +
+            '   gone, or something else now sits at the top. Refusing to treat it as ours.',
+        );
+        return false;
+      }
+      // Identity is not enough. `remove` deletes the whole line and `mutate` decrements it,
+      // so a household member who incremented the throwaway since it was created would have
+      // their units consumed by either command. Ownership of a *line* expires the moment
+      // somebody else contributes to it.
+      if (quantity !== null && lines[0]!.quantity !== quantity) {
+        console.error(
+          `⛔ The marked line now reads ${lines[0]!.quantity}, not the ${quantity} this run\n` +
+            '   created. Somebody added to it; refusing to treat it as disposable.',
+        );
+        return false;
+      }
     }
   }
 
@@ -363,17 +392,21 @@ async function addItem(page: Page, text: string, capture: Capture): Promise<void
   // delete is a throwaway rather than somebody's actual shopping.
   // The id of the line that appeared, taken from HEB's own response rather than the DOM.
   // Without it the marker names a product, and products outlive the lines that hold them.
-  const idsNow = lineIdsFromCapture(capture);
-  const createdId = idsNow.find((id) => !idsBefore.includes(id)) ?? null;
+  const linesNow = linesFromCapture(capture);
+  const created = linesNow.find((line) => !idsBefore.includes(line.id)) ?? null;
 
   await mkdir(dirname(THROWAWAY_PATH), { recursive: true });
   await writeFile(
     THROWAWAY_PATH,
-    JSON.stringify({ label, lineId: createdId, at: Date.now() }, null, 2),
+    JSON.stringify(
+      { label, lineId: created?.id ?? null, quantity: created?.quantity ?? null, at: Date.now() },
+      null,
+      2,
+    ),
   );
   console.log(
     `Recorded throwaway marker at ${THROWAWAY_PATH}` +
-      (createdId === null ? ' (no line id seen — label only)' : ` (line ${createdId})`),
+      (created === null ? ' (no line id seen — label only)' : ` (line ${created.id} ×${created.quantity})`),
   );
 }
 

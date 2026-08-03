@@ -133,6 +133,12 @@ async function main(): Promise<void> {
    * what the probe left, since a further change is not this probe's to undo.
    */
   let mergedLine: { lineId: string; produced: number } | null = null;
+
+  // The cleanup scope opens HERE, around the add itself. Previously it began after this
+  // block, so every path that threw during the add — including the one that had just
+  // recorded a merged line to restore — exited before the `finally` and left the change
+  // behind. The thing that needs undoing is created inside the add, so the guard has to
+  // start before it.
   try {
     const added = await fresh.addItem({ productId: disposable.id });
     if (added.status !== 'added') {
@@ -155,26 +161,29 @@ async function main(): Promise<void> {
     }
     lineId = added.item.lineId;
     console.log(`Added throwaway line: ${added.item.text}`);
-  } catch (error) {
-    // Reconcile through a *fresh* client. `lists` cached its snapshot before the mutation
-    // and nothing invalidated it, so it cannot see a line the lost write committed — the
-    // probe would rethrow with no line id and exit before the cleanup below, leaving test
-    // data on a real household list.
-    const committed = (await reader().getList().catch(() => null))?.items.find(
-      (item) => item.product?.id === disposable.id,
-    );
-    // Same rule as above: only a line reading exactly one can be attributed to this probe.
-    if (committed === undefined || committed.quantity !== 1) throw error;
-    lineId = committed.lineId;
-    console.log(`Add reported failure but committed line ${lineId}; will clean up.`);
-  }
 
-  // Whatever any attempt returns — success, a refusal union member, or a throw — the
-  // throwaway line must not survive this probe. Attempts B and C run precisely when A
-  // failed to delete it, so falling through without cleanup leaves test data on a real
-  // household list.
-  try {
     const listId = list.listId;
+
+    // Revalidate immediately before issuing any raw delete. The quantity check above proved
+    // ownership *when the add returned*; between then and now a household member can have
+    // incremented the same line, and these attempts delete the whole line by id — they have
+    // no notion of "just my unit". A line that has changed is no longer this probe's to
+    // destroy, so hand it to the restore path instead.
+    const beforeDelete = (await reader().getList().catch(() => null))?.items.find(
+      (item) => item.lineId === lineId,
+    );
+    if (beforeDelete === undefined) {
+      console.log('\nThe throwaway line is already gone; nothing to delete.');
+      return;
+    }
+    if (beforeDelete.quantity !== 1) {
+      mergedLine = { lineId, produced: beforeDelete.quantity };
+      lineId = null; // never hand a shared line to the raw deletes or the cleanup remove
+      throw new Error(
+        `the throwaway line now reads ${beforeDelete.quantity} — somebody added to it, so ` +
+          'it will not be deleted; the probe\'s own unit is undone in cleanup',
+      );
+    }
 
     console.log('\n══ Attempt A: enums UNQUOTED (proper GraphQL literal syntax) ══');
     const unquoted = await rawGraphql(session, {

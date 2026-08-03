@@ -80,30 +80,21 @@ function guardedListOps(): HebListOps {
       }
       return result;
     } catch (error) {
-      // The throw does not mean nothing happened: HEB may have committed the write and
-      // lost the response. But claim only the product *this call* asked for — a household
-      // member adding something at the same moment also appears as a line absent from the
-      // snapshot, and an unconditional diff would mark their grocery as test data and
-      // delete it during cleanup.
-      const wanted = input.productId;
-      const after = wanted === undefined ? null : await ops.getList().catch(() => null);
-
-      const mine = after?.items.find((item) => item.product?.id === wanted);
-      if (mine !== undefined) {
-        const previous = before.get(mine.lineId);
-        // Same rule as the success path: unfamiliar *and* reading one means this run
-        // created it. Unfamiliar but higher means it merged into somebody else's new line.
-        if (previous === undefined && mine.quantity === 1) createdLines.add(mine.lineId);
-        else if (previous === undefined && !raisedQuantities.has(mine.lineId)) {
-          raisedQuantities.set(mine.lineId, {
-            previous: mine.quantity - 1,
-            produced: mine.quantity,
-          });
-        }
-        else if (mine.quantity > previous && !raisedQuantities.has(mine.lineId)) {
-          raisedQuantities.set(mine.lineId, { previous, produced: mine.quantity });
-        }
-      }
+      // Deliberately claims nothing.
+      //
+      // `HebListOps` now reports a transport failure as *indeterminate*, precisely because
+      // a line appearing afterwards is equally well explained by a household member adding
+      // the same product. Reading the list here and calling the match "ours" reinstates the
+      // guess the core stopped making — and the consequence is worse in a verifier, whose
+      // whole job ends by deleting what it believes it owns.
+      //
+      // The cost is a line this run may have created and will not clean up. That is
+      // visible, reported, and removable by hand.
+      console.error(
+        `\n⚠ The add for ${input.productId ?? input.query ?? '(unknown)'} did not confirm.\n` +
+          '  This run cannot prove what it wrote, so nothing is claimed for cleanup.\n' +
+          '  Check the list by hand: there may be one extra unit.',
+      );
       throw error;
     }
   };
@@ -115,6 +106,22 @@ function guardedListOps(): HebListOps {
           'That would remove a real grocery item.',
       );
     }
+
+    // Membership in `createdLines` was earned when the add returned. It does not survive
+    // contact with a household member: if somebody added the same product since, the line
+    // now holds their unit too and deleting it takes both. The cleanup loop checks this,
+    // and the *scripted removal* — the path the verification actually exercises — used to
+    // walk straight past it.
+    const current = (await ops.getList().catch(() => null))?.items.find(
+      (item) => item.lineId === input.lineId,
+    );
+    if (current !== undefined && current.quantity !== 1) {
+      throw new Error(
+        `REFUSED: line ${input.lineId} now reads ${current.quantity}, not the 1 this run ` +
+          'created. Somebody added to it; deleting would remove their unit as well.',
+      );
+    }
+
     await realRemove(input);
     createdLines.delete(input.lineId);
   };

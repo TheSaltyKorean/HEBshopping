@@ -107,6 +107,21 @@ function candidatesIn(reply: string): Array<{ name: string; productId: string }>
   }));
 }
 
+/**
+ * What `heb_read_list` says about one line.
+ *
+ * The MCP surface renders a line as `• <text>  [lineId: …]`, and prefixes `N × ` only when
+ * the quantity exceeds one (`describeItem` in the server). So the absence of that prefix
+ * *is* the "still exactly one unit" signal.
+ *
+ * `absent` is not a failure: the line may legitimately be gone already.
+ */
+function lineStateIn(listing: string, lineId: string): 'absent' | 'sole' | 'shared' {
+  const line = listing.split('\n').find((row) => row.includes(lineId));
+  if (line === undefined) return 'absent';
+  return /^\s*•\s*\d+\s*×/.test(line) ? 'shared' : 'sole';
+}
+
 async function main(): Promise<void> {
   await client.connect(transport);
 
@@ -188,6 +203,28 @@ async function main(): Promise<void> {
     );
   }
 
+  // One more read, immediately before deleting. The exact-one check above proved ownership
+  // when the add returned; since then this run has done a full list read, and a household
+  // member merging into the same line leaves it holding their unit too. Deleting by line id
+  // takes the whole line, so a changed quantity means it is no longer ours to remove.
+  const state = lineStateIn(await call('heb_read_list'), createdLine);
+  if (state === 'absent') {
+    console.log('   (the line is already gone; nothing to remove)');
+    createdLine = null;
+    createdProductId = null;
+    createdProductName = null;
+    return;
+  }
+  if (state === 'shared') {
+    createdLine = null;
+    createdProductId = null;
+    createdProductName = null;
+    throw new Error(
+      'the line this run created no longer reads one unit — somebody added to it, so it ' +
+        'is not being deleted. Reconcile by hand.',
+    );
+  }
+
   // Remove by lineId, not by free text. Free-text removal against a real list can match a
   // pre-existing grocery, and `verify:alexa` already covers that path behind a guard that
   // refuses to delete anything it did not create.
@@ -245,6 +282,18 @@ main()
     }
 
     if (createdLine !== null) {
+      // Same fresh check as the normal path: a line that has grown since is shared, and
+      // the finalizer runs precisely when something went wrong — the moment least likely
+      // to have left the list as this run expects.
+      const state = lineStateIn(await call('heb_read_list').catch(() => ''), createdLine);
+      if (state === 'shared') {
+        console.error(
+          `⛔ Line ${createdLine} now holds more than the unit this run added. NOT deleting ` +
+            'it; reconcile by hand.',
+        );
+        process.exitCode = 1;
+        return;
+      }
       console.log(`\n🧹 removing the line this run created (${createdLine})`);
       await call('heb_remove_item', { lineId: createdLine }).catch((error: unknown) => {
         console.error('⛔ CLEANUP FAILED — the list still holds test data:', error);

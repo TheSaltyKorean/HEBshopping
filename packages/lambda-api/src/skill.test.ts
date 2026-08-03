@@ -13,6 +13,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { HebError, type AddResult, type HebList, type LineMatch, type ListItem } from '@heb/core';
 import type { HebListOps } from '@heb/core';
 import { createSkill } from './skill.js';
+import { readPending } from './state.js';
 
 // ---------------------------------------------------------------------------
 // Fixtures
@@ -668,5 +669,42 @@ describe('the free-text fallback and merged lines', () => {
 
     expect(turn.speech).toContain('wrote');
     expect(ops.addItem).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe('malformed pending state reads as no pending question', () => {
+  // Session attributes survive a round trip as plain JSON, so nothing about their shape is
+  // guaranteed. A bad index passed validation and then made the yes/no handlers assert on
+  // an offer that does not exist — throwing mid-dialog instead of letting the user start
+  // over, which is exactly what validating here is supposed to prevent.
+  const pendingWith = (index: unknown): Record<string, unknown> => ({
+    pendingChoice: {
+      kind: 'add',
+      spokenQuery: 'milk',
+      quantity: 1,
+      offers: [{ productId: 'p1', spoken: 'Milk', full: 'H-E-B Milk' }],
+      index,
+    },
+  });
+
+  const read = (attributes: Record<string, unknown>) =>
+    readPending({
+      attributesManager: { getSessionAttributes: () => attributes },
+    } as unknown as Parameters<typeof readPending>[0]);
+
+  for (const [label, index] of [
+    ['negative', -1],
+    ['NaN', Number.NaN],
+    ['fractional', 1.5],
+    ['past the end', 9],
+    ['a string', 'first'],
+  ] as Array<[string, unknown]>) {
+    it(`treats a ${label} index as no pending question`, () => {
+      expect(read(pendingWith(index))).toBeNull();
+    });
+  }
+
+  it('still accepts a valid index', () => {
+    expect(read(pendingWith(0))).not.toBeNull();
   });
 });

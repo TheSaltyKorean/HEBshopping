@@ -496,7 +496,14 @@ export class HebListOps implements ListOps {
     }
 
     if (quantity > 1) {
-      const target = Math.min(quantity, added.maximumQuantity ?? quantity);
+      // Floored by what the add actually returned, exactly as the existing-line branch is.
+      // The opening read found no line, but a household member can create the same product
+      // in between — HEB then increments *their* line and returns it at, say, six. Writing
+      // an absolute two would delete four units somebody else put there.
+      const target = Math.max(
+        added.quantity,
+        Math.min(quantity, added.maximumQuantity ?? quantity),
+      );
       try {
         await this.setQuantity(listId, added.lineId, target);
         return { status: 'added', item: { ...added, quantity: target } };

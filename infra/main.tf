@@ -115,7 +115,14 @@ resource "aws_iam_role" "lambda" {
   assume_role_policy = data.aws_iam_policy_document.assume.json
 }
 
-/** Exactly the four actions the function performs, on exactly its own resources. */
+/**
+ * Exactly the actions the functions perform, on exactly their own resources.
+ *
+ * Notably absent: `sns:Publish`. The alarms publish on their own behalf, not through the
+ * execution role, so granting it gave two internet-facing runtimes the ability to spam the
+ * alert topic — the channel that exists to tell the household something is wrong — while
+ * enabling no application behaviour at all.
+ */
 data "aws_iam_policy_document" "lambda" {
   # Read only. The handlers never call `putSession` — the sole production writer is
   # `tools/push-session.ts`, running under the operator's own credentials. Granting
@@ -129,11 +136,6 @@ data "aws_iam_policy_document" "lambda" {
   statement {
     actions   = ["ssm:GetParameter"]
     resources = [aws_ssm_parameter.mcp_token.arn]
-  }
-
-  statement {
-    actions   = ["sns:Publish"]
-    resources = [aws_sns_topic.alerts.arn]
   }
 
   statement {

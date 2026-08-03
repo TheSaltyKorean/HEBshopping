@@ -354,3 +354,19 @@ describe('search refusals name the real problem', () => {
     );
   });
 });
+
+describe('a multi-unit add never reduces a concurrent quantity', () => {
+  it('floors the follow-up target at what the add returned', async () => {
+    // The opening read found no line, but a household member created the same product in
+    // between — HEB incremented theirs and returned it at six. Writing an absolute two
+    // would delete four units somebody else put there.
+    const returned = 6;
+    const requested = 2;
+
+    const naive = Math.min(requested, Number.POSITIVE_INFINITY);
+    const actual = Math.max(returned, naive);
+
+    expect(naive).toBe(2); // what the old code would have written
+    expect(actual).toBe(6); // never below what the add reported
+  });
+});

@@ -32,18 +32,52 @@ export function cookieIsExpired(cookie: Pick<Cookie, 'expires'>, nowMs: number):
  * the dead one, and a server resolving the first copy would reject a session we had just
  * declared usable. Browsers do not send expired cookies either.
  */
-export function cookieHeaderFor(session: SessionState, host: string, nowMs = Date.now()): string {
+export function cookieHeaderFor(
+  session: SessionState,
+  host: string,
+  path = '/graphql',
+  nowMs = Date.now(),
+): string {
   const best = new Map<string, Cookie>();
 
   for (const cookie of session.cookies) {
     if (!cookieMatchesHost(cookie, host)) continue;
+    if (!cookiePathMatches(cookie, path)) continue;
     if (cookieIsExpired(cookie, nowMs)) continue;
 
     const incumbent = best.get(cookie.name);
-    if (incumbent === undefined || outlives(cookie, incumbent)) best.set(cookie.name, cookie);
+    if (incumbent === undefined || preferred(cookie, incumbent)) best.set(cookie.name, cookie);
   }
 
   return [...best.values()].map((cookie) => `${cookie.name}=${cookie.value}`).join('; ');
+}
+
+/**
+ * RFC 6265 path matching.
+ *
+ * Without it a cookie scoped to `/account` would be sent to `/graphql` — and, worse, could
+ * displace the root-scoped copy that actually applies, so a jar `checkSession` accepted
+ * gets rejected upstream.
+ */
+export function cookiePathMatches(cookie: Pick<Cookie, 'path'>, requestPath: string): boolean {
+  const scope = cookie.path === '' ? '/' : cookie.path;
+  if (scope === '/' || scope === requestPath) return true;
+  if (!requestPath.startsWith(scope)) return false;
+  return scope.endsWith('/') || requestPath[scope.length] === '/';
+}
+
+/**
+ * Which of two same-named cookies to send.
+ *
+ * Browsers prefer the more specific path first; lifetime only breaks a genuine tie. Using
+ * lifetime alone could discard a `/graphql`-scoped cookie in favour of a longer-lived root
+ * one, which is not what the server expects to receive.
+ */
+function preferred(candidate: Cookie, incumbent: Cookie): boolean {
+  if (candidate.path.length !== incumbent.path.length) {
+    return candidate.path.length > incumbent.path.length;
+  }
+  return outlives(candidate, incumbent);
 }
 
 /** -1 means a session cookie: no expiry, so it outlives every dated one. */

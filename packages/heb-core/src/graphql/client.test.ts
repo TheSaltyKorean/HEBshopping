@@ -326,3 +326,26 @@ describe('outgoing cookie header', () => {
     expect(header.match(/sat=/g)).toHaveLength(1);
   });
 });
+
+describe('cookie path scoping', () => {
+  it('omits a cookie scoped to another path', async () => {
+    // A cookie for /account is not eligible at /graphql, and sending it could also displace
+    // the root-scoped copy that actually applies.
+    const base = session();
+    const misscoped = {
+      ...base.cookies.find((c) => c.name === 'sat')!,
+      path: '/account',
+      value: 'fixture-wrong-scope',
+    };
+
+    const fetchImpl = respond(JSON.stringify({ data: { ok: 1 } }));
+    await client(fetchImpl, session({ cookies: [misscoped, ...base.cookies] })).execute(
+      getShoppingListsDocument(),
+    );
+
+    const [, init] = (fetchImpl as unknown as ReturnType<typeof vi.fn>).mock.calls[0];
+    const header = (init.headers as Record<string, string>).Cookie;
+    expect(header).toContain('sat=fixture-sat');
+    expect(header).not.toContain('fixture-wrong-scope');
+  });
+});

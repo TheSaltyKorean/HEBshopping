@@ -17,7 +17,7 @@
  */
 
 import { chromium, type BrowserContext } from 'playwright';
-import { mkdir, writeFile } from 'node:fs/promises';
+import { chmod, mkdir, writeFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
 
 /**
@@ -26,6 +26,20 @@ import { resolve } from 'node:path';
  * world-readable, which on a shared machine is a real exposure regardless of .gitignore.
  */
 const SECRET_FILE_MODE = 0o600;
+
+/**
+ * Write a file that only its owner can read, even if it already existed.
+ *
+ * `writeFile`'s `mode` applies only when the file is *created*. Rewriting an existing inode
+ * leaves whatever permissions it already had — so a capture restored from elsewhere, or
+ * created before this rule existed, keeps a live H-E-B cookie jar world-readable while the
+ * code claims otherwise. The chmod is the part that actually holds the guarantee.
+ */
+async function writeSecret(path: string, contents: string): Promise<void> {
+  await writeFile(path, contents, { mode: SECRET_FILE_MODE });
+  await chmod(path, SECRET_FILE_MODE);
+}
+
 
 const PROFILE_DIR = resolve('.playwright-profile');
 const CAPTURE_DIR = resolve('captures');
@@ -141,17 +155,17 @@ async function recordGraphqlTraffic(context: BrowserContext): Promise<void> {
         operations.set(operationName, captured);
         timeline.push(captured);
 
-        // Authenticated traffic means the cookie jar just changed — refresh the snapshot
-        // now rather than waiting for the next tick, so a close straight after logging in
-        // still saves the session that login produced.
-        if (isNew) {
-          void context
-            .storageState()
-            .then((state) => {
-              lastStorageState = state;
-            })
-            .catch(() => undefined);
-        }
+        // Refresh on *every* GraphQL response, not only unfamiliar operations. The
+        // request that matters most is usually a repeat: the same list query, retried
+        // after logging in. Gating on `isNew` meant the pre-login attempt claimed the
+        // operation name and the successful one never refreshed the jar, so closing the
+        // browser before the timer saved a pre-login session.
+        void context
+          .storageState()
+          .then((state) => {
+            lastStorageState = state;
+          })
+          .catch(() => undefined);
 
         const marker = isNew ? 'NEW ' : '    ';
         const errorFlag =
@@ -177,14 +191,9 @@ async function flush(context: BrowserContext): Promise<void> {
 
   await mkdir(CAPTURE_DIR, { recursive: true });
 
-  await writeFile(
-    resolve(CAPTURE_DIR, 'operations.json'),
-    JSON.stringify(Object.fromEntries(operations), null, 2),
-    { mode: SECRET_FILE_MODE },
-  );
-  await writeFile(resolve(CAPTURE_DIR, 'timeline.json'), JSON.stringify(timeline, null, 2), {
-    mode: SECRET_FILE_MODE,
-  });
+  await writeSecret(resolve(CAPTURE_DIR, 'operations.json'),
+    JSON.stringify(Object.fromEntries(operations), null, 2));
+  await writeSecret(resolve(CAPTURE_DIR, 'timeline.json'), JSON.stringify(timeline, null, 2));
 
   // Session state spans BOTH hosts — auth lives on accounts.heb.com. Capturing only the
   // storefront looks fine and then fails on renewal.
@@ -197,11 +206,8 @@ async function flush(context: BrowserContext): Promise<void> {
     console.warn('Context already closing; writing the last good storage snapshot.');
     storageState = lastStorageState as typeof storageState;
   }
-  await writeFile(
-    resolve(CAPTURE_DIR, 'storage-state.json'),
-    JSON.stringify(storageState, null, 2),
-    { mode: SECRET_FILE_MODE },
-  );
+  await writeSecret(resolve(CAPTURE_DIR, 'storage-state.json'),
+    JSON.stringify(storageState, null, 2));
 
   const hosts = new Set(storageState.cookies.map((c) => c.domain));
   console.log(`\nWrote ${operations.size} operations (${timeline.length} calls) to captures/`);
@@ -274,11 +280,8 @@ async function main(): Promise<void> {
   // Periodic autosave, so a crash or an accidental window close doesn't lose the session.
   setInterval(() => {
     void mkdir(CAPTURE_DIR, { recursive: true }).then(() =>
-      writeFile(
-        resolve(CAPTURE_DIR, 'operations.json'),
-        JSON.stringify(Object.fromEntries(operations), null, 2),
-        { mode: SECRET_FILE_MODE },
-      ),
+      writeSecret(resolve(CAPTURE_DIR, 'operations.json'),
+        JSON.stringify(Object.fromEntries(operations), null, 2)),
     );
     // Keep a live snapshot of the cookie jar: it is the expensive thing to reacquire, and
     // it cannot be read once the context starts closing.

@@ -599,7 +599,22 @@ export class HebListOps implements ListOps {
       throw error;
     }
 
-    assertMutationSucceeded(data.deleteShoppingListItemsV2, 'remove the item');
+    try {
+      assertMutationSucceeded(data.deleteShoppingListItemsV2, 'remove the item');
+    } catch (error) {
+      // A refusal for a stale line id is not a failure if the line is already gone —
+      // somebody removing it in the app between the confirmation question and the delete
+      // leaves exactly this. Reporting failure sends the user to retry a removal whose
+      // end state already holds, and the retry then says the item is not on the list.
+      // Authentication and other refusals still propagate.
+      if (isHebError(error) && error.code === 'SESSION_EXPIRED') throw error;
+
+      const stillThere = (await this.getList(listId).catch(() => null))?.items.some(
+        (item) => item.lineId === input.lineId,
+      );
+      if (stillThere === false) return;
+      throw error;
+    }
   }
 
   /**

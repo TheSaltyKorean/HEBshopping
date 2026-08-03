@@ -7,12 +7,26 @@
  */
 
 import { chromium, type BrowserContext } from 'playwright';
-import { mkdir, writeFile } from 'node:fs/promises';
+import { chmod, mkdir, writeFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
 import { isGraphqlUrl, parseGraphqlPost } from '@heb/core';
 
 /** Owner-only: these files carry live cookies and raw request bodies. */
 const SECRET_FILE_MODE = 0o600;
+
+/**
+ * Write a file that only its owner can read, even if it already existed.
+ *
+ * `writeFile`'s `mode` applies only when the file is *created*. Rewriting an existing inode
+ * leaves whatever permissions it already had — so a capture restored from elsewhere, or
+ * created before this rule existed, keeps a live H-E-B cookie jar world-readable while the
+ * code claims otherwise. The chmod is the part that actually holds the guarantee.
+ */
+async function writeSecret(path: string, contents: string): Promise<void> {
+  await writeFile(path, contents, { mode: SECRET_FILE_MODE });
+  await chmod(path, SECRET_FILE_MODE);
+}
+
 
 export const PROFILE_DIR = resolve('.playwright-profile');
 export const CAPTURE_DIR = resolve('captures');
@@ -144,27 +158,18 @@ export async function saveCapture(
 
   try {
     const storageState = await context.storageState();
-    await writeFile(
-      resolve(CAPTURE_DIR, 'storage-state.json'),
-      JSON.stringify(storageState, null, 2),
-      { mode: SECRET_FILE_MODE },
-    );
+    await writeSecret(resolve(CAPTURE_DIR, 'storage-state.json'),
+      JSON.stringify(storageState, null, 2));
     const hosts = [...new Set(storageState.cookies.map((c) => c.domain))].sort();
     console.log(`\nSession saved. Cookie domains: ${hosts.join(', ')}`);
   } catch (error) {
     console.warn('Could not save storage state (browser may already be closing):', error);
   }
 
-  await writeFile(
-    resolve(CAPTURE_DIR, `${label}-operations.json`),
-    JSON.stringify(Object.fromEntries(capture.operations), null, 2),
-    { mode: SECRET_FILE_MODE },
-  );
-  await writeFile(
-    resolve(CAPTURE_DIR, `${label}-timeline.json`),
-    JSON.stringify(capture.timeline, null, 2),
-    { mode: SECRET_FILE_MODE },
-  );
+  await writeSecret(resolve(CAPTURE_DIR, `${label}-operations.json`),
+    JSON.stringify(Object.fromEntries(capture.operations), null, 2));
+  await writeSecret(resolve(CAPTURE_DIR, `${label}-timeline.json`),
+    JSON.stringify(capture.timeline, null, 2));
 
   console.log(
     `Wrote ${capture.operations.size} operations (${capture.timeline.length} calls) to captures/${label}-*.json`,

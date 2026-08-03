@@ -61,6 +61,18 @@ async function listedProducts(page: Page): Promise<Set<string>> {
   return new Set(labels.map(productOf).filter((label) => label !== ''));
 }
 
+/**
+ * How many lines the list holds right now.
+ *
+ * A name-only diff cannot tell a created line from a merged one: if a household member
+ * adds the same product between the snapshot and the click, HEB merges the click into
+ * their line and the product name is "new" to this run either way. The line *count* can
+ * tell them apart — creation adds a line, a merge does not.
+ */
+async function lineCount(page: Page): Promise<number> {
+  return page.locator('input[type="checkbox"][aria-label^="Select "]').count();
+}
+
 async function isThrowawayLine(page: Page): Promise<boolean> {
   const marker = await readFile(THROWAWAY_PATH, 'utf8').catch(() => null);
   if (marker === null) return false;
@@ -215,7 +227,8 @@ async function addItem(page: Page, text: string): Promise<void> {
 
   // Before anything is clicked: what is already on this list?
   const alreadyListed = await listedProducts(page);
-  console.log(`\nList currently holds ${alreadyListed.size} product line(s).`);
+  const linesBefore = await lineCount(page);
+  console.log(`\nList currently holds ${linesBefore} product line(s).`);
 
   console.log(`\nClicking "Add an item" …`);
   await page.getByRole('button', { name: /add an item/i }).first().click();
@@ -287,11 +300,18 @@ async function addItem(page: Page, text: string): Promise<void> {
   // to delete later, and no marker is worth more than a wrong one.
   const nowListed = await listedProducts(page);
   const created = [...nowListed].filter((product) => !alreadyListed.has(product));
-  if (label === null || !created.includes(productOf(label))) {
+  const linesAfter = await lineCount(page);
+
+  // Both tests, because each catches what the other misses. The name diff proves the new
+  // line is the product that was clicked; the count proves a line was *created* rather
+  // than merged into one a household member added a moment ago — in which case the name is
+  // new to this run but the line belongs to them.
+  if (label === null || !created.includes(productOf(label)) || linesAfter !== linesBefore + 1) {
     console.error(
-      `\n⛔ No new line matching "${label ?? '(unnamed)'}" appeared (${created.length} new line(s)).\n` +
-        '   Not recording an ownership marker: `remove` must never delete a line this run\n' +
-        '   cannot prove it created. Check the list by hand.',
+      `\n⛔ Could not prove this run created a line for "${label ?? '(unnamed)'}".\n` +
+        `   Lines went ${linesBefore} → ${linesAfter}; new product names: ${created.length}.\n` +
+        '   A merge into an existing line looks like this. Not recording an ownership\n' +
+        '   marker: `remove` must never delete a line this run cannot prove it created.',
     );
     return;
   }
@@ -367,8 +387,20 @@ async function exerciseQuantity(page: Page, capture: Capture): Promise<void> {
     }
   }
 
-  // The last decrement removes the line, so the marker no longer describes anything.
-  await clearThrowawayMarker();
+  // Same rule as `remove`: the documented behaviour of decrementing below one is a no-op,
+  // so the line may well still be there. Only a list that no longer shows it justifies
+  // dropping the marker that authorizes removing it.
+  await page.reload({ waitUntil: 'domcontentloaded' }).catch(() => undefined);
+  await page.waitForTimeout(2_000);
+  if (await isThrowawayLine(page)) {
+    console.error(
+      '\n⛔ The marked line survived the decrements — keeping the ownership marker so\n' +
+        '   `drive.ts remove` can clean it up.',
+    );
+    process.exitCode = 1;
+  } else {
+    await clearThrowawayMarker();
+  }
   await page.screenshot({ path: 'captures/after-mutations.png', fullPage: true });
 }
 
@@ -446,8 +478,19 @@ async function removeItem(page: Page, capture: Capture): Promise<void> {
     console.log('\n(no confirmation dialog appeared)');
   }
 
-  // The line is gone; the marker no longer describes anything on the list.
-  await clearThrowawayMarker();
+  // Clear the marker only once the line is demonstrably gone. A refused mutation, or a
+  // delete control that produced no confirmation dialog, leaves the throwaway line on a
+  // real household list — and clearing the marker there discards the only thing that
+  // authorizes a later cleanup, stranding test data nothing is allowed to remove.
+  if (await isThrowawayLine(page)) {
+    console.error(
+      '\n⛔ The marked line is still on the list — the removal did not take effect.\n' +
+        '   Keeping the ownership marker so `remove` can be run again.',
+    );
+    process.exitCode = 1;
+  } else {
+    await clearThrowawayMarker();
+  }
 
   console.log('\n=== calls provoked by removal ===');
   for (const call of capture.since()) {

@@ -164,14 +164,19 @@ the phrase is left in the search query. Ask in pounds — "half a pound", "a pou
 half" — and the whole ladder is available.
 
 
-**Concurrent adds of the same product can lose one increment.** If two people say "add
-milk" within the same second — two Echoes, or an Echo and an agent — and that milk is
-already on the list, both invocations can read quantity 1 and both write 2, so the list
-ends at 2 rather than 3.
+**Adding more than one unit at a time can lose a concurrent change.** Asking for *one* of
+something is safe: `addShoppingListItemsV2` merges into an existing line and increments it
+server-side, so two people saying "add milk" at the same moment reliably end at three.
 
-It is left unfixed deliberately. H-E-B's `updateShoppingListItem` takes an *absolute*
-quantity with no ETag, version, or compare-and-set, so there is no atomic increment to use.
-The available fixes each cost more than the problem:
+Asking for several is not. There is no way to add N at once — H-E-B rejects a duplicate
+product inside a single `listItems` array (verified) — so the only route is one atomic add
+followed by an absolute `updateShoppingListItem`, which has no ETag, version, or
+compare-and-set. If somebody edits that line inside the gap, the absolute write lands on
+top of their change.
+
+The window is one round trip, and the target is computed from what the add itself returned
+rather than from a snapshot taken earlier, so it is as small as this API allows. The
+remaining fixes each cost more than the problem:
 
 - Serialising Alexa to one invocation would make Lambda *reject* the second person to
   speak, turning a rare miscount into a dropped command with no spoken response.
@@ -180,6 +185,11 @@ The available fixes each cost more than the problem:
 
 The failure is visible on the list and correctable in a second. If H-E-B ever exposes a
 delta or conditional update, it becomes a small change.
+
+**Weight is absolute, so counter lines have the same gap.** There is no additive form for
+`quantityOrWeight: { weight }`. The line is re-read immediately before the write to keep the
+window to a single round trip, and the write never lowers what it just read, but a household
+member changing a deli order in that instant can still be overwritten.
 
 ## Security
 

@@ -174,14 +174,24 @@ describe('indeterminate writes are reconciled, not retried blindly', () => {
     });
   }
 
-  it('reports the committed line instead of inviting a retry', async () => {
-    // The retry is what causes the damage: it finds the line HEB did create and increments
-    // it, so "add milk" once leaves two. Reconciling requires an *uncached* read, which is
-    // why the cache is now invalidated before the mutation rather than after it succeeds.
-    const result = await opsWithLostAddResponse().addItem({ productId: 'p-new' });
-
-    expect(result.status).toBe('added');
-    if (result.status === 'added') expect(result.item.lineId).toBe('line-new');
+  it('reports a lost add as indeterminate rather than claiming the line', async () => {
+    // Deliberately NOT a success. A line that appears after a lost response may be this
+    // call's write or a household member's concurrent add of the same product, and the two
+    // are indistinguishable — claiming it reports a write that may never have happened and
+    // then adjusts somebody else's line.
+    //
+    // What still matters is that the failure is non-retryable and marked: the retry is what
+    // does the damage, since the add merges another unit into whatever line exists.
+    await expect(opsWithLostAddResponse().addItem({ productId: 'p-new' })).rejects.toSatisfy(
+      (error: unknown) => {
+        const typed = error as { retryable?: boolean; details?: Record<string, unknown> };
+        return (
+          hasCode(error, 'UPSTREAM_ERROR') &&
+          typed.retryable === false &&
+          typed.details?.['indeterminate'] === true
+        );
+      },
+    );
   });
 });
 

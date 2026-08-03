@@ -53,25 +53,63 @@ async function restoreLine(
   before: HebList,
   lineId: string,
   label: string,
+  /** What this run left the line reading. Restoration is only safe while it still does. */
+  produced: number,
 ): Promise<void> {
   const preExisting = before.items.find((item) => item.lineId === lineId);
 
+  // Absence from the opening snapshot is NOT proof this run created the line. If a
+  // household member added the same product in between, HEB merged this run's unit into
+  // *their* new line — whose id is equally unfamiliar. Only a line reading exactly one can
+  // have been created here; anything higher was merged, and deleting it would take their
+  // grocery with it.
   if (preExisting === undefined) {
-    await time('removeItem', () => lists.removeItem({ lineId }));
+    if (produced === 1) {
+      await time('removeItem', () => lists.removeItem({ lineId }));
+      return;
+    }
+    console.error(
+      `   ⚠ "${label}" is not in the opening snapshot but reads ${produced}, so this run\n` +
+        '     merged into a line somebody else created. NOT deleting it; reconcile by hand.',
+    );
     return;
   }
 
-  // Restore only if the line still looks the way this run left it. Writing the opening
-  // quantity unconditionally would erase a change somebody made in the H-E-B app while
-  // the verification was running — undoing their edit in the name of cleaning up ours.
-  const now = (await lists.getList()).items.find((item) => item.lineId === lineId);
-  if (now === undefined || now.quantity <= preExisting.quantity) {
-    console.log(`   "${label}" is already at or below ${preExisting.quantity}; leaving it.`);
+  // A *fresh* read, through a client that has not cached anything since the mutation —
+  // otherwise this observes the pre-restore snapshot and cannot see an edit made after it.
+  const now = (await freshList(lists)).items.find((item) => item.lineId === lineId);
+  if (now === undefined) {
+    console.log(`   "${label}" is gone; nothing to restore.`);
+    return;
+  }
+
+  // Exactly what this run produced, not merely "above where it started". A household
+  // member incrementing the same line also satisfies the looser test, and writing the
+  // opening quantity then discards their unit along with this run's.
+  if (now.quantity !== produced) {
+    console.error(
+      `   ⚠ "${label}" reads ${now.quantity}, not the ${produced} this run left. Somebody\n` +
+        `     changed it during the run, so it is NOT being reset to ${preExisting.quantity}.`,
+    );
     return;
   }
 
   console.log(`   "${label}" pre-existed — restoring quantity ${preExisting.quantity}`);
   await time('restore quantity', () => lists.setItemQuantity(lineId, preExisting.quantity));
+}
+
+/**
+ * Read the list through a client that has cached nothing.
+ *
+ * `HebListOps` caches the resolved list, which is correct within one operation and wrong
+ * across two — a cleanup that reuses the instance which performed the mutation sees its
+ * own pre-mutation snapshot and cannot observe a concurrent edit.
+ */
+async function freshList(lists: HebListOps): Promise<HebList> {
+  return new HebListOps({
+    client: new HebClient({ store: new FileStore(SESSION_PATH) }),
+    listId: (await lists.getList()).listId,
+  }).getList();
 }
 
 async function main(): Promise<void> {
@@ -89,6 +127,14 @@ async function main(): Promise<void> {
   // quantity — behind on someone's shopping list. These are declared outside the `try` so
   // the `finally` can undo whatever was actually done.
   let touchedLine: string | null = null;
+  /**
+   * What this run left that line reading.
+   *
+   * Restoration compares against it exactly: "higher than it started" is also true when a
+   * household member edits the same line mid-run, and resetting then discards their change.
+   * Zero means "unknown", which fails the equality check and so restores nothing.
+   */
+  let touchedQuantity = 0;
   let done = false;
 
   try {
@@ -112,7 +158,10 @@ async function main(): Promise<void> {
             productIds.has(item.product.id) &&
             !before.items.some((original) => original.lineId === item.lineId),
         );
-        if (mine !== undefined) touchedLine = mine.lineId;
+        if (mine !== undefined) {
+          touchedLine = mine.lineId;
+          touchedQuantity = mine.quantity;
+        }
       }
       throw error;
     };
@@ -157,10 +206,12 @@ async function main(): Promise<void> {
       lineId = confirmed.item.lineId;
       touchedLine = lineId;
       addedName = confirmed.item.text;
+      touchedQuantity = confirmed.item.quantity;
       console.log(`   ↪ ${confirmed.status}: ${confirmed.item.quantity} × ${addedName}`);
     } else {
       lineId = result.item.lineId;
       touchedLine = lineId;
+      touchedQuantity = result.item.quantity;
       addedName = result.item.text;
       console.log(`   ↪ ${result.status}: ${result.item.quantity} × ${addedName}`);
     }
@@ -182,7 +233,7 @@ async function main(): Promise<void> {
     }
 
     console.log('\n── 5. restore the list to how it was');
-    await restoreLine(lists, before, lineId, addedName);
+    await restoreLine(lists, before, lineId, addedName, touchedQuantity);
     touchedLine = null;
 
     const after = await time('getList', () => lists.getList());
@@ -197,7 +248,7 @@ async function main(): Promise<void> {
     // rather than leaving a grocery — or a raised quantity — on a real household list.
     if (touchedLine !== null) {
       console.error('\n🧹 run did not complete; restoring the line it touched …');
-      await restoreLine(lists, before, touchedLine, touchedLine).catch((error: unknown) => {
+      await restoreLine(lists, before, touchedLine, touchedLine, touchedQuantity).catch((error: unknown) => {
         console.error('⛔ RESTORE FAILED — the list still holds test data:', error);
       });
     } else if (!done) {

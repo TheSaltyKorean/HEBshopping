@@ -71,7 +71,17 @@ async function rawGraphql(session: SessionState, body: unknown): Promise<any> {
 
 async function main(): Promise<void> {
   const session = await currentSession();
-  const lists = new HebListOps({ client: new HebClient({ store: new FileStore(SESSION_PATH) }) });
+  /**
+   * A brand-new client, every time.
+   *
+   * `HebListOps` caches the resolved list, which is right within one operation and wrong
+   * across two. Reconciling a lost write through an instance whose snapshot predates the
+   * mutation reads the pre-mutation list and concludes nothing was committed.
+   */
+  const reader = (): HebListOps =>
+    new HebListOps({ client: new HebClient({ store: new FileStore(SESSION_PATH) }) });
+
+  const lists = reader();
 
   const list = await lists.getList();
   console.log(`List "${list.name}" has ${list.items.length} item(s)`);
@@ -108,13 +118,29 @@ async function main(): Promise<void> {
     if (added.status !== 'added') {
       throw new Error(`expected a fresh line, got ${added.status}`);
     }
+    // `added` alone is not proof of creation. If a household member added the same product
+    // between the absence check and this mutation, HEB merges the probe's unit into *their*
+    // line — and `HebListOps`, whose opening snapshot showed nothing, still calls that
+    // `added` and returns their line id. Marking it disposable would hand it to the raw
+    // deletion below. A genuinely new line reads exactly one.
+    if (added.item.quantity !== 1) {
+      throw new Error(
+        `the add merged into an existing line (quantity ${added.item.quantity}) rather than ` +
+          'creating one — nothing marked disposable, list left untouched',
+      );
+    }
     lineId = added.item.lineId;
     console.log(`Added throwaway line: ${added.item.text}`);
   } catch (error) {
-    const committed = (await lists.getList().catch(() => null))?.items.find(
+    // Reconcile through a *fresh* client. `lists` cached its snapshot before the mutation
+    // and nothing invalidated it, so it cannot see a line the lost write committed — the
+    // probe would rethrow with no line id and exit before the cleanup below, leaving test
+    // data on a real household list.
+    const committed = (await reader().getList().catch(() => null))?.items.find(
       (item) => item.product?.id === disposable.id,
     );
-    if (committed === undefined) throw error;
+    // Same rule as above: only a line reading exactly one can be attributed to this probe.
+    if (committed === undefined || committed.quantity !== 1) throw error;
     lineId = committed.lineId;
     console.log(`Add reported failure but committed line ${lineId}; will clean up.`);
   }

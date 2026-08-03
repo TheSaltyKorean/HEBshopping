@@ -19,7 +19,13 @@
 
 import { readFileSync, appendFileSync } from 'node:fs';
 import { resolve } from 'node:path';
-import { HEB_GRAPHQL_URL, HEB_ORIGIN, getShoppingListsDocument } from '@heb/core';
+import {
+  HEB_GRAPHQL_URL,
+  HEB_ORIGIN,
+  cookieHeaderFor,
+  getShoppingListsDocument,
+  type SessionState,
+} from '@heb/core';
 
 /**
  * Seconds between probes, validated before anything is scheduled.
@@ -55,18 +61,19 @@ const LOG_PATH = resolve('captures/soak.log');
  */
 const LIST_QUERY = getShoppingListsDocument();
 
-interface StorageState {
-  cookies: Array<{ name: string; value: string; domain: string }>;
-}
-
-const state: StorageState = JSON.parse(
+const state = JSON.parse(
   readFileSync(resolve('captures/storage-state.json'), 'utf8'),
-);
+) as SessionState;
 
-const cookieHeader = state.cookies
-  .filter((c) => 'www.heb.com'.endsWith(c.domain.replace(/^\./, '')) || c.domain === 'www.heb.com')
-  .map((c) => `${c.name}=${c.value}`)
-  .join('; ');
+// The *same* builder the production client uses, not a hand-rolled filter.
+//
+// This experiment exists to decide how long a session survives, and the answer drives the
+// architecture. Sending cookies a browser would not send — expired copies, path-ineligible
+// ones, duplicates the real client de-duplicates — lets the server reject a request that
+// `cookieHeaderFor` would have authenticated, and the soak then records an expiry that
+// never happened. Measuring something other than what production does is worse than not
+// measuring at all, because the number still looks like an answer.
+const cookieHeader = cookieHeaderFor(state, 'www.heb.com', '/graphql');
 
 const startedAt = Date.now();
 

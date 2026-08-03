@@ -170,6 +170,12 @@ async function main(): Promise<void> {
   // nothing, and the single unfamiliar id in the diff is *their* new grocery. Deleting it
   // would destroy real data precisely because something unexpected happened.
   if (createdLine === null) {
+    // Disarm the finalizer before aborting. Leaving the product markers set sends the
+    // late-resolution branch looking for "the line matching this product", which is
+    // precisely the household member's line that the merge proved we do not own — so the
+    // abort would be followed by the deletion it exists to prevent.
+    createdProductId = null;
+    createdProductName = null;
     throw new Error(
       'the add merged into an existing line rather than creating one — ' +
         'list left untouched, nothing deleted',

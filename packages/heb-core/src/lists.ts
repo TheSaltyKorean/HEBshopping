@@ -389,7 +389,7 @@ export class HebListOps implements ListOps {
     }
 
     const listId = await this.resolveListId(input.listId);
-    const quantity = input.quantity ?? 1;
+    const quantity = Math.max(1, Math.trunc(input.quantity ?? 1));
 
     let productId = input.productId;
 
@@ -409,146 +409,104 @@ export class HebListOps implements ListOps {
       productId = match.product.id;
     }
 
-    // Quantity is a property of a list line, so a repeat add increments rather than
-    // creating a duplicate line — matching what HEB's own UI does.
     const existing = (await this.getList(listId)).items.find(
       (item) => item.product?.id === productId,
     );
+    const wasPresent = existing !== undefined;
 
-    if (existing !== undefined) {
-      // A counter line is measured in pounds, so "add another pound of turkey" adds weight
-      // rather than a second line-unit — the same increment semantics, different unit.
-      // Never below what is already there, for the same reason quantity is floored.
-      if (existing.product?.pricedByWeight === true) {
-        if (input.weight === undefined) {
-          // "Add sliced turkey" when a counter line already exists. There is no honest
-          // amount to add: this line is measured in pounds, and a quantity update on it
-          // either gets refused or changes a number nobody buys by. Report what is on the
-          // list and let the surface say it — "you already have two pounds" invites the
-          // amount, whereas a bogus write invents one.
-          return { status: 'already_present', item: existing };
-        }
-        const target = Math.max(
-          existing.weight ?? 0,
-          snapWeight((existing.weight ?? 0) + input.weight, existing.product.weightIncrements),
-        );
-        return {
-          status: 'already_present',
-          item: await this.adjustWeight(listId, existing, target),
-        };
+    // ── Counter goods ────────────────────────────────────────────────────────────────
+    // Weight is absolute at HEB — there is no additive form — so an existing counter line
+    // is handled on its own terms and never through the quantity path below.
+    if (existing?.product?.pricedByWeight === true) {
+      if (input.weight === undefined) {
+        // "Add sliced turkey" when a counter line already exists. There is no honest
+        // amount to add, and a quantity update on a line measured in pounds either gets
+        // refused or changes a number nobody buys by.
+        return { status: 'already_present', item: existing };
       }
-
-      const ceiling = existing.maximumQuantity ?? Number.POSITIVE_INFINITY;
-      // Never below what is already there. If HEB lowers a product's ceiling after the
-      // line was created, clamping alone turns "add one more" into "take four away" —
-      // an add that silently removes groceries is the worst possible reading of the verb.
-      const target = Math.max(existing.quantity, Math.min(existing.quantity + quantity, ceiling));
-      if (target !== existing.quantity) {
-        try {
-          await this.setQuantity(listId, existing.lineId, target);
-        } catch (error) {
-          // An expired session must survive as itself. Reconciling would re-read with the
-          // same dead cookies, and a failed read then replaces the auth classification with
-          // an indeterminate UPSTREAM_ERROR — costing the login remedy on both surfaces and
-          // the log line the expiry alarm matches on. Nothing was created here, so there is
-          // no partial state to carry alongside it.
-          if (isHebError(error) && error.code === 'SESSION_EXPIRED') throw error;
-
-          // A timeout here is *indeterminate*: HEB may well have committed the update
-          // before the response was lost. Propagating a bare failure makes the surface say
-          // "try again", and the retry reads the already-incremented line and increments it
-          // a second time. So re-read and report what is actually there.
-          let current: HebList;
-          try {
-            current = await this.getList(listId);
-          } catch {
-            // The reconciliation read failed as well — likely because the first timeout
-            // spent the budget. Nothing is known, and "try again" is the one answer that
-            // can make it worse.
-            throw new HebError(
-              'UPSTREAM_ERROR',
-              'HEB did not confirm the change. Check the list before asking again — it may have worked.',
-              { cause: error, retryable: false, details: { indeterminate: true } },
-            );
-          }
-
-          const actual = current.items.find((item) => item.lineId === existing.lineId);
-          // At *or above*: a household member incrementing the same line before the
-          // reconciliation read leaves it higher than asked for, and treating that as a
-          // failure sends the user to retry a request that was already fulfilled.
-          if (actual !== undefined && actual.quantity >= target) {
-            return { status: 'already_present', item: actual };
-          }
-          throw new HebError(
-            'UPSTREAM_ERROR',
-            actual === undefined
-              ? 'HEB did not confirm the change; check the list before trying again.'
-              : `HEB did not confirm the change. The list still shows ${actual.quantity}.`,
-            { cause: error, retryable: false },
-          );
-        }
-      }
-      return { status: 'already_present', item: { ...existing, quantity: target } };
+      // Re-read immediately before computing the target. The absolute write cannot be made
+      // atomic, so the best available is to shrink the window between observing the weight
+      // and overwriting it — otherwise a household member raising 1 lb to 2 lb between the
+      // opening read and here has most of their order removed.
+      const fresh =
+        (await this.getList(listId).catch(() => null))?.items.find(
+          (item) => item.lineId === existing.lineId,
+        ) ?? existing;
+      const base = fresh.weight ?? 0;
+      const target = Math.max(base, snapWeight(base + input.weight, fresh.product?.weightIncrements));
+      return {
+        status: 'already_present',
+        item: await this.adjustWeight(listId, fresh, target),
+      };
     }
 
-    this.cachedList = undefined; // the list is about to change underneath us
+    // Already at the server's ceiling: adding cannot raise it, and issuing the mutation
+    // only invites a refusal. Report what is there.
+    const ceiling = existing?.maximumQuantity ?? Number.POSITIVE_INFINITY;
+    if (existing !== undefined && existing.quantity >= ceiling) {
+      return { status: 'already_present', item: existing };
+    }
+
+    // ── The add itself ───────────────────────────────────────────────────────────────
+    // Issued whether or not the line already exists, because `addShoppingListItemsV2` is
+    // the only *additive* operation HEB offers: it merges into an existing line and
+    // increments it by one, server-side, with no read-modify-write. That is what makes a
+    // one-unit add — overwhelmingly the common case, and all a voice request ever produces
+    // for an existing line — incapable of overwriting a concurrent change.
+    //
+    // The previous shape read the line, computed an absolute target from that snapshot and
+    // wrote it back, so a household member raising a line from 1 to 4 in between had two of
+    // their units deleted by "add one more". Everything below now works from the quantity
+    // the mutation itself returned, which is post-merge and authoritative.
+    //
+    // (Batching the same product N times in one call is not an option — HEB rejects a
+    // duplicate inside `listItems` outright. Verified against the live API.)
+    this.cachedList = undefined;
 
     let added: ListItem | undefined;
     try {
       const data = await this.client.execute<{ addShoppingListItemsV2: HebListPayload }>(
         addItemsDocument(listId, [productId]),
       );
-      // Same success-union check as the other mutations. A refused add — a confirmed
-      // productId gone stale, say — returns a different member with only a __typename,
-      // which would otherwise map to an empty list and surface as the *retryable*
-      // "accepted the add but did not return the item", inviting repeats of a mutation
-      // the server conclusively rejected.
+      // A refused add — a confirmed productId gone stale, say — returns a different union
+      // member with only a __typename, which would otherwise map to an empty list and
+      // surface as a *retryable* failure, inviting repeats of a mutation HEB rejected.
       assertMutationSucceeded(data.addShoppingListItemsV2, 'add the item');
 
       added = toHebList(data.addShoppingListItemsV2).items.find(
         (item) => item.product?.id === productId,
       );
     } catch (error) {
-      // A *definitive* refusal has nothing to reconcile: HEB returned a non-success union
-      // member, so this add conclusively did not happen. Reconciling anyway lets a
-      // household member's concurrent add of the same product stand in as proof, reporting
-      // a refused request as a success — and a multi-unit request then rewrites their line.
+      // An expired session is a definitive non-write from the client's own side: the
+      // request never authenticated. Reconciling would re-read with the same dead cookies
+      // and downgrade this to an indeterminate upstream failure, costing the login remedy
+      // on both surfaces and the log line the expiry alarm matches on.
+      if (isHebError(error) && error.code === 'SESSION_EXPIRED') throw error;
+
+      // A definitive refusal likewise has nothing to reconcile.
       if (isHebError(error) && error.details?.['rejected'] === true) throw error;
 
-      // Indeterminate, exactly like the quantity update: HEB may have created the line
-      // before the response was lost. A bare failure makes the surface say "try again",
-      // and the retry finds that line and *increments* it — so "add milk" twice leaves
-      // two. Look before inviting a retry.
-      // If the reconciliation read *also* fails — most likely because the first timeout
-      // exhausted the invocation budget — we genuinely do not know what happened. Saying
-      // "try again" is the one answer that can make it worse, since a committed line gets
-      // incremented by the retry.
-      let current: HebList;
-      try {
-        current = await this.getList(listId);
-      } catch {
-        throw new HebError(
-          'UPSTREAM_ERROR',
-          'HEB did not confirm the add. Check the list before asking again — it may have worked.',
-          { cause: error, retryable: false, details: { indeterminate: true } },
-        );
-      }
-
-      added = current.items.find((item) => item.product?.id === productId);
-      if (added === undefined) throw error;
-      // Deliberately falls through rather than returning: the mutation only ever creates
-      // one unit, so "add five avocados" still needs the quantity step below. Returning
-      // here reported a one-unit success for a five-unit request.
+      // A transport failure is genuinely ambiguous and *cannot* be resolved by looking at
+      // the list. A line that appeared may be this call's lost write or a household
+      // member's concurrent add of the same product — the two are indistinguishable, and
+      // guessing "ours" would report a write that never happened and then adjust somebody
+      // else's line. Say what is actually known instead, and do not invite a retry: if the
+      // write did land, repeating it merges another unit.
+      throw new HebError(
+        'UPSTREAM_ERROR',
+        'HEB did not confirm the add. Check the list before asking again — it may have worked.',
+        { cause: error, retryable: false, details: { indeterminate: true } },
+      );
     }
 
     if (added === undefined) {
-      // The mutation succeeded; the returned page simply does not contain the new line —
-      // a long category-sorted list can place it outside the page. Throwing a retryable
-      // error here sends the user to add it again, and the retry finds the line and
-      // increments it. Look before saying anything.
+      // The mutation succeeded; the returned page simply does not contain the line — a long
+      // category-sorted list can place it outside the page. Re-read rather than reporting a
+      // failure for a write that plainly committed.
       this.cachedList = undefined;
-      const seen = await this.getList(listId).catch(() => null);
-      added = seen?.items.find((item) => item.product?.id === productId);
+      added = (await this.getList(listId).catch(() => null))?.items.find(
+        (item) => item.product?.id === productId,
+      );
 
       if (added === undefined) {
         throw new HebError(
@@ -559,92 +517,56 @@ export class HebListOps implements ListOps {
       }
     }
 
-    // A weight request only means something if the product is genuinely sold by the pound.
-    // For a packaged good ("Chicken Breasts, Avg. 2.85 lbs") it is not expressible — you
-    // buy the package — so the weight is dropped and one package is added. The caller can
-    // tell which happened: a weighted line comes back with `weight` set.
+    const status = wasPresent ? 'already_present' : 'added';
+
+    // A counter line the add just created: give it the requested weight.
     if (added.product?.pricedByWeight === true) {
       if (input.weight === undefined) {
         // Counter goods have no unit to multiply. HEB assigned this line its own default
-        // weight on creation, and that is what the surface confirms — the spoken reply
-        // states pounds, so the shopper hears the real amount rather than a silent "1".
-        return { status: 'added', item: added };
+        // weight, and the surface confirms in pounds, so nothing is reported as a silent "1".
+        return { status, item: added };
       }
       const target = Math.max(
         added.weight ?? 0,
         snapWeight(input.weight, added.product.weightIncrements),
       );
-      return {
-        status: 'added',
-        item: await this.adjustWeight(listId, added, target, true),
-      };
+      return { status, item: await this.adjustWeight(listId, added, target, !wasPresent) };
     }
 
-    if (quantity > 1) {
-      // Relative to what the add returned, exactly as the written-line path is. The opening
-      // read found no line, but a household member can create the same product in between —
-      // HEB then merges this call's unit into *their* line and returns it at, say, six.
-      //
-      // An absolute target got this wrong in both directions: at six it wrote six and
-      // silently dropped the second requested unit, and had the number been lower it would
-      // have taken units off somebody else's line. The mutation contributes the first unit,
-      // so only `quantity - 1` remains — capped by the ceiling, never below what is there.
-      const ceiling = added.maximumQuantity ?? Number.POSITIVE_INFINITY;
-      const target = Math.max(added.quantity, Math.min(added.quantity + quantity - 1, ceiling));
-      try {
-        await this.setQuantity(listId, added.lineId, target);
-        return { status: 'added', item: { ...added, quantity: target } };
-      } catch (error) {
-        // The add already succeeded — a line exists — but whether the quantity bump landed
-        // is unknown, and `setQuantity` invalidated the cache before writing so a read here
-        // reaches HEB. Reporting the stale payload's quantity of one would understate what
-        // is on the list and invite another add, over-incrementing it.
-        let seen: HebList;
-        try {
-          seen = await this.getList(listId);
-        } catch {
-          // Both the quantity write and the readback failed, most likely because the first
-          // timeout spent the budget. A line definitely exists and its quantity is unknown,
-          // so an unmarked error here would reach Alexa's generic "please try again" — and
-          // the retry finds that line and increments it by the whole requested amount.
-          throw new HebError(
-            'UPSTREAM_ERROR',
-            `Added ${added.text}, but could not confirm the amount. Check the list before asking again.`,
-            { cause: error, retryable: false, details: { partialAdd: true } },
-          );
-        }
+    // The mutation contributed the first unit, so only the rest remains — applied to what
+    // the add *returned*, never to a number derived from the opening snapshot.
+    const remaining = quantity - 1;
+    if (remaining <= 0) return { status, item: added };
 
-        const actual = seen.items.find((item) => item.lineId === added.lineId);
+    const cap = added.maximumQuantity ?? Number.POSITIVE_INFINITY;
+    const target = Math.max(added.quantity, Math.min(added.quantity + remaining, cap));
+    if (target <= added.quantity) return { status, item: added };
 
-        // A *definitive* refusal is not an indeterminate failure: there is nothing to
-        // reconcile, and reporting success would claim five units while one is on the
-        // list. Say what actually happened, and do not invite a retry — retrying the whole
-        // add would create a second line.
-        if (isHebError(error) && error.details?.['rejected'] === true) {
-          throw new HebError(
-            'UPSTREAM_ERROR',
-            `Added ${added.text}, but HEB refused to set the quantity to ${target}. ` +
-              `The list has ${actual?.quantity ?? added.quantity}.`,
-            { cause: error, retryable: false, details: { partialAdd: true } },
-          );
-        }
-
-        // A readback that still shows less than was asked for is not a success. Saying
-        // "added five" over a line holding one is the same lie the reconciliation exists to
-        // prevent, just arrived at from the other direction.
-        if ((actual?.quantity ?? added.quantity) < target) {
-          throw new HebError(
-            'UPSTREAM_ERROR',
-            `Added ${added.text}, but only ${actual?.quantity ?? added.quantity} of ${target}.`,
-            { cause: error, retryable: false, details: { partialAdd: true } },
-          );
-        }
-
-        return { status: 'added', item: actual ?? added };
+    try {
+      await this.setQuantity(listId, added.lineId, target);
+      return { status, item: { ...added, quantity: target } };
+    } catch (error) {
+      // The add itself succeeded, so a line exists either way and a retry would merge
+      // another unit into it. That has to be said even when the cause is an expired
+      // session, whose remedy alone would send someone back to repeat the whole request.
+      if (isHebError(error) && error.code === 'SESSION_EXPIRED') {
+        throw new HebError('SESSION_EXPIRED', error.message, {
+          cause: error,
+          retryable: false,
+          details: { ...error.details, partialAdd: true },
+        });
       }
-    }
 
-    return { status: 'added', item: added };
+      const seen = await this.getList(listId).catch(() => null);
+      const actual = seen?.items.find((item) => item.lineId === added.lineId);
+      if (actual !== undefined && actual.quantity >= target) return { status, item: actual };
+
+      throw new HebError(
+        'UPSTREAM_ERROR',
+        `Added ${added.text}, but the amount is ${actual?.quantity ?? added.quantity}, not ${target}.`,
+        { cause: error, retryable: false, details: { partialAdd: true } },
+      );
+    }
   }
 
   /**

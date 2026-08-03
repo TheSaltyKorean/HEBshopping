@@ -41,6 +41,7 @@ interface FakeLine {
   productId?: string;
   name?: string;
   genericName?: string;
+  maximumQuantity?: number;
 }
 
 /** Products the scripted store knows about. Only the fields the code reads. */
@@ -76,6 +77,7 @@ function scripted(lines: FakeLine[], hooks: Hooks = {}) {
       __typename: 'ProductShoppingListItemV2',
       id: line.id,
       quantity: line.quantity,
+      ...(line.maximumQuantity === undefined ? {} : { maximumQuantity: line.maximumQuantity }),
       weight: line.weight ?? null,
       product: {
         __typename: 'Product',
@@ -558,15 +560,16 @@ describe('the product path matches the written-line path', () => {
     expect(lines[0]!.quantity).toBe(1); // their line, untouched
   });
 
-  it('keeps SESSION_EXPIRED when incrementing an existing line', async () => {
+  it('keeps SESSION_EXPIRED when the add itself is refused', async () => {
     // Reconciling would re-read with the same dead cookies and downgrade the auth failure
     // to an indeterminate upstream error, costing the login remedy and the expiry alarm.
+    // An expired session is a definitive non-write, so nothing was created either.
     const { ops } = scripted([{ id: 'line-0', quantity: 1, productId: 'p-milk' }]);
     const client = (ops as unknown as { client: { execute: (d: unknown) => Promise<unknown> } })
       .client;
     const real = client.execute.bind(client);
     client.execute = async (document: unknown) => {
-      if ((document as { operationName: string }).operationName === 'HebUpdateShoppingListItem') {
+      if ((document as { operationName: string }).operationName === 'HebAddShoppingListItems') {
         throw new HebError('SESSION_EXPIRED', 'HEB rejected the stored session.');
       }
       return real(document);
@@ -575,8 +578,62 @@ describe('the product path matches the written-line path', () => {
     await expect(ops.addItem({ productId: 'p-milk', quantity: 2 })).rejects.toSatisfy(
       (error: unknown) =>
         hasCode(error, 'SESSION_EXPIRED') &&
-        // Nothing was created, so there is no partial state to report.
         (error as { details?: Record<string, unknown> }).details?.['partialAdd'] === undefined,
     );
+  });
+
+  it('increments an existing line with the atomic add, never an absolute write', async () => {
+    // The whole point of the restructure: "add one more" issues the additive mutation and
+    // no quantity update at all, so a household member raising the line in between cannot
+    // be overwritten.
+    const { ops, sent, lines } = scripted([{ id: 'line-0', quantity: 1, productId: 'p-milk' }]);
+
+    const result = await ops.addItem({ productId: 'p-milk' });
+
+    expect(result.status).toBe('already_present');
+    expect(result.status === 'already_present' && result.item.quantity).toBe(2);
+    expect(quantityUpdates(sent)).toHaveLength(0);
+    expect(lines[0]!.quantity).toBe(2);
+  });
+});
+
+describe('an add never lowers a concurrently raised line', () => {
+  it('does not overwrite units added between the read and the write', async () => {
+    // The bug this restructure removes: the line is read at 1, a household member raises
+    // it to 4, and "add one more" writes an absolute 2 — deleting two of their units.
+    // The additive mutation cannot do that, because HEB does the increment server-side.
+    const lines: FakeLine[] = [{ id: 'line-0', quantity: 1, productId: 'p-milk' }];
+    const { ops, sent } = scripted(lines);
+    const client = (ops as unknown as { client: { execute: (d: unknown) => Promise<unknown> } })
+      .client;
+    const real = client.execute.bind(client);
+    let raised = false;
+    client.execute = async (document: unknown) => {
+      const name = (document as { operationName: string }).operationName;
+      // They raise it to 4 after our opening read, before our mutation.
+      if (name === 'HebAddShoppingListItems' && !raised) {
+        raised = true;
+        lines[0]!.quantity = 4;
+      }
+      return real(document);
+    };
+
+    const result = await ops.addItem({ productId: 'p-milk' });
+
+    expect(result.status === 'already_present' && result.item.quantity).toBe(5);
+    expect(quantityUpdates(sent)).toHaveLength(0);
+    expect(lines[0]!.quantity).toBe(5); // their four, plus ours
+  });
+
+  it('sends no mutation at all when the line is already at its ceiling', async () => {
+    // Adding cannot raise it, so issuing the mutation only invites a refusal.
+    const { ops, sent } = scripted([
+      { id: 'line-0', quantity: 20, productId: 'p-milk', maximumQuantity: 20 },
+    ]);
+
+    const result = await ops.addItem({ productId: 'p-milk' });
+
+    expect(result.status).toBe('already_present');
+    expect(sent.filter((q) => q.includes('addShoppingListItemsV2'))).toHaveLength(0);
   });
 });

@@ -57,7 +57,21 @@ function guardedListOps(): HebListOps {
 
     try {
       const result = await realAdd(input);
-      if (result.status === 'added') createdLines.add(result.item.lineId);
+      // `added` means "no line in the opening snapshot", which is NOT the same as "this
+      // call created it". If a household member added the same product in between, HEB
+      // merged this unit into their brand-new line and `HebListOps` — whose snapshot
+      // showed nothing — still reports `added` with their line id. Deleting it during
+      // cleanup would take their grocery. Only a line reading exactly one was created here;
+      // anything higher is a merge, and is undone by restoring the quantity instead.
+      if (result.status === 'added') {
+        if (result.item.quantity === 1) createdLines.add(result.item.lineId);
+        else if (!raisedQuantities.has(result.item.lineId)) {
+          raisedQuantities.set(result.item.lineId, {
+            previous: result.item.quantity - 1,
+            produced: result.item.quantity,
+          });
+        }
+      }
       if (result.status === 'already_present') {
         const previous = before.get(result.item.lineId);
         if (previous !== undefined && !raisedQuantities.has(result.item.lineId)) {
@@ -77,7 +91,15 @@ function guardedListOps(): HebListOps {
       const mine = after?.items.find((item) => item.product?.id === wanted);
       if (mine !== undefined) {
         const previous = before.get(mine.lineId);
-        if (previous === undefined) createdLines.add(mine.lineId);
+        // Same rule as the success path: unfamiliar *and* reading one means this run
+        // created it. Unfamiliar but higher means it merged into somebody else's new line.
+        if (previous === undefined && mine.quantity === 1) createdLines.add(mine.lineId);
+        else if (previous === undefined && !raisedQuantities.has(mine.lineId)) {
+          raisedQuantities.set(mine.lineId, {
+            previous: mine.quantity - 1,
+            produced: mine.quantity,
+          });
+        }
         else if (mine.quantity > previous && !raisedQuantities.has(mine.lineId)) {
           raisedQuantities.set(mine.lineId, { previous, produced: mine.quantity });
         }

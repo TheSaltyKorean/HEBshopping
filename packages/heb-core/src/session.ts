@@ -140,23 +140,28 @@ export function checkSession(
       continue;
     }
 
-    // The longest-lived copy, not the first unexpired one. Otherwise a duplicate expiring
-    // inside the safety margin can sit ahead of one good for months, and the whole jar is
-    // declared "expires imminently" — usability still hostage to array order, just one
-    // step further along than before.
-    const usable = copies
-      .filter((candidate) => !cookieIsExpired(candidate, nowMs))
-      // -1 means a session cookie: no expiry at all, so it outlives every dated one.
-      .map((candidate) => (candidate.expires === -1 ? Number.POSITIVE_INFINITY : candidate.expires * 1_000))
-      .sort((a, b) => b - a);
+    // *The copy the request will actually carry* — chosen by `preferred`, exactly as
+    // `cookieHeaderFor` chooses it: more specific path first, lifetime only breaking a tie.
+    //
+    // Judging by lifetime alone silently grades a different cookie than the one being sent.
+    // A `/graphql`-scoped copy expiring in a minute is what goes on the wire, while a
+    // root-scoped copy good for months makes the jar look healthy — so instead of the fast
+    // SESSION_EXPIRED path and its login prompt, the call goes upstream and is rejected.
+    const live = copies.filter((candidate) => !cookieIsExpired(candidate, nowMs));
 
-    const longest = usable[0];
-    if (longest === undefined) {
+    let sent: Cookie | undefined;
+    for (const candidate of live) {
+      if (sent === undefined || preferred(candidate, sent)) sent = candidate;
+    }
+
+    if (sent === undefined) {
       expired.push(name);
       continue;
     }
-    if (Number.isFinite(longest)) {
-      soonestExpiry = soonestExpiry === undefined ? longest : Math.min(soonestExpiry, longest);
+    // -1 means a session cookie: no expiry at all, so it never bounds the jar's life.
+    if (sent.expires !== -1) {
+      const dies = sent.expires * 1_000;
+      soonestExpiry = soonestExpiry === undefined ? dies : Math.min(soonestExpiry, dies);
     }
   }
 

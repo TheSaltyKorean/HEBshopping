@@ -22,7 +22,15 @@ const store = new FileStore(SESSION_PATH);
 const createdLines = new Set<string>();
 
 /** lineId -> the quantity it had before this run incremented it. */
-const raisedQuantities = new Map<string, number>();
+/**
+ * Lines this run incremented: `lineId -> { previous, produced }`.
+ *
+ * Both numbers are needed. `previous` is where to restore to; `produced` is what this run
+ * left the line at, and restoring is only safe while the line still reads exactly that.
+ * Anything else means somebody edited it during the run, and their change is not ours to
+ * discard.
+ */
+const raisedQuantities = new Map<string, { previous: number; produced: number }>();
 
 /**
  * `HebListOps` that physically cannot delete a line this run did not create.
@@ -53,7 +61,7 @@ function guardedListOps(): HebListOps {
       if (result.status === 'already_present') {
         const previous = before.get(result.item.lineId);
         if (previous !== undefined && !raisedQuantities.has(result.item.lineId)) {
-          raisedQuantities.set(result.item.lineId, previous);
+          raisedQuantities.set(result.item.lineId, { previous, produced: result.item.quantity });
         }
       }
       return result;
@@ -71,7 +79,7 @@ function guardedListOps(): HebListOps {
         const previous = before.get(mine.lineId);
         if (previous === undefined) createdLines.add(mine.lineId);
         else if (mine.quantity > previous && !raisedQuantities.has(mine.lineId)) {
-          raisedQuantities.set(mine.lineId, previous);
+          raisedQuantities.set(mine.lineId, { previous, produced: mine.quantity });
         }
       }
       throw error;
@@ -173,12 +181,22 @@ async function cleanUp(): Promise<void> {
   // Increments are undone by restoring the old quantity, never by deleting the line: it
   // belongs to the household, not to this run.
   const current = await listOps.getList().catch(() => null);
-  for (const [lineId, previous] of raisedQuantities) {
-    // Only if the line still sits above where it started. Writing the opening quantity
-    // unconditionally would erase an edit somebody made in the H-E-B app during the run.
+  for (const [lineId, { previous, produced }] of raisedQuantities) {
+    // Only when the line still reads exactly what this run left it at. "Still above where
+    // it started" is not enough: a household member incrementing the same line during the
+    // run also satisfies it, and writing the opening quantity then discards their unit
+    // along with the test's — restoring 1 from 3 when the test only ever added one.
     const now = current?.items.find((item) => item.lineId === lineId);
-    if (now === undefined || now.quantity <= previous) {
-      console.log(`\n🧹 line already at or below ${previous}; leaving it alone`);
+    if (now === undefined) {
+      console.log(`\n🧹 line ${lineId} is gone; nothing to restore`);
+      continue;
+    }
+    if (now.quantity !== produced) {
+      console.error(
+        `\n⚠ line ${lineId} reads ${now.quantity}, not the ${produced} this run left.\n` +
+          `   Somebody changed it during the run, so it is NOT being restored to ${previous}.\n` +
+          `   Reconcile by hand if the test's extra unit is unwanted.`,
+      );
       continue;
     }
     await listOps.setItemQuantity(lineId, previous);

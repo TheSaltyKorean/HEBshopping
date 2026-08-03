@@ -164,15 +164,35 @@ async function main(): Promise<void> {
     throw new Error(`expected exactly one new line, saw ${added.length} — list left untouched`);
   }
 
+  // The removal is gated on the *same* proof that arms cleanup, not merely on the diff
+  // holding one id. If a household member added this product between the snapshot and the
+  // add, MCP reports "Already on the list" — our call merged into their line, created
+  // nothing, and the single unfamiliar id in the diff is *their* new grocery. Deleting it
+  // would destroy real data precisely because something unexpected happened.
+  if (createdLine === null) {
+    throw new Error(
+      'the add merged into an existing line rather than creating one — ' +
+        'list left untouched, nothing deleted',
+    );
+  }
+
   // Remove by lineId, not by free text. Free-text removal against a real list can match a
   // pre-existing grocery, and `verify:alexa` already covers that path behind a guard that
   // refuses to delete anything it did not create.
-  await call('heb_remove_item', { lineId: added[0]! });
+  await call('heb_remove_item', { lineId: createdLine });
+  // Disarm the finalizer completely. Clearing only `createdLine` leaves the product
+  // markers armed, so the late-resolution branch runs on every successful verification:
+  // usually it fails to find the already-removed product and turns a passing run into
+  // exit code 1, and if a household member has since added the same product it identifies
+  // and deletes *their* line.
   createdLine = null;
+  createdProductId = null;
+  createdProductName = null;
 
+  const removed = added[0]!;
   const afterward = await call('heb_read_list');
   const remaining = lineIdsIn(afterward);
-  if (remaining.has(added[0]!)) throw new Error('the added item was not removed');
+  if (remaining.has(removed)) throw new Error('the added item was not removed');
   for (const lineId of before) {
     if (!remaining.has(lineId)) throw new Error(`a pre-existing line was removed: ${lineId}`);
   }

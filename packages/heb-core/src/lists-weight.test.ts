@@ -115,13 +115,19 @@ function scripted(lines: FakeLine[], hooks: Hooks = {}) {
       case 'HebAddShoppingListItems': {
         const productId = /productId: "([^"]+)"/.exec(body.query)?.[1];
         const entry = CATALOG[productId!]!;
-        lines.push({
-          id: `line-${lines.length}`,
-          quantity: 1,
-          productId: productId!,
-          // HEB assigns a counter line its own smallest weight on creation.
-          ...(entry.pricedByWeight ? { weight: entry.increments[0]! } : {}),
-        });
+        // Real behaviour: quantity is a property of the line, so adding a product already
+        // on the list increments it rather than creating a duplicate — the same merge the
+        // written-line path does, and the reason `already_present` exists at all.
+        const existing = lines.find((line) => line.productId === productId);
+        if (existing !== undefined) existing.quantity += 1;
+        else
+          lines.push({
+            id: `line-${lines.length}`,
+            quantity: 1,
+            productId: productId!,
+            // HEB assigns a counter line its own smallest weight on creation.
+            ...(entry.pricedByWeight ? { weight: entry.increments[0]! } : {}),
+          });
         return json({ addShoppingListItemsV2: payload() });
       }
 
@@ -496,5 +502,81 @@ describe('definitive refusals are not reconciled away', () => {
     );
     expect(quantityUpdates(sent)).toHaveLength(0);
     expect(lines[0]!.quantity).toBe(3); // only their unit, untouched by us
+  });
+});
+
+describe('the product path matches the written-line path', () => {
+  it('adds the remaining units to a line a household member created first', async () => {
+    // The opening read finds nothing, but somebody else creates the same product before
+    // this mutation, so HEB merges this call's unit into their line and returns it at 6.
+    // A request for 2 must finish at 7. The old absolute target wrote 6 — silently
+    // dropping the second requested unit.
+    const lines: FakeLine[] = [];
+    const { ops, sent } = scripted(lines);
+    const client = (ops as unknown as { client: { execute: (d: unknown) => Promise<unknown> } })
+      .client;
+    const real = client.execute.bind(client);
+    client.execute = async (document: unknown) => {
+      if ((document as { operationName: string }).operationName === 'HebAddShoppingListItems') {
+        // Their line, already at five, which this add merges into.
+        lines.push({ id: 'line-theirs', quantity: 5, productId: 'p-milk' });
+        const result = await real(document);
+        return result;
+      }
+      return real(document);
+    };
+
+    const result = await ops.addItem({ productId: 'p-milk', quantity: 2 });
+
+    expect(result.status === 'added' && result.item.quantity).toBe(7);
+    expect(sent.some((query) => query.includes('quantity: 7'))).toBe(true);
+  });
+
+  it('rethrows a definitively refused product add instead of reconciling', async () => {
+    // A non-success union member means the add did not happen. A household member adding
+    // the same product afterwards must not stand in as proof that it did.
+    const lines: FakeLine[] = [];
+    const { ops, sent } = scripted(lines);
+    const client = (ops as unknown as { client: { execute: (d: unknown) => Promise<unknown> } })
+      .client;
+    const real = client.execute.bind(client);
+    client.execute = async (document: unknown) => {
+      if ((document as { operationName: string }).operationName === 'HebAddShoppingListItems') {
+        lines.push({ id: 'line-theirs', quantity: 1, productId: 'p-milk' });
+        throw new HebError('UPSTREAM_ERROR', 'HEB refused the add.', {
+          details: { rejected: true },
+        });
+      }
+      return real(document);
+    };
+
+    await expect(ops.addItem({ productId: 'p-milk', quantity: 3 })).rejects.toSatisfy(
+      (error: unknown) =>
+        (error as { details?: Record<string, unknown> }).details?.['rejected'] === true,
+    );
+    expect(quantityUpdates(sent)).toHaveLength(0);
+    expect(lines[0]!.quantity).toBe(1); // their line, untouched
+  });
+
+  it('keeps SESSION_EXPIRED when incrementing an existing line', async () => {
+    // Reconciling would re-read with the same dead cookies and downgrade the auth failure
+    // to an indeterminate upstream error, costing the login remedy and the expiry alarm.
+    const { ops } = scripted([{ id: 'line-0', quantity: 1, productId: 'p-milk' }]);
+    const client = (ops as unknown as { client: { execute: (d: unknown) => Promise<unknown> } })
+      .client;
+    const real = client.execute.bind(client);
+    client.execute = async (document: unknown) => {
+      if ((document as { operationName: string }).operationName === 'HebUpdateShoppingListItem') {
+        throw new HebError('SESSION_EXPIRED', 'HEB rejected the stored session.');
+      }
+      return real(document);
+    };
+
+    await expect(ops.addItem({ productId: 'p-milk', quantity: 2 })).rejects.toSatisfy(
+      (error: unknown) =>
+        hasCode(error, 'SESSION_EXPIRED') &&
+        // Nothing was created, so there is no partial state to report.
+        (error as { details?: Record<string, unknown> }).details?.['partialAdd'] === undefined,
+    );
   });
 });

@@ -52,6 +52,11 @@ export function parseGraphqlPost(postData: string): ParsedOperation[] {
         typeof record['operationName'] === 'string' ? record['operationName'] : ANONYMOUS_OPERATION,
       sha256Hash: typeof persisted?.['sha256Hash'] === 'string' ? persisted['sha256Hash'] : null,
       hasFullQuery: typeof record['query'] === 'string',
+      // The document itself, not just the fact that there was one. `tools/lib/browser.ts`
+      // spreads this straight into the saved capture, so dropping it left the operation
+      // files without the one thing a schema-drift repair needs — while the interface
+      // advertised that it was kept.
+      ...(typeof record['query'] === 'string' ? { query: record['query'] } : {}),
       variables: record['variables'] ?? null,
     });
   }

@@ -447,6 +447,13 @@ export class HebListOps implements ListOps {
         try {
           await this.setQuantity(listId, existing.lineId, target);
         } catch (error) {
+          // An expired session must survive as itself. Reconciling would re-read with the
+          // same dead cookies, and a failed read then replaces the auth classification with
+          // an indeterminate UPSTREAM_ERROR — costing the login remedy on both surfaces and
+          // the log line the expiry alarm matches on. Nothing was created here, so there is
+          // no partial state to carry alongside it.
+          if (isHebError(error) && error.code === 'SESSION_EXPIRED') throw error;
+
           // A timeout here is *indeterminate*: HEB may well have committed the update
           // before the response was lost. Propagating a bare failure makes the surface say
           // "try again", and the retry reads the already-incremented line and increments it
@@ -502,6 +509,12 @@ export class HebListOps implements ListOps {
         (item) => item.product?.id === productId,
       );
     } catch (error) {
+      // A *definitive* refusal has nothing to reconcile: HEB returned a non-success union
+      // member, so this add conclusively did not happen. Reconciling anyway lets a
+      // household member's concurrent add of the same product stand in as proof, reporting
+      // a refused request as a success — and a multi-unit request then rewrites their line.
+      if (isHebError(error) && error.details?.['rejected'] === true) throw error;
+
       // Indeterminate, exactly like the quantity update: HEB may have created the line
       // before the response was lost. A bare failure makes the surface say "try again",
       // and the retry finds that line and *increments* it — so "add milk" twice leaves
@@ -568,14 +581,16 @@ export class HebListOps implements ListOps {
     }
 
     if (quantity > 1) {
-      // Floored by what the add actually returned, exactly as the existing-line branch is.
-      // The opening read found no line, but a household member can create the same product
-      // in between — HEB then increments *their* line and returns it at, say, six. Writing
-      // an absolute two would delete four units somebody else put there.
-      const target = Math.max(
-        added.quantity,
-        Math.min(quantity, added.maximumQuantity ?? quantity),
-      );
+      // Relative to what the add returned, exactly as the written-line path is. The opening
+      // read found no line, but a household member can create the same product in between —
+      // HEB then merges this call's unit into *their* line and returns it at, say, six.
+      //
+      // An absolute target got this wrong in both directions: at six it wrote six and
+      // silently dropped the second requested unit, and had the number been lower it would
+      // have taken units off somebody else's line. The mutation contributes the first unit,
+      // so only `quantity - 1` remains — capped by the ceiling, never below what is there.
+      const ceiling = added.maximumQuantity ?? Number.POSITIVE_INFINITY;
+      const target = Math.max(added.quantity, Math.min(added.quantity + quantity - 1, ceiling));
       try {
         await this.setQuantity(listId, added.lineId, target);
         return { status: 'added', item: { ...added, quantity: target } };

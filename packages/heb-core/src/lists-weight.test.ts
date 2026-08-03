@@ -445,3 +445,56 @@ describe('a blank query is not a search', () => {
     await expect(ops.addItem({ query: '   ' })).rejects.toThrow(TypeError);
   });
 });
+
+describe('concurrent merges are preserved, not overwritten', () => {
+  it('applies the remaining units to what the write returned', async () => {
+    // Base 2. A household member merges the same text (→3) between the snapshot and this
+    // write, whose own unit makes 4. A request for 3 must finish at 6: both adds were
+    // accepted. An absolute snapshot-derived target would have set 5, destroying a unit.
+    const lines: FakeLine[] = [{ id: 'line-0', quantity: 2, genericName: 'birthday candles' }];
+    const { ops, sent } = scripted(lines);
+    const client = (ops as unknown as { client: { execute: (d: unknown) => Promise<unknown> } })
+      .client;
+    const real = client.execute.bind(client);
+    client.execute = async (document: unknown) => {
+      if ((document as { operationName: string }).operationName === 'HebAddShoppingListText') {
+        lines[0]!.quantity += 1; // the other household member's add
+      }
+      return real(document);
+    };
+
+    const result = await ops.addItem({ text: 'birthday candles', quantity: 3 });
+
+    expect(result.status === 'already_present' && result.item.quantity).toBe(6);
+    expect(sent.some((query) => query.includes('quantity: 6'))).toBe(true);
+  });
+});
+
+describe('definitive refusals are not reconciled away', () => {
+  it('rethrows a rejected text add even if the line grew meanwhile', async () => {
+    // A non-success union member means the write conclusively did not happen. A household
+    // member merging the same text raises the line above the snapshot, and treating that
+    // as proof would report the refusal as success and then edit their line.
+    const lines: FakeLine[] = [{ id: 'line-0', quantity: 2, genericName: 'birthday candles' }];
+    const { ops, sent } = scripted(lines);
+    const client = (ops as unknown as { client: { execute: (d: unknown) => Promise<unknown> } })
+      .client;
+    const real = client.execute.bind(client);
+    client.execute = async (document: unknown) => {
+      if ((document as { operationName: string }).operationName === 'HebAddShoppingListText') {
+        lines[0]!.quantity += 1; // somebody else's add lands
+        throw new HebError('UPSTREAM_ERROR', 'HEB refused to add the note.', {
+          details: { rejected: true },
+        });
+      }
+      return real(document);
+    };
+
+    await expect(ops.addItem({ text: 'birthday candles', quantity: 3 })).rejects.toSatisfy(
+      (error: unknown) =>
+        (error as { details?: Record<string, unknown> }).details?.['rejected'] === true,
+    );
+    expect(quantityUpdates(sent)).toHaveLength(0);
+    expect(lines[0]!.quantity).toBe(3); // only their unit, untouched by us
+  });
+});

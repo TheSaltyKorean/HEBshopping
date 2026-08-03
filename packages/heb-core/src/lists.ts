@@ -652,10 +652,14 @@ export class HebListOps implements ListOps {
     // identical line and is reported as a success that never happened.
     const before = (await this.getList(id)).items.find(isTextLine(trimmed));
     const base = before?.quantity ?? 0;
-    // Absolute, and consistent with the product path: "add three" onto an existing two
-    // means five, not three. The mutation itself contributes the first unit.
-    const target = base + Math.max(1, Math.trunc(quantity));
     const wasPresent = before !== undefined;
+    // The mutation itself contributes the first unit, so only the rest is left to apply —
+    // and it is applied to whatever the write *returned*, never to a target derived from
+    // the snapshot. A household member merging the same text in between makes the returned
+    // quantity higher than the snapshot predicts, and an absolute target computed up front
+    // would overwrite their increment with a smaller number, quietly taking a unit off
+    // somebody's shopping.
+    const remaining = Math.max(1, Math.trunc(quantity)) - 1;
 
     this.cachedList = undefined;
 
@@ -667,6 +671,13 @@ export class HebListOps implements ListOps {
       assertMutationSucceeded(data.addShoppingListItemsV2, 'add the note');
       payload = data.addShoppingListItemsV2;
     } catch (error) {
+      // A *definitive* refusal has nothing to reconcile: HEB returned a non-success union
+      // member, so this write conclusively did not happen. Running the quantity check
+      // anyway would let a household member's concurrent merge — which raises the same
+      // line above the snapshot — stand in as proof, reporting a refused request as a
+      // success and then editing their line.
+      if (isHebError(error) && error.details?.['rejected'] === true) throw error;
+
       // An expired session is rethrown as itself further down, once we know whether a line
       // was created — the remedy and the partial state are both needed, and neither alone
       // is enough to stop a retry from writing more.
@@ -689,7 +700,7 @@ export class HebListOps implements ListOps {
       // Strictly greater than the snapshot: an unchanged line is the one already there,
       // not evidence that this write landed.
       if (now === undefined || now.quantity <= base) throw error;
-      return this.applyTextQuantity(id, now, target, wasPresent);
+      return this.applyTextQuantity(id, now, remaining, wasPresent);
     }
 
     let added = toHebList(payload).items.find(isTextLine(trimmed));
@@ -707,7 +718,7 @@ export class HebListOps implements ListOps {
         details: { indeterminate: true },
       });
     }
-    return this.applyTextQuantity(id, added, target, wasPresent);
+    return this.applyTextQuantity(id, added, remaining, wasPresent);
   }
 
   /**
@@ -724,13 +735,15 @@ export class HebListOps implements ListOps {
   private async applyTextQuantity(
     listId: string,
     line: ListItem,
-    requested: number,
+    remaining: number,
     wasPresent: boolean,
   ): Promise<AddResult> {
     const status = wasPresent ? 'already_present' : 'added';
-    // Never below what is on the list: a household member merging into the same line
-    // leaves it higher, and writing an absolute target would take their units away.
-    const goal = Math.max(line.quantity, Math.trunc(requested));
+    // Relative to what the write returned, so concurrent merges survive. From a base of 2,
+    // a household member's add plus this one's first unit returns 4; a request for 3 must
+    // finish at 6, because both adds were accepted. An absolute snapshot-derived target
+    // would have set 5 and destroyed a unit.
+    const goal = line.quantity + Math.max(0, remaining);
     if (goal <= line.quantity) return { status, item: line };
 
     try {

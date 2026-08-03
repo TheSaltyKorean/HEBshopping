@@ -29,6 +29,38 @@ const MARKER_TTL_MS = 60 * 60 * 1_000;
  * decrementing to zero — so neither may run on a line it cannot account for. A count or a
  * quantity is not proof: a household list with one grocery at quantity one satisfies both.
  */
+/**
+ * Strip HEB's surrounding words so two labels for the same product compare equal.
+ *
+ * HEB phrases them differently — "Add X to list" versus "Select X" — so the wrapper words
+ * come off and the product itself has to match exactly. Word overlap is deliberately not
+ * enough: a marker for "Organic Whole Milk" must not accept "Organic Chocolate Milk".
+ */
+function productOf(text: string): string {
+  return text
+    .toLowerCase()
+    .replace(/^\s*(add|select)\s+/, '')
+    .replace(/\s+to\s+(shopping\s+)?list\s*$/, '')
+    .replace(/[^a-z0-9]+/g, ' ')
+    .trim();
+}
+
+/**
+ * Every product currently on the list, as normalised labels.
+ *
+ * Taken *before* anything is clicked. Adding a product that is already on the list does
+ * not create a new line — HEB merges it into the existing one and increments its quantity
+ * (verified against the live API for written lines, and the same is true here). Without
+ * this snapshot the run would mark a household grocery as its own throwaway, and `remove`
+ * would then delete somebody's actual shopping.
+ */
+async function listedProducts(page: Page): Promise<Set<string>> {
+  const labels = await page
+    .locator('input[type="checkbox"][aria-label^="Select "]')
+    .evaluateAll((nodes) => nodes.map((node) => node.getAttribute('aria-label') ?? ''));
+  return new Set(labels.map(productOf).filter((label) => label !== ''));
+}
+
 async function isThrowawayLine(page: Page): Promise<boolean> {
   const marker = await readFile(THROWAWAY_PATH, 'utf8').catch(() => null);
   if (marker === null) return false;
@@ -49,22 +81,8 @@ async function isThrowawayLine(page: Page): Promise<boolean> {
       .first()
       .getAttribute('aria-label')) ?? '';
 
-  // Exact product identity, not word overlap. Two words in common is not ownership: a
-  // marker for "Organic Whole Milk" would cheerfully accept "Organic Chocolate Milk", and
-  // both commands consulting this end up deleting the line.
-  //
-  // HEB phrases the two labels differently — "Add X to list" versus "Select X" — so the
-  // surrounding words are stripped and the product itself has to match exactly.
-  const product = (text: string): string =>
-    text
-      .toLowerCase()
-      .replace(/^\s*(add|select)\s+/, '')
-      .replace(/\s+to\s+(shopping\s+)?list\s*$/, '')
-      .replace(/[^a-z0-9]+/g, ' ')
-      .trim();
-
-  const seen = product(selectLabel);
-  return seen !== '' && seen === product(label);
+  const seen = productOf(selectLabel);
+  return seen !== '' && seen === productOf(label);
 }
 
 /** Forget the marker once the line it describes has been consumed. */
@@ -195,6 +213,10 @@ async function main(): Promise<void> {
 async function addItem(page: Page, text: string): Promise<void> {
   if (!text) throw new Error('add requires text, e.g. add "oat milk"');
 
+  // Before anything is clicked: what is already on this list?
+  const alreadyListed = await listedProducts(page);
+  console.log(`\nList currently holds ${alreadyListed.size} product line(s).`);
+
   console.log(`\nClicking "Add an item" …`);
   await page.getByRole('button', { name: /add an item/i }).first().click();
   await page.waitForTimeout(1_500);
@@ -241,10 +263,38 @@ async function addItem(page: Page, text: string): Promise<void> {
   }
 
   const label = await addButton.getAttribute('aria-label');
+
+  // Refuse *before* writing, not after. Adding something already on the list merges into
+  // that line and increments it, producing no new line to own — and the ownership marker
+  // would then point at a household grocery that `remove` deletes outright. Not clicking
+  // is the only version of this that cannot damage the list.
+  if (label !== null && alreadyListed.has(productOf(label))) {
+    console.error(
+      `\n⛔ "${label}" is already on this list.\n` +
+        '   Adding it would merge into that line and increment it, leaving nothing this\n' +
+        '   run can prove it created. Choose an item the list does not already hold.',
+    );
+    return;
+  }
+
   console.log(`\nClicking: "${label ?? '(unnamed)'}" …`);
   await addButton.click();
   await page.waitForTimeout(3_500);
   await page.screenshot({ path: 'captures/add-clicked.png', fullPage: true });
+
+  // Prove a genuinely new line appeared before claiming to own one. If the click silently
+  // merged anyway — a different-but-equivalent product label, say — there is nothing safe
+  // to delete later, and no marker is worth more than a wrong one.
+  const nowListed = await listedProducts(page);
+  const created = [...nowListed].filter((product) => !alreadyListed.has(product));
+  if (label === null || !created.includes(productOf(label))) {
+    console.error(
+      `\n⛔ No new line matching "${label ?? '(unnamed)'}" appeared (${created.length} new line(s)).\n` +
+        '   Not recording an ownership marker: `remove` must never delete a line this run\n' +
+        '   cannot prove it created. Check the list by hand.',
+    );
+    return;
+  }
 
   // Record what this run put on the list, so `remove` can prove the line it is about to
   // delete is a throwaway rather than somebody's actual shopping.

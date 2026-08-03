@@ -614,3 +614,59 @@ describe('skill id verification', () => {
     expect(response.response.outputSpeech?.ssml ?? '').not.toContain(ID_B);
   });
 });
+
+describe('the free-text fallback and merged lines', () => {
+  it('confirms a merged written line instead of reporting the catalog miss', async () => {
+    // HEB merges a duplicate written line and increments it, so `already_present` is a
+    // success. Rethrowing PRODUCT_NOT_FOUND here would report failure for a write that
+    // committed — and the user would repeat it, merging another unit.
+    const ops = fakeOps({
+      addItem: vi.fn(async (input: { text?: string }) => {
+        if (input.text === undefined) throw new HebError('PRODUCT_NOT_FOUND', 'no match');
+        return {
+          status: 'already_present' as const,
+          item: { lineId: 'l9', text: input.text, quantity: 3 },
+        };
+      }) as unknown as FakeOps['addItem'],
+    });
+    const say = conversation(ops);
+
+    const turn = await say(intent('AddItemIntent', { item: 'sourdough starter' }));
+
+    expect(turn.speech).toContain('already written');
+    expect(turn.speech).toContain('3');
+    expect(turn.speech).not.toContain('could not find that at your H-E-B.  Anything');
+  });
+
+  it('refuses to write down a zero-count request', async () => {
+    // "Add zero bananas" is a refusal. The catalog search still runs — "zero sugar dr
+    // pepper" is a real product — but a miss must not become a written line.
+    const ops = fakeOps({
+      addItem: vi.fn(async () => {
+        throw new HebError('PRODUCT_NOT_FOUND', 'no match');
+      }) as unknown as FakeOps['addItem'],
+    });
+    const say = conversation(ops);
+
+    const turn = await say(intent('AddItemIntent', { item: 'zero bananas' }));
+
+    expect(turn.speech).toContain('could not find');
+    expect(ops.addItem).toHaveBeenCalledTimes(1); // searched, never written
+  });
+
+  it('still writes down a zero-branded product that the catalog misses', async () => {
+    // The zero guard must not swallow ordinary requests that merely contain the word.
+    const ops = fakeOps({
+      addItem: vi.fn(async (input: { text?: string }) => {
+        if (input.text === undefined) throw new HebError('PRODUCT_NOT_FOUND', 'no match');
+        return { status: 'added' as const, item: { lineId: 'l9', text: input.text, quantity: 1 } };
+      }) as unknown as FakeOps['addItem'],
+    });
+    const say = conversation(ops);
+
+    const turn = await say(intent('AddItemIntent', { item: 'dr pepper zero sugar' }));
+
+    expect(turn.speech).toContain('wrote');
+    expect(ops.addItem).toHaveBeenCalledTimes(2);
+  });
+});

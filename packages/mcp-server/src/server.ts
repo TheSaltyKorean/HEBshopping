@@ -86,7 +86,19 @@ function toErrorText(error: unknown): TextResult {
       : error.code;
 
   const extra = guidance[key];
-  return text(`${error.code}: ${error.message}${extra ? `\n${extra}` : ''}`, true);
+
+  // A partial write outranks the code's own advice. `SESSION_EXPIRED` tells the agent to
+  // get a human to log in — perfectly correct, and actively harmful on its own here,
+  // because the obvious next step afterwards is to repeat the original request, which
+  // increments the line this call already created. Alexa says this; MCP must too.
+  const partial =
+    error.details?.['partialAdd'] === true
+      ? '\nIMPORTANT: the item IS already on the list — only its amount was not set. Do ' +
+        'NOT repeat this add; adding it again increases the amount further. Read the list ' +
+        'and correct the amount instead.'
+      : '';
+
+  return text(`${error.code}: ${error.message}${extra ? `\n${extra}` : ''}${partial}`, true);
 }
 
 function describeAddResult(result: AddResult): TextResult {

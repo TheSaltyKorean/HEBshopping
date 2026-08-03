@@ -131,14 +131,13 @@ function giveUp(input: HandlerInput, pending: PendingChoice): Response {
  * the success would hide that no real product is attached, and someone shopping from this
  * list would look for a scannable item that is not there.
  */
-function confirmWritten(input: HandlerInput, item: ListItem): Response {
-  return input.responseBuilder
-    .speak(
-      `I could not find that at your H-E-B, so I wrote ${escapeSsml(item.text)} ` +
-        `on your list. Anything else?`,
-    )
-    .reprompt(REPROMPT)
-    .getResponse();
+function confirmWritten(input: HandlerInput, item: ListItem, wasPresent: boolean): Response {
+  const name = escapeSsml(item.text);
+  const speech = wasPresent
+    ? `I could not find that at your H-E-B. It was already written on your list, ` +
+      `so you now have ${item.quantity}.`
+    : `I could not find that at your H-E-B, so I wrote ${name} on your list.`;
+  return input.responseBuilder.speak(`${speech} Anything else?`).reprompt(REPROMPT).getResponse();
 }
 
 function confirmAdded(input: HandlerInput, item: ListItem, wasPresent: boolean): Response {
@@ -199,6 +198,12 @@ function addItemHandler(options: CreateSkillOptions): RequestHandler {
       // "two percent milk" is one carton rather than two.
       const { quantity, query, weight } = parseSpokenRequest(spoken);
 
+      // "Add zero bananas" is a refusal, and the parser deliberately keeps the word in the
+      // query rather than treating zero as a count. The catalog search must still run —
+      // "zero sugar dr pepper" is a real product and has to keep working — but if nothing
+      // matches, writing "zero bananas" down would turn a refusal into a list entry.
+      const refusesWithZero = /^(?:zero|0)\b/.test(query.trim());
+
       // "Add some" is filler all the way down: the parse leaves nothing to search for.
       // Falling through would reach PRODUCT_NOT_FOUND and write "some" onto the list as a
       // written line — a request nobody made, from a sentence that was never finished.
@@ -228,15 +233,19 @@ function addItemHandler(options: CreateSkillOptions): RequestHandler {
         // as a plain line — exactly what H-E-B's own `Add "…" to list` button does. A line
         // saying what you asked for beats no line at all, and this is the one failure a
         // shopper can still act on in the aisle.
-        if (!hasCode(error, 'PRODUCT_NOT_FOUND')) throw error;
+        if (!hasCode(error, 'PRODUCT_NOT_FOUND') || refusesWithZero) throw error;
 
         // Deliberately the *spoken* phrase, not the parsed `query`. Nothing resolved it, so
         // there is no product name to prefer — and the stripped parts are exactly the ones
         // worth keeping here: "two avocados" and "two pounds of brisket" must survive as
         // written, or the line understates the order.
         const written = await listOps.addItem({ text: spoken.trim() });
-        if (written.status !== 'added') throw error; // a text add cannot need confirming
-        return confirmWritten(input, written.item);
+        // `already_present` is a *success*: HEB merges a duplicate written line into the
+        // existing one and increments it (verified against the live list). Rethrowing the
+        // catalog miss here would report a failure for a write that committed, and the
+        // user would repeat it — merging yet another unit.
+        if (written.status === 'needs_confirmation') throw error; // unreachable for text
+        return confirmWritten(input, written.item, written.status === 'already_present');
       }
 
       if (result.status === 'added') return confirmAdded(input, result.item, false);

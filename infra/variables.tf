@@ -10,25 +10,37 @@ variable "name_prefix" {
   default     = "heb-shopping"
 }
 
-variable "alexa_skill_id" {
+variable "alexa_skill_ids" {
   description = <<-EOT
-    The Alexa skill id (amzn1.ask.skill.…) from the developer console.
+    The Alexa skill ids (amzn1.ask.skill.…) from the developer console.
 
-    Required, and used twice: it scopes the Lambda invoke permission to one skill, and the
-    handler rejects any other. A direct Alexa trigger carries no request signature, so this
+    Required, and used twice: they scope the Lambda invoke permission, and the handler
+    rejects every other skill. A direct Alexa trigger carries no request signature, so this
     is the only thing preventing another skill that learns the ARN from reading the list.
+
+    A list, because Alexa allows exactly one invocation name per skill. To answer to both
+    "grocery list" and "heb list", create two skills with the same interaction model and
+    the same endpoint ARN, and put both ids here.
   EOT
-  type        = string
+  type        = list(string)
 
   validation {
     # The full shape, not just the prefix. The example file's placeholder carries the
     # prefix too, so a prefix check accepts it — and Terraform then happily deploys an
     # invoke permission and a HEB_SKILL_ID locked to an id no skill will ever present.
     # Everything applies cleanly and the skill is simply dead, with nothing to point at.
-    condition = can(
-      regex("^amzn1\\.ask\\.skill\\.[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$", var.alexa_skill_id)
-    )
-    error_message = "alexa_skill_id must be a real skill id (amzn1.ask.skill.<uuid>), not the placeholder. Copy it from the Alexa developer console under Build → Endpoint."
+    condition = length(var.alexa_skill_ids) > 0 && alltrue([
+      for id in var.alexa_skill_ids :
+      can(regex("^amzn1\\.ask\\.skill\\.[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$", id))
+    ])
+    error_message = "alexa_skill_ids must be a non-empty list of real skill ids (amzn1.ask.skill.<uuid>), not the placeholder. Copy each from the Alexa developer console under Build → Endpoint."
+  }
+
+  validation {
+    # Duplicates would silently collide on the for_each key below, and Terraform's error
+    # there names an internal address rather than the real mistake.
+    condition     = length(var.alexa_skill_ids) == length(toset(var.alexa_skill_ids))
+    error_message = "alexa_skill_ids contains a duplicate skill id."
   }
 }
 

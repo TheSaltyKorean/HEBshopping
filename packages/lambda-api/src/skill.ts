@@ -21,8 +21,10 @@ import type {
 } from 'ask-sdk-core';
 import type { Response } from 'ask-sdk-model';
 import {
+  hasCode,
   isHebError,
   parseSpokenRequest,
+  type AddResult,
   type HebErrorCode,
   type ListItem,
   type Product,
@@ -59,14 +61,17 @@ export interface CreateSkillOptions {
    */
   createListOps: () => HebListOps;
   /**
-   * The skill id this Lambda will accept.
+   * The skill ids this Lambda will accept. Empty or omitted disables the check (tests only).
    *
    * With a direct Alexa trigger there is no HTTP request to sign, so signature
    * verification does not apply — the trigger itself is the authenticated channel. What
    * *does* still matter is that anyone who learns this function's ARN could point their own
    * skill at it, so the skill id is checked and everything else rejected.
+   *
+   * A *list*, because Alexa allows exactly one invocation name per skill. Answering to
+   * both "grocery list" and "heb list" means two skills, and they share this one Lambda.
    */
-  skillId?: string;
+  skillIds?: readonly string[];
 }
 
 // ---------------------------------------------------------------------------
@@ -116,6 +121,23 @@ function giveUp(input: HandlerInput, pending: PendingChoice): Response {
         `I have put the choices for ${escapeSsml(pending.spokenQuery)} in your Alexa app.`,
     )
     .withSimpleCard(CARD_TITLE, `Did you mean one of these?\n\n${names.join('\n')}`)
+    .getResponse();
+}
+
+/**
+ * Confirm a line we wrote down rather than matched.
+ *
+ * Says both halves out loud — that the search failed *and* what was written. Reporting only
+ * the success would hide that no real product is attached, and someone shopping from this
+ * list would look for a scannable item that is not there.
+ */
+function confirmWritten(input: HandlerInput, item: ListItem): Response {
+  return input.responseBuilder
+    .speak(
+      `I could not find that at your H-E-B, so I wrote ${escapeSsml(item.text)} ` +
+        `on your list. Anything else?`,
+    )
+    .reprompt(REPROMPT)
     .getResponse();
 }
 
@@ -176,11 +198,29 @@ function addItemHandler(options: CreateSkillOptions): RequestHandler {
       // avocados" arrives as one AMAZON.SearchQuery, and heb-core already knows that
       // "two percent milk" is one carton rather than two.
       const { quantity, query, weight } = parseSpokenRequest(spoken);
-      const result = await options.createListOps().addItem({
-        query,
-        quantity,
-        ...(weight === undefined ? {} : { weight }),
-      });
+
+      let result: AddResult;
+      try {
+        result = await options.createListOps().addItem({
+          query,
+          quantity,
+          ...(weight === undefined ? {} : { weight }),
+        });
+      } catch (error) {
+        // Nothing in the catalog matched. Rather than a dead end, write the request down
+        // as a plain line — exactly what H-E-B's own `Add "…" to list` button does. A line
+        // saying what you asked for beats no line at all, and this is the one failure a
+        // shopper can still act on in the aisle.
+        if (!hasCode(error, 'PRODUCT_NOT_FOUND')) throw error;
+
+        // Deliberately the *spoken* phrase, not the parsed `query`. Nothing resolved it, so
+        // there is no product name to prefer — and the stripped parts are exactly the ones
+        // worth keeping here: "two avocados" and "two pounds of brisket" must survive as
+        // written, or the line understates the order.
+        const written = await options.createListOps().addItem({ text: spoken.trim() });
+        if (written.status !== 'added') throw error; // a text add cannot need confirming
+        return confirmWritten(input, written.item);
+      }
 
       if (result.status === 'added') return confirmAdded(input, result.item, false);
       if (result.status === 'already_present') return confirmAdded(input, result.item, true);
@@ -524,7 +564,27 @@ export function createSkill(options: CreateSkillOptions) {
 
   builder.addRequestInterceptors(clearSupersededPending());
   builder.addErrorHandlers(errorHandler());
-  if (options.skillId !== undefined) builder.withSkillId(options.skillId);
+  // Not `withSkillId`, which accepts only one. Same check, same failure mode — an
+  // unrecognised application id aborts before any handler runs and before the session
+  // cookies are touched.
+  const allowed = new Set(options.skillIds ?? []);
+  if (allowed.size > 0) {
+    builder.addRequestInterceptors({
+      process(input: HandlerInput): void {
+        const seen =
+          input.requestEnvelope.context?.System?.application?.applicationId ??
+          input.requestEnvelope.session?.application?.applicationId;
+        if (seen === undefined || !allowed.has(seen)) {
+          // The rejected id is deliberately not logged: it is an identifier belonging to
+          // whoever called, and this line would be the one place a probe could confirm a
+          // guess from CloudWatch. The count is enough to diagnose a misconfiguration.
+          throw new Error(
+            `Alexa request rejected: application id is not one of the ${allowed.size} configured skill(s).`,
+          );
+        }
+      },
+    });
+  }
   return builder.create();
 }
 

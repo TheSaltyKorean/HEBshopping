@@ -235,9 +235,13 @@ One candidate is offered at a time on purpose. Three long product names read alo
 unusable, and there's no screen to fall back on — which is what the app card is for.
 
 The skill package for the ASK CLI lives in `packages/lambda-api/skill-package/`
-(`skill.json` plus the en-US interaction model). The invocation name is **"my grocery
+(`skill.json` plus the en-US interaction model). The invocation name is **"grocery
 list"**; change it in `interactionModels/custom/en-US.json` if you'd rather say something
 else.
+
+Alexa allows **one invocation name per skill** — there is no alias list. To answer to
+several names, create one skill per name, all pointing at the same Lambda, and list every
+skill id in `alexa_skill_ids`. [`deploy.md`](deploy.md) has the steps.
 
 ### Putting it on your Echo
 
@@ -271,7 +275,7 @@ adding the wrong product costs a wasted trip to the store.
 Deli meat and cheese sliced to order, and seafood, are priced per pound, so you can ask for
 an amount:
 
-> "Alexa, ask my grocery list to add two pounds of honey smoked turkey breast"
+> "Alexa, ask grocery list to add two pounds of honey smoked turkey breast"
 > "…add half a pound of sliced cheddar"
 > "…add a pound and a half of jumbo shrimp"
 

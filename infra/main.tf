@@ -196,7 +196,7 @@ resource "aws_lambda_function" "alexa" {
   environment {
     variables = {
       HEB_SESSION_TABLE = aws_dynamodb_table.session.name
-      HEB_SKILL_ID      = var.alexa_skill_id
+      HEB_SKILL_ID      = join(",", var.alexa_skill_ids)
       HEB_LIST_ID       = var.heb_list_id
     }
   }
@@ -244,11 +244,17 @@ resource "aws_lambda_function" "mcp" {
  * because a direct trigger carries no request signature to verify.
  */
 resource "aws_lambda_permission" "alexa" {
-  statement_id       = "AllowAlexaSkill"
+  # One statement per skill: `event_source_token` takes a single id, so several invocation
+  # names mean several permissions, not a wider one.
+  for_each = toset(var.alexa_skill_ids)
+
+  # Statement ids allow only [A-Za-z0-9-_], and a skill id is dotted — hence the substring
+  # of the uuid rather than the id itself. It is unique across a household's skills.
+  statement_id       = "AllowAlexaSkill-${substr(replace(each.value, "amzn1.ask.skill.", ""), 0, 8)}"
   action             = "lambda:InvokeFunction"
   function_name      = aws_lambda_function.alexa.function_name
   principal          = "alexa-appkit.amazon.com"
-  event_source_token = var.alexa_skill_id
+  event_source_token = each.value
 }
 
 /**

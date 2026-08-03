@@ -476,3 +476,105 @@ describe('indeterminate writes must not invite a retry', () => {
     expect(turn.speech).toMatch(/try again/i);
   });
 });
+
+// ---------------------------------------------------------------------------
+
+describe('adding — the free-text fallback', () => {
+  it('writes the request down when nothing in the catalog matches', async () => {
+    const addItem = vi.fn(async (input: { query?: string; text?: string }): Promise<AddResult> => {
+      if (input.text === undefined) {
+        throw new HebError('PRODUCT_NOT_FOUND', 'No product matched "sourdough starter".');
+      }
+      return {
+        status: 'added',
+        item: { lineId: 'l9', text: input.text, quantity: 1 },
+      };
+    });
+    const say = conversation(fakeOps({ addItem: addItem as unknown as FakeOps['addItem'] }));
+
+    const turn = await say(intent('AddItemIntent', { item: 'sourdough starter' }));
+
+    // Both halves out loud: that the search failed, and what was written instead. Saying
+    // only "added" would hide that no scannable product is attached to the line.
+    expect(turn.speech).toContain('could not find');
+    expect(turn.speech).toContain('sourdough starter');
+    expect(turn.ended).toBe(false);
+    expect(addItem).toHaveBeenCalledTimes(2);
+  });
+
+  it('writes the phrase as spoken, keeping the amount', async () => {
+    // The parsed query drops "two pounds of" — right for a catalog search, wrong here.
+    // Nothing resolved it, so the written line has to carry the whole order.
+    const addItem = vi.fn(async (input: { query?: string; text?: string }): Promise<AddResult> => {
+      if (input.text === undefined) throw new HebError('PRODUCT_NOT_FOUND', 'no match');
+      return { status: 'added', item: { lineId: 'l9', text: input.text, quantity: 1 } };
+    });
+    const say = conversation(fakeOps({ addItem: addItem as unknown as FakeOps['addItem'] }));
+
+    await say(intent('AddItemIntent', { item: 'two pounds of goat barbacoa' }));
+
+    expect(addItem).toHaveBeenLastCalledWith({ text: 'two pounds of goat barbacoa' });
+  });
+
+  it('does not swallow other failures', async () => {
+    // Only PRODUCT_NOT_FOUND is recoverable this way. An expired session must still reach
+    // the error handler, or the user is told a line was written when none was.
+    const addItem = vi.fn(async () => {
+      throw new HebError('SESSION_EXPIRED', 'cookies dead');
+    });
+    const say = conversation(fakeOps({ addItem: addItem as unknown as FakeOps['addItem'] }));
+
+    const turn = await say(intent('AddItemIntent', { item: 'milk' }));
+
+    expect(turn.speech).toContain('expired');
+    expect(addItem).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('skill id verification', () => {
+  const ask = async (skillIds: string[], applicationId: string, ops = fakeOps()) => {
+    const skill = createSkill({
+      createListOps: () => ops as unknown as HebListOps,
+      skillIds,
+    });
+    const request = intent('AddItemIntent', { item: 'milk' });
+    const envelopeWithId = {
+      version: '1.0',
+      session: { new: false, sessionId: 's', application: { applicationId }, attributes: {}, user: { userId: 'u' } },
+      context: { System: { application: { applicationId }, user: { userId: 'u' } } },
+      request,
+    };
+    return (await skill.invoke(envelopeWithId as never, {} as never)) as {
+      response: { outputSpeech?: { ssml?: string } };
+    };
+  };
+
+  // Deliberately not UUID-shaped: a real skill id is an account identifier, and
+  // `npm run scan` rightly refuses to let one near a committed file. The check is exact
+  // string matching, so the shape is irrelevant to what these prove.
+  const ID_A = 'amzn1.ask.skill.test-alpha';
+  const ID_B = 'amzn1.ask.skill.test-beta';
+
+  it('accepts every configured skill, so two invocation names share one Lambda', async () => {
+    for (const id of [ID_A, ID_B]) {
+      const response = await ask([ID_A, ID_B], id);
+      expect(response.response.outputSpeech?.ssml).toContain('Added');
+    }
+  });
+
+  it('rejects a skill that is not configured, before the list is touched', async () => {
+    // The whole defence: a direct Alexa trigger carries no signature, so anyone who learns
+    // this function's ARN could point their own skill at it. Asserting on `addItem` rather
+    // than on the speech is the part that matters — a rejection that still reached HEB
+    // would leak the list through timing and through the write itself.
+    const ops = fakeOps();
+    const response = await ask([ID_A], ID_B, ops);
+    expect(ops.addItem).not.toHaveBeenCalled();
+    expect(response.response.outputSpeech?.ssml).not.toContain('Added');
+  });
+
+  it('does not leak the rejected id into the message', async () => {
+    const response = await ask([ID_A], ID_B);
+    expect(response.response.outputSpeech?.ssml ?? '').not.toContain(ID_B);
+  });
+});

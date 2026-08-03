@@ -11,14 +11,14 @@
 
 import { HebClient, HebListOps } from '@heb/core';
 import { createSkill } from './skill.js';
-import { INVOCATION_BUDGET_MS, listId, requireSkillId, resolveStore } from './config.js';
+import { INVOCATION_BUDGET_MS, listId, requireSkillIds, resolveStore } from './config.js';
 
 // Resolved at cold start so misconfiguration fails immediately and visibly, rather than as
 // a mystery "something went wrong" on someone's first voice command. `requireSkillId`
 // throwing here is deliberate: without it the function would accept any Alexa skill that
 // learns its ARN, and a direct Alexa trigger carries no signature to verify instead.
 const store = resolveStore();
-const skillId = requireSkillId();
+const skillIds = requireSkillIds();
 const pinnedList = listId();
 
 /**
@@ -34,7 +34,7 @@ const skill = createSkill({
       client: new HebClient({ store, budgetMs: INVOCATION_BUDGET_MS }),
       ...(pinnedList === undefined ? {} : { listId: pinnedList }),
     }),
-  skillId,
+  skillIds,
 });
 
 export const handler = async (event: unknown, context: unknown): Promise<unknown> =>

@@ -47,13 +47,22 @@ export function listId(): string | undefined {
 }
 
 /**
- * The Alexa skill this function will accept, required in production.
+ * The Alexa skills this function will accept, required in production.
  *
  * A direct Alexa trigger carries no request signature to verify, so the skill id is the
  * only thing standing between this function and any other skill that learns its ARN.
  */
-export function requireSkillId(): string {
-  return required('HEB_SKILL_ID');
+export function requireSkillIds(): string[] {
+  // Comma-separated, because Alexa allows one invocation name per skill: answering to
+  // both "grocery list" and "heb list" means two skills sharing this function.
+  const ids = required('HEB_SKILL_ID')
+    .split(',')
+    .map((id) => id.trim())
+    .filter((id) => id !== '');
+  if (ids.length === 0) {
+    throw new Error('HEB_SKILL_ID is set but contains no skill ids.');
+  }
+  return ids;
 }
 
 /**

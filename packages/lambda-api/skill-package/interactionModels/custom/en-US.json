@@ -1,20 +1,29 @@
 {
   "interactionModel": {
     "languageModel": {
-      "invocationName": "my grocery list",
+      "invocationName": "grocery list",
       "intents": [
         {
           "name": "AddItemIntent",
-          "slots": [{ "name": "item", "type": "AMAZON.SearchQuery" }],
+          "slots": [
+            {
+              "name": "item",
+              "type": "AMAZON.SearchQuery"
+            }
+          ],
           "samples": [
             "add {item}",
             "add {item} to my list",
             "add {item} to the list",
             "put {item} on my list",
             "put {item} on the list",
+            "write down {item}",
+            "write {item} on my list",
             "I need {item}",
             "we need {item}",
             "we are out of {item}",
+            "we ran out of {item}",
+            "get {item}",
             "buy {item}"
           ]
         },
@@ -34,7 +43,12 @@
         },
         {
           "name": "RemoveItemIntent",
-          "slots": [{ "name": "item", "type": "AMAZON.SearchQuery" }],
+          "slots": [
+            {
+              "name": "item",
+              "type": "AMAZON.SearchQuery"
+            }
+          ],
           "samples": [
             "remove {item}",
             "remove {item} from my list",
@@ -45,12 +59,30 @@
             "we already have {item}"
           ]
         },
-        { "name": "AMAZON.YesIntent", "samples": [] },
-        { "name": "AMAZON.NoIntent", "samples": [] },
-        { "name": "AMAZON.HelpIntent", "samples": [] },
-        { "name": "AMAZON.StopIntent", "samples": [] },
-        { "name": "AMAZON.CancelIntent", "samples": [] },
-        { "name": "AMAZON.FallbackIntent", "samples": [] }
+        {
+          "name": "AMAZON.YesIntent",
+          "samples": []
+        },
+        {
+          "name": "AMAZON.NoIntent",
+          "samples": []
+        },
+        {
+          "name": "AMAZON.HelpIntent",
+          "samples": []
+        },
+        {
+          "name": "AMAZON.StopIntent",
+          "samples": []
+        },
+        {
+          "name": "AMAZON.CancelIntent",
+          "samples": []
+        },
+        {
+          "name": "AMAZON.FallbackIntent",
+          "samples": []
+        }
       ],
       "types": []
     }

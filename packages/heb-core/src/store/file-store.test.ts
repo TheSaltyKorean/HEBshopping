@@ -62,3 +62,25 @@ describe('FileStore specifics', () => {
     }
   });
 });
+
+describe('stored sessions must carry cookie paths', () => {
+  it('treats a jar without paths as absent rather than crashing later', async () => {
+    // `path` became load-bearing when cookies started being matched by scope; without it
+    // `cookiePathMatches` throws a bare TypeError instead of the login remedy.
+    const path = join(tmpdir(), `heb-nopath-${Date.now()}.json`);
+    await writeFile(
+      path,
+      JSON.stringify({
+        cookies: [{ name: 'sat', value: 'x', domain: 'www.heb.com', expires: 1 }],
+        capturedAt: 1,
+        buildId: null,
+      }),
+    );
+
+    try {
+      expect(await new FileStore(path).getSession()).toBeNull();
+    } finally {
+      await rm(path, { force: true });
+    }
+  });
+});

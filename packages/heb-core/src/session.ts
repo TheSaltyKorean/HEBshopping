@@ -109,6 +109,7 @@ export function checkSession(
   session: SessionState | null,
   nowMs: number,
   marginMs: number = SESSION_EXPIRY_MARGIN_MS,
+  path = '/graphql',
 ): SessionHealth {
   if (session === null) {
     return { usable: false, reason: 'no session stored' };
@@ -123,8 +124,15 @@ export function checkSession(
     // same name for `.heb.com` and `www.heb.com`, and `find` made session health depend on
     // array order — an expired duplicate ahead of a live one forced a needless login while
     // perfectly good credentials sat further down the array.
+    // Path-filtered, exactly as `cookieHeaderFor` is. Judging health on a copy the request
+    // will not carry is worse than not judging it: a long-lived `/account` duplicate would
+    // vouch for a jar whose eligible root copy has expired, and the call then goes upstream
+    // missing a required cookie instead of failing fast with SESSION_EXPIRED.
     const copies = session.cookies.filter(
-      (candidate) => candidate.name === name && cookieMatchesHost(candidate, 'www.heb.com'),
+      (candidate) =>
+        candidate.name === name &&
+        cookieMatchesHost(candidate, 'www.heb.com') &&
+        cookiePathMatches(candidate, path),
     );
 
     if (copies.length === 0) {

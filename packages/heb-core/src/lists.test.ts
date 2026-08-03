@@ -293,3 +293,24 @@ describe('the head token gates every confident removal', () => {
     expect(ranked[0]?.confident).toBe(true);
   });
 });
+
+describe('malformed reads are errors, not empty results', () => {
+  it('rejects a read whose payload is null', async () => {
+    // Every document here selects __typename, so its absence means nothing usable came
+    // back — not "the selection did not ask". Accepting it mapped a list with undefined
+    // identity, or threw a bare TypeError further down.
+    const fetchImpl = (async () =>
+      new Response(JSON.stringify({ data: { getShoppingListV2: null } }), {
+        status: 200,
+      })) as unknown as typeof fetch;
+
+    const ops = new HebListOps({
+      client: new HebClient({ store: storeWith(), fetchImpl, now: () => NOW, minDelayMs: 0 }),
+      listId: 'list-1',
+    });
+
+    await expect(ops.getList()).rejects.toSatisfy((error: unknown) =>
+      hasCode(error, 'UPSTREAM_ERROR'),
+    );
+  });
+});

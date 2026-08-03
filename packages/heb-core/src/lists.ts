@@ -739,7 +739,18 @@ function assertReadableList(
   attempted = 'list your lists',
 ): void {
   const typename = payload?.__typename;
-  if (typename === undefined || typename === expected) return;
+  if (typename === expected) return;
+
+  // A missing `__typename` is not "the selection did not ask" — every document in this
+  // file requests it. It means a null or malformed payload, which would otherwise be
+  // mapped into a list with undefined identity, or throw a bare TypeError further down
+  // instead of the actionable upstream error.
+  if (typename === undefined) {
+    throw new HebError('UPSTREAM_ERROR', `HEB returned nothing usable when asked to ${attempted}.`, {
+      retryable: true,
+      details: { returned: 'missing' },
+    });
+  }
 
   if (/auth|unauthori|forbidden|session|login|denied/i.test(typename)) {
     throw new HebError('SESSION_EXPIRED', 'HEB rejected the stored session.', {
@@ -757,8 +768,17 @@ function assertUnion(
   attempted: string,
 ): void {
   const typename = payload?.__typename;
-  // Absent means the selection did not ask for one; that is not evidence of failure.
-  if (typename === undefined || typename === expected) return;
+  if (typename === expected) return;
+
+  // Absent is a failure, not a shrug: every document here selects `__typename`, so its
+  // absence means a null or malformed payload. Accepting it let `productSearchItems`
+  // report "no products matched" for a response that contained nothing at all.
+  if (typename === undefined) {
+    throw new HebError('UPSTREAM_ERROR', `HEB returned nothing usable when asked to ${attempted}.`, {
+      retryable: true,
+      details: { returned: 'missing' },
+    });
+  }
 
   throw new HebError('UPSTREAM_ERROR', `HEB refused to ${attempted}.`, {
     details: { returned: typename },

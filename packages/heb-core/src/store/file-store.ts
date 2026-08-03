@@ -74,7 +74,10 @@ function isSessionState(value: unknown): value is SessionState {
       typeof cookie.name === 'string' &&
       typeof cookie.value === 'string' &&
       typeof cookie.domain === 'string' &&
-      typeof cookie.expires === 'number',
+      typeof cookie.expires === 'number' &&
+      // `path` is load-bearing now that cookies are matched by scope: without it
+      // `cookiePathMatches` throws a bare TypeError instead of the login remedy.
+      typeof cookie.path === 'string',
   );
 }
 

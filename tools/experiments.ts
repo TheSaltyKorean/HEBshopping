@@ -52,7 +52,33 @@ async function graphql(body: unknown): Promise<{ status: number; text: string }>
     headers: { ...BROWSER_HEADERS, Cookie: cookieHeaderFor('www.heb.com') },
     body: JSON.stringify(body),
   });
-  return { status: response.status, text: (await response.text()).slice(0, 400) };
+  // The COMPLETE body. Truncating here fed a cut-off document to `JSON.parse` further
+  // down, so a perfectly good authenticated response for an account with several lists
+  // was classified "Inconclusive" — and that classification is what decided whether this
+  // project needs a browser at all. Only the printed copy is shortened.
+  return { status: response.status, text: await response.text() };
+}
+
+/** How much of a body to show a human. The classification always uses the whole thing. */
+function forDisplay(text: string): string {
+  return text.replace(/\n/g, ' ').slice(0, 300);
+}
+
+/**
+ * Did this response actually succeed?
+ *
+ * A GraphQL 200 carrying `{"data":null,"errors":[…]}` still contains the string `"data"`,
+ * so substring checks read a refusal as proof of success. That mattered here: this probe's
+ * verdict is what removed the persisted-query fallback from the design.
+ */
+function isSuccessfulEnvelope(text: string): boolean {
+  try {
+    const parsed = JSON.parse(text) as { data?: unknown; errors?: unknown[] };
+    if (Array.isArray(parsed.errors) && parsed.errors.length > 0) return false;
+    return parsed.data !== null && parsed.data !== undefined;
+  } catch {
+    return false;
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -74,7 +100,7 @@ async function experimentHeadlessHttp(): Promise<void> {
   });
 
   console.log(`   HTTP ${result.status}`);
-  console.log(`   ${result.text.replace(/\n/g, ' ').slice(0, 300)}`);
+  console.log(`   ${forDisplay(result.text)}`);
 
   // This experiment's answer is load-bearing for the whole architecture, so it must not
   // rest on a substring. A rejected session returns
@@ -117,11 +143,11 @@ async function experimentNonStrictApq(): Promise<void> {
   });
 
   console.log(`   HTTP ${result.status}`);
-  console.log(`   ${result.text.replace(/\n/g, ' ').slice(0, 300)}`);
+  console.log(`   ${forDisplay(result.text)}`);
 
   if (result.text.includes('PersistedQueryNotFound')) {
     console.log('\n   ❌ NO — safelisted. Hash relearning must come from browser capture.');
-  } else if (result.text.includes('__typename') || result.text.includes('"data"')) {
+  } else if (isSuccessfulEnvelope(result.text)) {
     console.log('\n   ✅ YES — arbitrary queries accepted. Self-heal can be browser-free.');
   } else {
     console.log('\n   ⚠  Inconclusive — inspect the body above.');

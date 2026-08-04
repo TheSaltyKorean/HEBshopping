@@ -708,3 +708,21 @@ describe('malformed pending state reads as no pending question', () => {
     expect(read(pendingWith(0))).not.toBeNull();
   });
 });
+
+describe('pending state that is not an object at all', () => {
+  const read = (pendingChoice: unknown) =>
+    readPending({
+      attributesManager: { getSessionAttributes: () => ({ pendingChoice }) },
+    } as unknown as Parameters<typeof readPending>[0]);
+
+  it('treats null as no pending question rather than throwing', () => {
+    // `null` is valid JSON and survives a session round trip; `=== undefined` misses it,
+    // and dereferencing it throws the very error this validation exists to prevent.
+    expect(read(null)).toBeNull();
+  });
+
+  it('treats a primitive as no pending question', () => {
+    expect(read('pendingChoice')).toBeNull();
+    expect(read(7)).toBeNull();
+  });
+});

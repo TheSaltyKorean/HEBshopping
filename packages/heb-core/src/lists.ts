@@ -10,6 +10,7 @@ import { HebClient } from './graphql/client.js';
 import {
   addItemsDocument,
   addTextDocument,
+  type GraphqlDocument,
   buyItAgainDocument,
   updateItemWeightDocument,
   deleteItemsDocument,
@@ -432,10 +433,19 @@ export class HebListOps implements ListOps {
       // The cache must be dropped first, or `getList` serves the very snapshot this is
       // trying to get past and the "refresh" changes nothing at all.
       this.cachedList = undefined;
-      const fresh =
-        (await this.getList(listId).catch(() => null))?.items.find(
-          (item) => item.lineId === existing.lineId,
-        ) ?? existing;
+      const refreshed = await this.getList(listId); // failure propagates: see below
+      const fresh = refreshed.items.find((item) => item.lineId === existing.lineId);
+      if (fresh === undefined) {
+        // The line went away between the two reads. There is nothing to add weight to, and
+        // recreating it is not what was asked for.
+        throw new HebError('ITEM_NOT_ON_LIST', 'That counter item is no longer on the list.', {
+          retryable: false,
+        });
+      }
+      // Deliberately no `?? existing` fallback. Falling back to the opening snapshot means
+      // writing an absolute weight derived from a value already known to be stale — which
+      // is precisely the overwrite this refresh exists to prevent. A read failure must stop
+      // the write, not license it.
       const base = fresh.weight ?? 0;
       const target = Math.max(base, snapWeight(base + input.weight, fresh.product?.weightIncrements));
       return {
@@ -537,40 +547,76 @@ export class HebListOps implements ListOps {
       return { status, item: await this.adjustWeight(listId, added, target, !wasPresent) };
     }
 
-    // The mutation contributed the first unit, so only the rest remains — applied to what
-    // the add *returned*, never to a number derived from the opening snapshot.
-    const remaining = quantity - 1;
-    if (remaining <= 0) return { status, item: added };
+    // The mutation contributed the first unit; the rest go the same way.
+    return this.addRemainingUnits(listId, added, quantity - 1, status, () =>
+      addItemsDocument(listId, [productId]),
+    );
+  }
 
+  /**
+   * Put the remaining units on a line the caller has just added to.
+   *
+   * One additive mutation per unit, deliberately — *not* one absolute write of the total.
+   *
+   * The absolute write is a single round trip and looks obviously better, but it encodes a
+   * number that was true when the previous response arrived. A household member
+   * incrementing the same line in that gap gets their unit overwritten: the line reads 3,
+   * this writes the 4 it computed from a 2 it saw earlier, and one of their groceries is
+   * gone. `addShoppingListItemsV2` merges server-side, so N adds always land N units on
+   * whatever the line currently holds, whoever else is touching it.
+   *
+   * The cost is N-1 extra round trips. Voice requests are almost always one or two units,
+   * and the client's invocation budget bounds the rest — a budget exhaustion mid-way is
+   * reported as a partial add rather than silently truncated.
+   */
+  private async addRemainingUnits(
+    listId: string,
+    added: ListItem,
+    remaining: number,
+    status: 'added' | 'already_present',
+    document: () => GraphqlDocument,
+  ): Promise<AddResult> {
+    let line = added;
     const cap = added.maximumQuantity ?? Number.POSITIVE_INFINITY;
-    const target = Math.max(added.quantity, Math.min(added.quantity + remaining, cap));
-    if (target <= added.quantity) return { status, item: added };
 
-    try {
-      await this.setQuantity(listId, added.lineId, target);
-      return { status, item: { ...added, quantity: target } };
-    } catch (error) {
-      // The add itself succeeded, so a line exists either way and a retry would merge
-      // another unit into it. That has to be said even when the cause is an expired
-      // session, whose remedy alone would send someone back to repeat the whole request.
-      if (isHebError(error) && error.code === 'SESSION_EXPIRED') {
-        throw new HebError('SESSION_EXPIRED', error.message, {
-          cause: error,
-          retryable: false,
-          details: { ...error.details, partialAdd: true },
-        });
+    for (let unit = 0; unit < remaining; unit += 1) {
+      // The server's own ceiling. Adding past it is refused, and asking is pointless.
+      if (line.quantity >= cap) break;
+
+      try {
+        const data = await this.client.execute<{ addShoppingListItemsV2: HebListPayload }>(
+          document(),
+        );
+        assertMutationSucceeded(data.addShoppingListItemsV2, 'add the item');
+        this.cachedList = undefined;
+
+        const seen = toHebList(data.addShoppingListItemsV2).items.find(
+          (item) => item.lineId === line.lineId,
+        );
+        // Trust the response where it has one, and fall back to counting our own unit —
+        // never to a number computed from before this call.
+        line = seen ?? { ...line, quantity: line.quantity + 1 };
+      } catch (error) {
+        // A line exists either way, so a blind retry of the whole request would add the
+        // full amount again. Say what landed. This holds even for an expired session,
+        // whose remedy alone would send someone back to repeat everything.
+        const done = line.quantity;
+        if (isHebError(error) && error.code === 'SESSION_EXPIRED') {
+          throw new HebError('SESSION_EXPIRED', error.message, {
+            cause: error,
+            retryable: false,
+            details: { ...error.details, partialAdd: true },
+          });
+        }
+        throw new HebError(
+          'UPSTREAM_ERROR',
+          `Added ${line.text}, but the amount is ${done}, not ${added.quantity + remaining}.`,
+          { cause: error, retryable: false, details: { partialAdd: true } },
+        );
       }
-
-      const seen = await this.getList(listId).catch(() => null);
-      const actual = seen?.items.find((item) => item.lineId === added.lineId);
-      if (actual !== undefined && actual.quantity >= target) return { status, item: actual };
-
-      throw new HebError(
-        'UPSTREAM_ERROR',
-        `Added ${added.text}, but the amount is ${actual?.quantity ?? added.quantity}, not ${target}.`,
-        { cause: error, retryable: false, details: { partialAdd: true } },
-      );
     }
+
+    return { status, item: line };
   }
 
   /**
@@ -669,37 +715,12 @@ export class HebListOps implements ListOps {
     wasPresent: boolean,
   ): Promise<AddResult> {
     const status = wasPresent ? 'already_present' : 'added';
-    // Relative to what the write returned, so concurrent merges survive. From a base of 2,
-    // a household member's add plus this one's first unit returns 4; a request for 3 must
-    // finish at 6, because both adds were accepted. An absolute snapshot-derived target
-    // would have set 5 and destroyed a unit.
-    const goal = line.quantity + Math.max(0, remaining);
-    if (goal <= line.quantity) return { status, item: line };
-
-    try {
-      await this.setQuantity(listId, line.lineId, goal);
-      return { status, item: { ...line, quantity: goal } };
-    } catch (error) {
-      const seen = await this.getList(listId).catch(() => null);
-      const actual = seen?.items.find((item) => item.lineId === line.lineId);
-      if (actual !== undefined && actual.quantity >= goal) return { status, item: actual };
-
-      // The line exists either way, so a retry merges another unit into it rather than
-      // failing cleanly. That has to be said even when the cause is an expired session:
-      // the login remedy alone would send someone back to repeat the whole request.
-      if (isHebError(error) && error.code === 'SESSION_EXPIRED') {
-        throw new HebError('SESSION_EXPIRED', error.message, {
-          cause: error,
-          retryable: false,
-          details: { ...error.details, partialAdd: true },
-        });
-      }
-      throw new HebError(
-        'UPSTREAM_ERROR',
-        `Wrote ${line.text} on the list, but could not set the amount to ${goal}.`,
-        { cause: error, retryable: false, details: { partialAdd: true } },
-      );
-    }
+    // Additive, one unit per call, for the same reason the product path is: an absolute
+    // write encodes a total that was true when the previous response arrived, and a
+    // household member merging into the same text line in that gap loses their unit.
+    return this.addRemainingUnits(listId, line, remaining, status, () =>
+      addTextDocument(listId, line.text),
+    );
   }
 
   /**

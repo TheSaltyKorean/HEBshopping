@@ -208,14 +208,17 @@ describe('counter lines are never driven by quantity', () => {
     expect(quantityUpdates(sent)).toHaveLength(0);
   });
 
-  it('still uses quantity for an ordinary packaged good', async () => {
-    // The guard above must not disarm the normal path.
+  it('reaches the requested count on a packaged good, additively', async () => {
+    // Three units means three additive adds, never one absolute write of "3": the absolute
+    // form encodes a total that was true before the last response, and overwrites anybody
+    // who touched the line in between.
     const { ops, sent } = scripted([]);
 
     const result = await ops.addItem({ productId: 'p-milk', quantity: 3 });
 
     expect(result.status === 'added' && result.item.quantity).toBe(3);
-    expect(quantityUpdates(sent)).toHaveLength(1);
+    expect(quantityUpdates(sent)).toHaveLength(0);
+    expect(sent.filter((query) => query.includes('addShoppingListItemsV2'))).toHaveLength(3);
   });
 });
 
@@ -259,7 +262,8 @@ describe('written lines', () => {
 
     expect(result.status === 'added' && result.item.quantity).toBe(3);
     expect(result.status === 'added' && result.item.text).toBe('birthday candles');
-    expect(quantityUpdates(sent)).toHaveLength(1);
+    // Additive, like the product path — no absolute write to overwrite a concurrent merge.
+    expect(quantityUpdates(sent)).toHaveLength(0);
   });
 
   it('writes a single line without an update when no quantity is asked for', async () => {
@@ -400,6 +404,23 @@ describe('written lines merge rather than duplicate', () => {
 });
 
 describe('an expired session still reports what was already written', () => {
+  /** Fail the Nth call of an operation with SESSION_EXPIRED; everything else works. */
+  function expireOnNth(operation: string, nth: number, lines: FakeLine[]) {
+    const { ops } = scripted(lines);
+    const client = (ops as unknown as { client: { execute: (d: unknown) => Promise<unknown> } })
+      .client;
+    const real = client.execute.bind(client);
+    let seen = 0;
+    client.execute = async (document: unknown) => {
+      if ((document as { operationName: string }).operationName === operation) {
+        seen += 1;
+        if (seen === nth) throw new HebError('SESSION_EXPIRED', 'HEB rejected the stored session.');
+      }
+      return real(document);
+    };
+    return ops;
+  }
+
   /** Fail one operation with SESSION_EXPIRED; everything else works. */
   function expireOn(operation: string, lines: FakeLine[]) {
     const { ops } = scripted(lines);
@@ -417,8 +438,9 @@ describe('an expired session still reports what was already written', () => {
 
   it('keeps both the login remedy and the partial add for a written line', async () => {
     // The line exists at quantity one. The remedy alone would send someone back to repeat
-    // the request after logging in, merging another unit into it.
-    const ops = expireOn('HebUpdateShoppingListItem', []);
+    // the request after logging in, merging another unit into it. The expiry now arrives on
+    // the *second* additive add, since that is how the remaining units are applied.
+    const ops = expireOnNth('HebAddShoppingListText', 2, []);
 
     await expect(ops.addItem({ text: 'birthday candles', quantity: 3 })).rejects.toSatisfy(
       (error: unknown) =>
@@ -472,17 +494,25 @@ describe('concurrent merges are preserved, not overwritten', () => {
     const client = (ops as unknown as { client: { execute: (d: unknown) => Promise<unknown> } })
       .client;
     const real = client.execute.bind(client);
+    let interfered = false;
     client.execute = async (document: unknown) => {
-      if ((document as { operationName: string }).operationName === 'HebAddShoppingListText') {
-        lines[0]!.quantity += 1; // the other household member's add
+      // Exactly once, before the first of this call's adds — one other person, one unit.
+      if (
+        !interfered &&
+        (document as { operationName: string }).operationName === 'HebAddShoppingListText'
+      ) {
+        interfered = true;
+        lines[0]!.quantity += 1;
       }
       return real(document);
     };
 
     const result = await ops.addItem({ text: 'birthday candles', quantity: 3 });
 
+    // 2 base + their 1 + our 3 = 6, reached by three additive adds rather than a computed
+    // absolute — which would have written 5 and destroyed their unit.
     expect(result.status === 'already_present' && result.item.quantity).toBe(6);
-    expect(sent.some((query) => query.includes('quantity: 6'))).toBe(true);
+    expect(quantityUpdates(sent)).toHaveLength(0);
   });
 });
 
@@ -538,8 +568,9 @@ describe('the product path matches the written-line path', () => {
 
     const result = await ops.addItem({ productId: 'p-milk', quantity: 2 });
 
+    // Their 5, plus this call's two units, reached additively.
     expect(result.status === 'added' && result.item.quantity).toBe(7);
-    expect(sent.some((query) => query.includes('quantity: 7'))).toBe(true);
+    expect(quantityUpdates(sent)).toHaveLength(0);
   });
 
   it('rethrows a definitively refused product add instead of reconciling', async () => {
@@ -666,5 +697,30 @@ describe('the weight re-read actually reaches HEB', () => {
     // 2 lb seen fresh, plus the quarter asked for — not 1 lb from the stale snapshot.
     expect(sent.some((query) => query.includes('weight: 2.25'))).toBe(true);
     expect(lines[0]!.weight).toBe(2.25);
+  });
+});
+
+describe('a failed refresh stops the write rather than licensing it', () => {
+  it('aborts a weight add when the line cannot be re-read', async () => {
+    // The old `?? existing` fallback resumed with the opening snapshot — writing an
+    // absolute weight derived from a value already known to be stale, which is exactly the
+    // overwrite the refresh exists to prevent. A read failure must fail closed.
+    const { ops, sent } = scripted([
+      { id: 'line-0', quantity: 1, weight: 1, productId: 'p-turkey' },
+    ]);
+    const client = (ops as unknown as { client: { execute: (d: unknown) => Promise<unknown> } })
+      .client;
+    const real = client.execute.bind(client);
+    let reads = 0;
+    client.execute = async (document: unknown) => {
+      if ((document as { operationName: string }).operationName === 'HebGetShoppingList') {
+        reads += 1;
+        if (reads > 1) throw new Error('connection reset'); // the refresh read
+      }
+      return real(document);
+    };
+
+    await expect(ops.addItem({ productId: 'p-turkey', weight: 1 })).rejects.toThrow();
+    expect(weightUpdates(sent)).toHaveLength(0);
   });
 });

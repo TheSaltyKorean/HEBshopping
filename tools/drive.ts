@@ -127,7 +127,14 @@ async function isThrowawayLine(page: Page, capture?: Capture): Promise<boolean> 
   // H-E-B app, let a household member add the same product inside the marker's hour, and a
   // label-only check happily authorises deleting *their* replacement. The recorded id
   // cannot be reused that way.
-  if (lineId !== null && capture !== undefined) {
+  // A marker without identity cannot authorise anything — see the refusal in `addItem`.
+  // Older markers written before that rule still exist, so they are rejected here too.
+  if (lineId === null || quantity === null) {
+    console.error('⛔ The marker carries no line identity. Refusing to treat any line as ours.');
+    return false;
+  }
+
+  if (capture !== undefined) {
     const lines = linesFromCapture(capture);
     if (lines.length > 0) {
       if (lines[0]!.id !== lineId) {
@@ -141,7 +148,7 @@ async function isThrowawayLine(page: Page, capture?: Capture): Promise<boolean> 
       // so a household member who incremented the throwaway since it was created would have
       // their units consumed by either command. Ownership of a *line* expires the moment
       // somebody else contributes to it.
-      if (quantity !== null && lines[0]!.quantity !== quantity) {
+      if (lines[0]!.quantity !== quantity) {
         console.error(
           `⛔ The marked line now reads ${lines[0]!.quantity}, not the ${quantity} this run\n` +
             '   created. Somebody added to it; refusing to treat it as disposable.',
@@ -395,18 +402,33 @@ async function addItem(page: Page, text: string, capture: Capture): Promise<void
   const linesNow = linesFromCapture(capture);
   const created = linesNow.find((line) => !idsBefore.includes(line.id)) ?? null;
 
+  // No identity, no marker. A label-only marker is worth less than none: `isThrowawayLine`
+  // falls back to comparing product names, so once the throwaway is removed in the H-E-B
+  // app and a household member adds the same product inside the marker's hour, `remove`
+  // cheerfully authorises deleting their replacement. Refusing to arm leaves the operator
+  // to clean up by hand, which is the recoverable failure.
+  if (created === undefined || created === null) {
+    console.error(
+      '\n⛔ The captured responses did not expose the new line, so this run cannot record\n' +
+        '   which line it created. No ownership marker written — `remove` and `mutate` will\n' +
+        '   refuse. Delete the test item by hand.',
+    );
+    process.exitCode = 1;
+    return;
+  }
+
   await mkdir(dirname(THROWAWAY_PATH), { recursive: true });
   await writeFile(
     THROWAWAY_PATH,
     JSON.stringify(
-      { label, lineId: created?.id ?? null, quantity: created?.quantity ?? null, at: Date.now() },
+      { label, lineId: created.id, quantity: created.quantity, at: Date.now() },
       null,
       2,
     ),
   );
   console.log(
     `Recorded throwaway marker at ${THROWAWAY_PATH}` +
-      (created === null ? ' (no line id seen — label only)' : ` (line ${created.id} ×${created.quantity})`),
+      ` (line ${created.id} ×${created.quantity})`,
   );
 }
 

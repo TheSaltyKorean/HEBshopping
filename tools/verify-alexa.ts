@@ -112,9 +112,19 @@ function guardedListOps(): HebListOps {
     // now holds their unit too and deleting it takes both. The cleanup loop checks this,
     // and the *scripted removal* — the path the verification actually exercises — used to
     // walk straight past it.
-    const current = (await ops.getList().catch(() => null))?.items.find(
-      (item) => item.lineId === input.lineId,
-    );
+    // Fails CLOSED. A `.catch(() => null)` here would turn a transient read failure into
+    // "no evidence against deleting", which is the opposite of what the check is for: the
+    // whole point is that permission must be re-earned, and an unreadable list earns
+    // nothing. Only a successful read showing exactly one unit authorises the delete.
+    let current;
+    try {
+      current = (await ops.getList()).items.find((item) => item.lineId === input.lineId);
+    } catch (error) {
+      throw new Error(
+        `REFUSED: could not re-read the list to confirm line ${input.lineId} is still ` +
+          `solely this run's, so it will not be deleted. Cause: ${(error as Error).message}`,
+      );
+    }
     if (current !== undefined && current.quantity !== 1) {
       throw new Error(
         `REFUSED: line ${input.lineId} now reads ${current.quantity}, not the 1 this run ` +

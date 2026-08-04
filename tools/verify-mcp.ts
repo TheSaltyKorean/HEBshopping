@@ -285,7 +285,22 @@ main()
       // Same fresh check as the normal path: a line that has grown since is shared, and
       // the finalizer runs precisely when something went wrong — the moment least likely
       // to have left the list as this run expects.
-      const state = lineStateIn(await call('heb_read_list').catch(() => ''), createdLine);
+      // Fails CLOSED. `.catch(() => '')` made an unreadable list indistinguishable from an
+      // empty one, which `lineStateIn` calls `absent` — and only `shared` blocked the
+      // delete. A transient outage therefore authorised removing a line whose quantity was
+      // unknown, during the finalizer, which runs precisely when things have gone wrong.
+      let listing: string;
+      try {
+        listing = await call('heb_read_list');
+      } catch (readError) {
+        console.error(
+          `⛔ Could not re-read the list to confirm line ${createdLine} is still solely ` +
+            `this run's, so it will NOT be deleted. Check by hand. Cause: ${String(readError)}`,
+        );
+        process.exitCode = 1;
+        return;
+      }
+      const state = lineStateIn(listing, createdLine);
       if (state === 'shared') {
         console.error(
           `⛔ Line ${createdLine} now holds more than the unit this run added. NOT deleting ` +

@@ -62,7 +62,11 @@ export function readPending(input: HandlerInput): PendingChoice | null {
   // mid-dialog instead of quietly reading as "no pending question", which is the whole
   // point of validating here.
   if (
-    pending === undefined ||
+    // `null` is valid JSON and survives a round trip, so `=== undefined` does not cover it
+    // — and `pending.offers` on a null throws the very error this validation exists to
+    // prevent. Same for a primitive left there by a malformed client.
+    typeof pending !== 'object' ||
+    pending === null ||
     !Array.isArray(pending.offers) ||
     !Number.isInteger(pending.index) ||
     pending.index < 0 ||

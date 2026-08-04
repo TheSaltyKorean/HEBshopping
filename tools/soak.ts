@@ -73,7 +73,12 @@ const state = JSON.parse(
 // `cookieHeaderFor` would have authenticated, and the soak then records an expiry that
 // never happened. Measuring something other than what production does is worse than not
 // measuring at all, because the number still looks like an answer.
-const cookieHeader = cookieHeaderFor(state, 'www.heb.com', '/graphql');
+// Rebuilt per probe, not once at startup. `cookieHeaderFor` filters by expiry, so a header
+// computed at t=0 keeps sending a cookie that has since died — and if the jar holds a
+// still-live eligible copy, production would switch to it while this soak keeps failing.
+// The experiment would then record an expiry that never happened, which is exactly the
+// number this whole architecture was chosen on.
+const cookieHeader = (): string => cookieHeaderFor(state, 'www.heb.com', '/graphql');
 
 const startedAt = Date.now();
 
@@ -93,7 +98,7 @@ async function probe(): Promise<string> {
         'Content-Type': 'application/json',
         Origin: HEB_ORIGIN,
         Referer: `${HEB_ORIGIN}/shopping-list`,
-        Cookie: cookieHeader,
+        Cookie: cookieHeader(),
       },
       body: JSON.stringify({
         operationName: LIST_QUERY.operationName,

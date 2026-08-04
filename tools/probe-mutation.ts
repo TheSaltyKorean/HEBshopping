@@ -169,11 +169,22 @@ async function main(): Promise<void> {
     // incremented the same line, and these attempts delete the whole line by id — they have
     // no notion of "just my unit". A line that has changed is no longer this probe's to
     // destroy, so hand it to the restore path instead.
-    const beforeDelete = (await reader().getList().catch(() => null))?.items.find(
-      (item) => item.lineId === lineId,
-    );
+    // Fails CLOSED, in two directions. A failed read must not read as "absent" — and
+    // returning early is not safe either, because the enclosing `finally` still deletes
+    // using the retained `lineId`. So a read failure clears `lineId` first, then aborts.
+    let beforeDelete;
+    try {
+      beforeDelete = (await reader().getList()).items.find((item) => item.lineId === lineId);
+    } catch (error) {
+      lineId = null;
+      throw new Error(
+        `could not re-read the list to confirm the throwaway line is still solely this ` +
+          `probe's, so nothing will be deleted. Cause: ${(error as Error).message}`,
+      );
+    }
     if (beforeDelete === undefined) {
       console.log('\nThe throwaway line is already gone; nothing to delete.');
+      lineId = null; // nothing for the cleanup to remove either
       return;
     }
     if (beforeDelete.quantity !== 1) {

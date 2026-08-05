@@ -12,9 +12,9 @@
     "packages/*"
   ],
   "scripts": {
-    "build": "tsc --build",
+    "build": "tsc --build && tsc -p tools/tsconfig.json",
     "clean": "tsc --build --clean",
-    "typecheck": "tsc --build && tsc -p tools/tsconfig.json",
+    "typecheck": "npm run build",
     "test": "vitest run",
     "test:watch": "vitest",
     "test:live": "HEB_LIVE=1 vitest run --testNamePattern=live",

@@ -108,9 +108,9 @@ need AWS to test logic, that seam has been violated.
 ## Commands
 
 ```bash
-npm run build           # tsc --build across the workspace
+npm run build           # packages AND tools/ — see the note below
 npm test                # vitest; must pass with NO network access
-npm run typecheck       # packages + tools
+npm run typecheck       # alias for `npm run build`
 npm run login           # headed browser login → writes the session to the Store
 npm run login -- --switch   # forget the current account first (switch HEB accounts)
 npm run verify:session  # read-only: is the stored session alive?
@@ -123,6 +123,14 @@ npm run push:session    # upload the local session to DynamoDB (after every logi
 npm run scan            # secret + PII scan of committable files
 npm run capture         # W0 discovery: watch HEB's own GraphQL traffic (advanced)
 ```
+
+**`build` compiles `tools/` too, and that is deliberate.** `tools/` is a separate,
+non-composite project that `tsc --build` does not reach, so for a while `npm run build`
+reported success on a `tools/drive.ts` that could not compile at all — the scripts that
+mutate a real shopping list were the only code the gate did not check. `build` now runs
+both, which costs a second and makes that class of miss impossible.
+
+Before committing: `npm run build && npm test && npm run scan`.
 
 ## Quick start
 

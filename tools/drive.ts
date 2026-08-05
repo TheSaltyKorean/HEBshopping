@@ -136,25 +136,35 @@ async function isThrowawayLine(page: Page, capture?: Capture): Promise<boolean> 
 
   if (capture !== undefined) {
     const lines = linesFromCapture(capture);
-    if (lines.length > 0) {
-      if (lines[0]!.id !== lineId) {
-        console.error(
-          '⛔ The first list line is not the one this marker describes — the throwaway is\n' +
-            '   gone, or something else now sits at the top. Refusing to treat it as ours.',
-        );
-        return false;
-      }
-      // Identity is not enough. `remove` deletes the whole line and `mutate` decrements it,
-      // so a household member who incremented the throwaway since it was created would have
-      // their units consumed by either command. Ownership of a *line* expires the moment
-      // somebody else contributes to it.
-      if (lines[0]!.quantity !== quantity) {
-        console.error(
-          `⛔ The marked line now reads ${lines[0]!.quantity}, not the ${quantity} this run\n` +
-            '   created. Somebody added to it; refusing to treat it as disposable.',
-        );
-        return false;
-      }
+    // An empty capture is *unverified*, not *verified empty*. A cached page load or a
+    // response shape this parser does not recognise both produce zero rows — and falling
+    // through to the label comparison below then authorises deleting any line whose product
+    // name matches, which is exactly the identity-free check the recorded id exists to
+    // replace. No rows, no permission.
+    if (lines.length === 0) {
+      console.error(
+        '⛔ This run captured no list rows, so the marked line cannot be identified.\n' +
+          '   Refusing to treat any line as ours; reload the list and re-run.',
+      );
+      return false;
+    }
+    if (lines[0]!.id !== lineId) {
+      console.error(
+        '⛔ The first list line is not the one this marker describes — the throwaway is\n' +
+          '   gone, or something else now sits at the top. Refusing to treat it as ours.',
+      );
+      return false;
+    }
+    // Identity is not enough. `remove` deletes the whole line and `mutate` decrements it,
+    // so a household member who incremented the throwaway since it was created would have
+    // their units consumed by either command. Ownership of a *line* expires the moment
+    // somebody else contributes to it.
+    if (lines[0]!.quantity !== quantity) {
+      console.error(
+        `⛔ The marked line now reads ${lines[0]!.quantity}, not the ${quantity} this run\n` +
+          '   created. Somebody added to it; refusing to treat it as disposable.',
+      );
+      return false;
     }
   }
 
@@ -400,14 +410,14 @@ async function addItem(page: Page, text: string, capture: Capture): Promise<void
   // The id of the line that appeared, taken from HEB's own response rather than the DOM.
   // Without it the marker names a product, and products outlive the lines that hold them.
   const linesNow = linesFromCapture(capture);
-  const created = linesNow.find((line) => !idsBefore.includes(line.id)) ?? null;
+  const createdLine = linesNow.find((line) => !idsBefore.includes(line.id)) ?? null;
 
   // No identity, no marker. A label-only marker is worth less than none: `isThrowawayLine`
   // falls back to comparing product names, so once the throwaway is removed in the H-E-B
   // app and a household member adds the same product inside the marker's hour, `remove`
   // cheerfully authorises deleting their replacement. Refusing to arm leaves the operator
   // to clean up by hand, which is the recoverable failure.
-  if (created === undefined || created === null) {
+  if (createdLine === null) {
     console.error(
       '\n⛔ The captured responses did not expose the new line, so this run cannot record\n' +
         '   which line it created. No ownership marker written — `remove` and `mutate` will\n' +
@@ -417,18 +427,34 @@ async function addItem(page: Page, text: string, capture: Capture): Promise<void
     return;
   }
 
+  // A new line holding more than one unit was never solely this run's. The DOM checks above
+  // are sampled *before* the click, so a household member adding this product in that window
+  // has H-E-B merge this run's unit into the line they just created: one unfamiliar id, one
+  // new product name, one more line — every DOM test passes — and the quantity is 2. Arming
+  // the marker there records their line as disposable, and `remove` deletes it outright.
+  // The unit count is the only witness that survives the race.
+  if (createdLine.quantity !== 1) {
+    console.error(
+      `\n⛔ The new line reads ${createdLine.quantity}, not 1, so this run merged into a line\n` +
+        '   somebody else created in the meantime. No ownership marker written — `remove`\n' +
+        '   and `mutate` will refuse. Undo the extra unit by hand.',
+    );
+    process.exitCode = 1;
+    return;
+  }
+
   await mkdir(dirname(THROWAWAY_PATH), { recursive: true });
   await writeFile(
     THROWAWAY_PATH,
     JSON.stringify(
-      { label, lineId: created.id, quantity: created.quantity, at: Date.now() },
+      { label, lineId: createdLine.id, quantity: createdLine.quantity, at: Date.now() },
       null,
       2,
     ),
   );
   console.log(
     `Recorded throwaway marker at ${THROWAWAY_PATH}` +
-      ` (line ${created.id} ×${created.quantity})`,
+      ` (line ${createdLine.id} ×${createdLine.quantity})`,
   );
 }
 
@@ -467,29 +493,70 @@ async function exerciseQuantity(page: Page, capture: Capture): Promise<void> {
     return;
   }
 
-  const step = async (label: string, action: () => Promise<void>): Promise<void> => {
+  /**
+   * Units this run has put on the line and not yet taken back.
+   *
+   * Accounted from what each click *observably* did, not from what it was meant to do, and
+   * used instead of "restore down to `startedAt`" — that older rule also swallows a unit a
+   * household member contributed mid-run, because their increment leaves the line above
+   * where this run found it through no fault of this run's.
+   */
+  let owed = 0;
+
+  const step = async (
+    label: string,
+    action: () => Promise<void>,
+    intended: number,
+  ): Promise<void> => {
     capture.mark();
-    const before = await value.inputValue().catch(() => '?');
-    console.log(`\n── ${label} (quantity before: ${before})`);
+    const beforeText = await value.inputValue().catch(() => '?');
+    console.log(`\n── ${label} (quantity before: ${beforeText})`);
     await action();
     await page.waitForTimeout(3_500);
-    const after = await value.inputValue().catch(() => '(gone)');
-    console.log(`   quantity after: ${after}`);
+    const afterText = await value.inputValue().catch(() => '(gone)');
+    console.log(`   quantity after: ${afterText}`);
+
+    const before = Number(beforeText);
+    const after = Number(afterText);
+    if (Number.isFinite(before) && Number.isFinite(after)) {
+      owed += after - before;
+    } else if (intended < 0 && Number.isFinite(before)) {
+      // The counter is gone: the line was removed, so the decrement landed.
+      owed += intended;
+    }
+
     for (const call of capture.since()) {
       console.log(`   → ${call.operationName}  status=${call.responseStatus}`);
     }
   };
 
   try {
-    await step('INCREMENT 1 → 2', () => increment.click());
-    await step('DECREMENT 2 → 1', () => decrement.click());
-    await step('DECREMENT 1 → 0 (expect removal)', () => decrement.click());
+    await step('INCREMENT 1 → 2', () => increment.click(), +1);
+    await step('DECREMENT 2 → 1', () => decrement.click(), -1);
+
+    // The third click deletes the line, and ownership was last proved before the first one.
+    // A household member incrementing this same line since then makes the sequence
+    // 1 → 2 (ours) → 3 (theirs) → 2 → 1, so the two decrements consume their unit rather
+    // than this run's. The counter re-renders from H-E-B's own mutation responses, so it
+    // already reflects their change — check it immediately before the destructive step, and
+    // treat an unreadable counter as a mismatch.
+    const beforeFinal = Number(await value.inputValue().catch(() => 'NaN'));
+    if (beforeFinal !== startedAt) {
+      console.error(
+        `\n⛔ The line reads ${Number.isFinite(beforeFinal) ? beforeFinal : '(unreadable)'}, ` +
+          `not the ${startedAt} this run expects before the final\n` +
+          '   decrement. Somebody changed it, so decrementing to zero would take their unit\n' +
+          '   too. Refusing; the removal mutation goes uncaptured this run.',
+      );
+      process.exitCode = 1;
+    } else {
+      await step('DECREMENT 1 → 0 (expect removal)', () => decrement.click(), -1);
+    }
   } finally {
-    // Whatever happened, do not leave the line above where it started.
-    const now = Number(await value.inputValue().catch(() => 'NaN'));
-    if (Number.isFinite(now) && now > startedAt) {
-      console.log(`\n🧹 restoring quantity ${now} → ${startedAt}`);
-      for (let step = now; step > startedAt; step -= 1) {
+    // Take back exactly what this run added, and nothing else.
+    if (owed > 0) {
+      console.log(`\n🧹 taking back ${owed} unit(s) this run added`);
+      for (let remaining = owed; remaining > 0; remaining -= 1) {
         await decrement.click().catch(() => undefined);
         await page.waitForTimeout(2_000);
       }

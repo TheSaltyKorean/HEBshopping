@@ -251,15 +251,45 @@ async function main(): Promise<void> {
         'declarations and we can hand-write every operation.',
     );
   } finally {
-    // Attempt the removal for any line this probe created, without gating on a read.
-    // A transient read failure would otherwise skip cleanup entirely and leave test data
-    // on a real list — and a delete of an already-deleted line is harmless.
+    // The exact-one check before the raw deletes proved ownership *then*; this finalizer
+    // runs after three network round trips, and a household member merging into the same
+    // line in that window makes `removeItem` delete their unit along with the probe's.
+    // Creation-time proof is not cleanup-time proof, so re-prove it here.
+    //
+    // Gating on a read is a deliberate reversal: leaving a throwaway line behind is
+    // recoverable by hand, deleting somebody's grocery is not. An unreadable list is
+    // therefore *unverified*, never "safe to delete" and never "already gone" — it fails
+    // loudly and tells the operator what to look for.
     if (lineId !== null) {
       console.log('\n🧹 removing the throwaway line (if it still exists)');
-      await lists.removeItem({ lineId }).catch((error: unknown) => {
-        console.error('⛔ CLEANUP may have failed — check the list:', error);
+      let stillOurs: { quantity: number } | undefined;
+      let readable = true;
+      try {
+        stillOurs = (await reader().getList()).items.find((item) => item.lineId === lineId);
+      } catch (error) {
+        readable = false;
+        console.error(
+          '⛔ Could not re-read the list before cleanup, so the throwaway line cannot be\n' +
+            '   confirmed as still solely this probe\'s. NOT deleting it — remove it by hand.\n' +
+            `   Cause: ${(error as Error).message}`,
+        );
         process.exitCode = 1;
-      });
+      }
+
+      if (readable && stillOurs === undefined) {
+        console.log('   the throwaway line is already gone; nothing to remove.');
+      } else if (readable && stillOurs!.quantity !== 1) {
+        console.error(
+          `⛔ The throwaway line now reads ${stillOurs!.quantity} — somebody added to it since\n` +
+            '   the probe created it. NOT deleting it; undo the probe\'s unit by hand.',
+        );
+        process.exitCode = 1;
+      } else if (readable) {
+        await lists.removeItem({ lineId }).catch((error: unknown) => {
+          console.error('⛔ CLEANUP may have failed — check the list:', error);
+          process.exitCode = 1;
+        });
+      }
     }
 
     // The probe merged into somebody else's line. Take back exactly the unit it added,
@@ -267,10 +297,31 @@ async function main(): Promise<void> {
     // whoever made it.
     if (mergedLine !== null) {
       const { lineId: merged, produced } = mergedLine;
-      const now = (await reader().getList().catch(() => null))?.items.find(
-        (item) => item.lineId === merged,
-      );
-      if (now === undefined) {
+
+      // An unreadable list is unverified, not empty. Collapsing the failure to `null` made
+      // `now` undefined and printed "the merged line is gone" — so the probe reported a
+      // clean exit while the unit it added to somebody else's line stayed there.
+      //
+      // No early `return` here: this runs inside `finally`, and returning from a `finally`
+      // discards whatever exception the `try` was propagating — including the one that
+      // explains why cleanup is running at all.
+      let now;
+      let readable = true;
+      try {
+        now = (await reader().getList()).items.find((item) => item.lineId === merged);
+      } catch (error) {
+        readable = false;
+        console.error(
+          `\n⛔ Could not re-read the list, so the probe's extra unit on line ${merged} was\n` +
+            '  NOT undone. Reconcile by hand: that line holds one unit this probe added.\n' +
+            `  Cause: ${(error as Error).message}`,
+        );
+        process.exitCode = 1;
+      }
+
+      if (!readable) {
+        // Reported above; nothing further is safe to do.
+      } else if (now === undefined) {
         console.log('\n🧹 the merged line is gone; nothing to undo.');
       } else if (now.quantity !== produced) {
         console.error(

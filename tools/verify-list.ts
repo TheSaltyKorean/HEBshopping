@@ -65,10 +65,40 @@ async function restoreLine(
   // grocery with it.
   if (preExisting === undefined) {
     if (produced !== 1) {
+      // Not this run's line to delete — but the unit this run contributed to it is still
+      // this run's to take back. Refusing to delete and then walking away leaves the
+      // household with an extra unit they never asked for, which is the other half of the
+      // same mistake. Undo exactly the one unit, and only while the line still reads what
+      // this run left it at.
       console.error(
         `   ⚠ "${label}" is not in the opening snapshot but reads ${produced}, so this run\n` +
-          '     merged into a line somebody else created. NOT deleting it; reconcile by hand.',
+          '     merged into a line somebody else created. NOT deleting it.',
       );
+
+      let live;
+      try {
+        live = (await freshList(lists)).items.find((item) => item.lineId === lineId);
+      } catch (error) {
+        console.error(
+          `   ⛔ Could not re-read the list, so this run's extra unit on "${label}" was NOT\n` +
+            `      undone. Reconcile by hand. Cause: ${(error as Error).message}`,
+        );
+        process.exitCode = 1;
+        return;
+      }
+
+      if (live === undefined) {
+        console.log(`   "${label}" is gone; nothing to undo.`);
+      } else if (live.quantity !== produced) {
+        console.error(
+          `   ⚠ "${label}" reads ${live.quantity}, not the ${produced} this run left, so\n` +
+            '     somebody changed it since. NOT undoing; reconcile by hand.',
+        );
+        process.exitCode = 1;
+      } else {
+        console.log(`   undoing this run's extra unit on "${label}" (${produced} → ${produced - 1})`);
+        await time('undo merged unit', () => lists.setItemQuantity(lineId, produced - 1));
+      }
       return;
     }
 

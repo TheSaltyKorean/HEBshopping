@@ -10,31 +10,34 @@
 import { readFileSync } from 'node:fs';
 import { createHash } from 'node:crypto';
 import { resolve } from 'node:path';
-import { HEB_GRAPHQL_URL, HEB_ORIGIN } from '@heb/core';
+import {
+  HEB_GRAPHQL_URL,
+  HEB_ORIGIN,
+  cookieHeaderFor,
+  getShoppingListsDocument,
+  type Cookie,
+  type SessionState,
+} from '@heb/core';
 
-interface StorageState {
-  cookies: Array<{
-    name: string;
-    value: string;
-    domain: string;
-    path: string;
-    expires: number;
-    httpOnly: boolean;
-    secure: boolean;
-  }>;
-}
+const state: SessionState = {
+  cookies: JSON.parse(readFileSync(resolve('captures/storage-state.json'), 'utf8'))
+    .cookies as Cookie[],
+  capturedAt: 0,
+  buildId: null,
+};
 
-const state: StorageState = JSON.parse(
-  readFileSync(resolve('captures/storage-state.json'), 'utf8'),
-);
-
-/** Cookies a request to www.heb.com would send, per normal domain-matching rules. */
-function cookieHeaderFor(host: string): string {
-  return state.cookies
-    .filter((c) => host === c.domain || host.endsWith(c.domain.replace(/^\./, '.')))
-    .map((c) => `${c.name}=${c.value}`)
-    .join('; ');
-}
+/**
+ * Cookies a request to `www.heb.com/graphql` would carry — built by the *production*
+ * rule, not a local approximation.
+ *
+ * The hand-rolled domain filter this replaces sent every domain-matching cookie: expired
+ * ones, ones whose path excludes `/graphql`, and duplicate copies of the same name from
+ * different scopes. Any of those can make the server reject a jar that `HebClient` would
+ * authenticate with perfectly well — and these two experiments are what decided whether the
+ * architecture needs a browser at all. Measuring something other than production is worse
+ * than not measuring.
+ */
+const cookies = (): string => cookieHeaderFor(state, 'www.heb.com', '/graphql');
 
 const BROWSER_HEADERS: Record<string, string> = {
   'User-Agent':
@@ -49,7 +52,7 @@ const BROWSER_HEADERS: Record<string, string> = {
 async function graphql(body: unknown): Promise<{ status: number; text: string }> {
   const response = await fetch(HEB_GRAPHQL_URL, {
     method: 'POST',
-    headers: { ...BROWSER_HEADERS, Cookie: cookieHeaderFor('www.heb.com') },
+    headers: { ...BROWSER_HEADERS, Cookie: cookies() },
     body: JSON.stringify(body),
   });
   // The COMPLETE body. Truncating here fed a cut-off document to `JSON.parse` further
@@ -88,15 +91,19 @@ async function experimentHeadlessHttp(): Promise<void> {
   console.log('   This is the load-bearing assumption of the whole fast-Lambda design.');
   console.log('   If Imperva rejects non-browser clients, the architecture needs rethinking.\n');
 
+  // The production document, sent as query text — not a persisted-query hash.
+  //
+  // This experiment asks one question: does Imperva let a non-browser client through with
+  // captured cookies? A hash-only request answers a different one. H-E-B's APQ store is a
+  // cache that evicts rarely-used entries (that is Experiment 2's whole subject), so a
+  // `PersistedQueryNotFound` here would print "Inconclusive" for a session that
+  // authenticates perfectly — and the architecture rests on this verdict. Sending what
+  // production sends measures authentication rather than APQ cache state.
+  const document = getShoppingListsDocument();
   const result = await graphql({
-    operationName: 'getShoppingListsV2',
+    operationName: document.operationName,
+    query: document.query,
     variables: {},
-    extensions: {
-      persistedQuery: {
-        version: 1,
-        sha256Hash: '35da893a3476a098d44f8d6ac379db3129117b977d4df4dcbe48a5641eb9fdd5',
-      },
-    },
   });
 
   console.log(`   HTTP ${result.status}`);

@@ -231,13 +231,32 @@ async function cleanUp(): Promise<void> {
 
   // Increments are undone by restoring the old quantity, never by deleting the line: it
   // belongs to the household, not to this run.
-  const current = await listOps.getList().catch(() => null);
+  //
+  // A *fresh* client, not `listOps`. That instance's cache was populated by the read at the
+  // top of this function, so `getList()` here returns that earlier snapshot rather than the
+  // live line — and a household member's edit made since then is invisible to the
+  // `now.quantity !== produced` check below, which then happily writes `previous` over it.
+  // The guard was reading a photograph of the moment it was trying to detect changes since.
+  const fresh = new HebListOps({ client: new HebClient({ store }) });
+  let current;
+  try {
+    current = await fresh.getList();
+  } catch (error) {
+    console.error(
+      '\n⛔ Could not re-read the list, so no quantity can be confirmed safe to restore.\n' +
+        `   ${raisedQuantities.size} line(s) still hold this run's extra unit — reconcile by hand.\n` +
+        `   Cause: ${(error as Error).message}`,
+    );
+    process.exitCode = 1;
+    return;
+  }
+
   for (const [lineId, { previous, produced }] of raisedQuantities) {
     // Only when the line still reads exactly what this run left it at. "Still above where
     // it started" is not enough: a household member incrementing the same line during the
     // run also satisfies it, and writing the opening quantity then discards their unit
     // along with the test's — restoring 1 from 3 when the test only ever added one.
-    const now = current?.items.find((item) => item.lineId === lineId);
+    const now = current.items.find((item) => item.lineId === lineId);
     if (now === undefined) {
       console.log(`\n🧹 line ${lineId} is gone; nothing to restore`);
       continue;

@@ -136,13 +136,31 @@ async function restoreLine(
   if (now.quantity !== produced) {
     console.error(
       `   ⚠ "${label}" reads ${now.quantity}, not the ${produced} this run left. Somebody\n` +
-        `     changed it during the run, so it is NOT being reset to ${preExisting.quantity}.`,
+        '     changed it during the run, so it is NOT being restored.',
     );
     return;
   }
 
-  console.log(`   "${label}" pre-existed — restoring quantity ${preExisting.quantity}`);
-  await time('restore quantity', () => lists.setItemQuantity(lineId, preExisting.quantity));
+  // Take back this run's one unit — do NOT write the opening quantity.
+  //
+  // `produced` is what the line read after the add, and the opening snapshot is older than
+  // that. A household member incrementing this same line between the two means `produced`
+  // holds their unit as well as this run's, and the equality check above still passes
+  // because the line has not changed *since the add*. Writing `preExisting.quantity` there
+  // silently deletes their contribution. This run added exactly one unit, so exactly one
+  // comes back off; with nobody else involved that lands on the opening quantity anyway.
+  const target = produced - 1;
+  if (target < preExisting.quantity) {
+    // The add never landed (a server-side cap, most likely), so there is nothing to undo.
+    console.log(`   "${label}" is unchanged from the opening quantity; nothing to restore.`);
+    return;
+  }
+
+  console.log(
+    `   "${label}" pre-existed — taking back this run's unit (${produced} → ${target})` +
+      (target === preExisting.quantity ? '' : `, above the opening ${preExisting.quantity}`),
+  );
+  await time('restore quantity', () => lists.setItemQuantity(lineId, target));
 }
 
 /**
@@ -174,6 +192,14 @@ async function main(): Promise<void> {
   // quantity — behind on someone's shopping list. These are declared outside the `try` so
   // the `finally` can undo whatever was actually done.
   let touchedLine: string | null = null;
+  /**
+   * The product name for that line, for the messages the cleanup prints.
+   *
+   * The `finally` used to pass `touchedLine` as the label, so every instruction to reconcile
+   * by hand named a line UUID — which is both unactionable (the H-E-B app shows names, not
+   * ids) and an account identifier in console output.
+   */
+  let touchedName = '(the item this run added)';
   /**
    * What this run left that line reading.
    *
@@ -254,6 +280,7 @@ async function main(): Promise<void> {
       lineId = confirmed.item.lineId;
       touchedLine = lineId;
       addedName = confirmed.item.text;
+      touchedName = addedName;
       touchedQuantity = confirmed.item.quantity;
       console.log(`   ↪ ${confirmed.status}: ${confirmed.item.quantity} × ${addedName}`);
     } else {
@@ -261,6 +288,7 @@ async function main(): Promise<void> {
       touchedLine = lineId;
       touchedQuantity = result.item.quantity;
       addedName = result.item.text;
+      touchedName = addedName;
       console.log(`   ↪ ${result.status}: ${result.item.quantity} × ${addedName}`);
     }
 
@@ -296,7 +324,7 @@ async function main(): Promise<void> {
     // rather than leaving a grocery — or a raised quantity — on a real household list.
     if (touchedLine !== null) {
       console.error('\n🧹 run did not complete; restoring the line it touched …');
-      await restoreLine(lists, before, touchedLine, touchedLine, touchedQuantity).catch((error: unknown) => {
+      await restoreLine(lists, before, touchedLine, touchedName, touchedQuantity).catch((error: unknown) => {
         console.error('⛔ RESTORE FAILED — the list still holds test data:', error);
       });
     } else if (!done) {

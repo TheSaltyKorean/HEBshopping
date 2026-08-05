@@ -70,10 +70,28 @@ export function readPending(input: HandlerInput): PendingChoice | null {
     !Array.isArray(pending.offers) ||
     !Number.isInteger(pending.index) ||
     pending.index < 0 ||
-    pending.index >= pending.offers.length
+    pending.index >= pending.offers.length ||
+    // `kind` decides which mutation "yes" runs. An attribute carrying anything else reaches
+    // the handlers as neither branch, and a *wrong* one routes the answer into the other
+    // mutation entirely.
+    (pending.kind !== 'add' && pending.kind !== 'remove')
   ) {
     return null;
   }
+
+  // The offer on the table must carry the id its `kind` needs. Shape and kind can both look
+  // right while the two disagree — `kind: 'remove'` over an offer holding only a
+  // `productId`, say — and the yes handler then calls removal with `lineId: undefined`.
+  // Validating the pair is the point: either field alone passes.
+  const offer = pending.offers[pending.index];
+  const id =
+    typeof offer === 'object' && offer !== null
+      ? pending.kind === 'add'
+        ? (offer as Offer).productId
+        : (offer as Offer).lineId
+      : undefined;
+  if (typeof id !== 'string' || id === '') return null;
+
   return pending;
 }
 

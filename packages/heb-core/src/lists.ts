@@ -540,6 +540,27 @@ export class HebListOps implements ListOps {
         // weight, and the surface confirms in pounds, so nothing is reported as a silent "1".
         return { status, item: added };
       }
+      // Deliberately NO re-read here, unlike the existing-line path above. The two look
+      // symmetrical and are not.
+      //
+      // That path re-reads because its observation — the opening snapshot — is arbitrarily
+      // old: a search and a resolve can sit between it and the write, so refreshing shrinks
+      // the window from "however long this call has been running" to one round trip.
+      //
+      // `added` is not an old observation. It comes from the add mutation's own response, so
+      // it already *is* the freshest reading obtainable, and the gap to the write below is
+      // one round trip. Re-reading cannot make it fresher: the refresh would sit one round
+      // trip after the add and the write one round trip after that, leaving an
+      // equally-long unprotected window — the same exposure, one extra call later. HEB
+      // offers no ETag or compare-and-set on `updateShoppingListItemV2` (§2.1), so this last
+      // round trip is irreducible, and the README documents it as such.
+      //
+      // The extra call is not free: this is the Alexa critical path, where a weight add
+      // already costs resolve + search + add + write against a ~8s ceiling (§3.2).
+      //
+      // `Math.max` is what bounds the damage. It never lowers the line below the weight the
+      // add response reported, so the only value at risk is one written inside that final
+      // window.
       const target = Math.max(
         added.weight ?? 0,
         snapWeight(input.weight, added.product.weightIncrements),

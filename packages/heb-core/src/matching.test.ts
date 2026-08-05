@@ -72,6 +72,41 @@ describe('parseSpokenRequest', () => {
     expect(parseSpokenRequest('two percent milk')).toEqual({ quantity: 1, query: 'two percent milk' });
   });
 
+  // A package word after a number can be either reading, and both are common:
+  //   "six pack soda"      — the number names the package        → one
+  //   "two dozen eggs"     — the number counts packages          → two
+  // Suppressing every one of them was safe against the multiply-a-whole-shop failure and
+  // wrong the other way: the skill confirms "eggs" and adds a single carton, which is a
+  // silent undercount the speaker has no way to notice.
+  describe('counts before package words', () => {
+    it.each([
+      // `dozen` never names a package size — there is no "two-dozen" product — so a number
+      // in front of it always counts cartons.
+      ['two dozen eggs', 2, 'dozen eggs'],
+      ['3 dozen eggs', 3, 'dozen eggs'],
+      // For the rest, "of" is what separates counting packages from naming one, exactly as
+      // it separates "two pounds of turkey" from "1.5 lb ground beef".
+      ['three packs of gum', 3, 'packs gum'],
+      ['two cases of water', 2, 'cases water'],
+      ['two rolls of paper towels', 2, 'rolls paper towels'],
+    ])('%s → quantity %i, query "%s"', (input, quantity, query) => {
+      expect(parseSpokenRequest(input)).toEqual({ quantity, query });
+    });
+
+    it.each([
+      // No "of": the number is part of the package's name.
+      ['six pack soda', 1, 'six pack soda'],
+      ['12 count eggs', 1, '12 count eggs'],
+      ['12 roll paper towels', 1, '12 roll paper towels'],
+      // `count` describes a size and never multiplies, "of" or not.
+      ['12 count of eggs', 1, '12 count eggs'],
+      // Still one carton: no number precedes `dozen`.
+      ['a dozen eggs', 1, 'dozen eggs'],
+    ])('%s → quantity %i, query "%s"', (input, quantity, query) => {
+      expect(parseSpokenRequest(input)).toEqual({ quantity, query });
+    });
+  });
+
   it('does not read a trailing-only number as a count', () => {
     expect(parseSpokenRequest('milk')).toEqual({ quantity: 1, query: 'milk' });
   });

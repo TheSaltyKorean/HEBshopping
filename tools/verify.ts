@@ -46,13 +46,29 @@ async function main(): Promise<void> {
 
   try {
     const data = await client.execute<{
-      getShoppingListsV2: {
-        lists: Array<{ id: string; name: string; totalItemCount: number }>;
-      };
+      getShoppingListsV2?: {
+        __typename?: string;
+        lists?: Array<{ id: string; name: string; totalItemCount: number }>;
+      } | null;
     }>(getShoppingListsDocument());
 
     const elapsed = Date.now() - started;
-    const lists = data.getShoppingListsV2.lists;
+
+    // Almost every H-E-B return type is a union, and a server-side rejection comes back as a
+    // *different member* with no `lists` field at all — cookies that pass the local expiry
+    // check can still be refused. Dereferencing `.lists` there threw a TypeError and printed
+    // "Unexpected", which defeats the one job this command has: telling the operator to run
+    // `npm run login`.
+    const payload = data.getShoppingListsV2;
+    const lists = payload?.lists;
+    if (!Array.isArray(lists)) {
+      console.error(
+        `\n⛔ H-E-B did not return a list page (${payload?.__typename ?? 'no payload'}).\n` +
+          '   The cookies are present and unexpired locally but the server refused them.\n' +
+          '   Run `npm run login` and log in again.',
+      );
+      process.exit(1);
+    }
 
     console.log(`✅ ${elapsed}ms — ${lists.length} list(s)`);
     for (const list of lists) {

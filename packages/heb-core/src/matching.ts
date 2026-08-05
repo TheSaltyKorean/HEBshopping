@@ -118,6 +118,24 @@ const MEASURE_WORDS = new Set([
  * spelled-out numbers are listed: nobody says "add 2 Good yogurt" out loud, and treating
  * digits this way would break the ordinary "2 avocados" case.
  */
+/**
+ * Package words a preceding number *multiplies* rather than describes.
+ *
+ * `MEASURE_WORDS` exists because "six pack soda" is one package and "12 count eggs" is one
+ * carton — the number belongs to the product name. But the same words also take an honest
+ * count: "two dozen eggs" is two cartons, and suppressing it confirms the right product
+ * while adding one, which is a silent undercount of exactly the kind the number words run
+ * to twenty to avoid.
+ *
+ * The two readings are separated the same way weights are (`parseWeightPhrase`): by the
+ * word **of**. "three packs of gum" counts packages; "six pack soda" names one. `dozen` is
+ * listed separately because it never describes a package — there is no "two-dozen" product
+ * the way there is a "six-pack" — so it multiplies whenever a number precedes it.
+ *
+ * `count` and `ct` are deliberately absent: they only ever describe a size.
+ */
+const PACKAGE_WORDS = new Set(['pack', 'packs', 'pk', 'case', 'cases', 'roll', 'rolls']);
+
 const NUMBER_LED_BRANDS: ReadonlyArray<readonly string[]> = [
   ['two', 'good'],
   ['seven', 'up'],
@@ -289,6 +307,28 @@ export function parseSpokenRequest(text: string): SpokenRequest {
     brand.every((word, index) => asWords[index] === word),
   );
 
+  // "two dozen eggs" is two cartons, not one. A number before a package word is a genuine
+  // count when the phrasing says so — `dozen` always, and the others only when "of" follows,
+  // which is what separates "three packs of gum" (three) from "six pack soda" (one). The
+  // test is against `raw`, since "of" is filler and has already been dropped from `tokens`.
+  //
+  // Located by walking to the second meaningful token rather than `raw.indexOf(second)`,
+  // which would find an earlier copy of the same word and test the wrong neighbour.
+  const secondAt = (() => {
+    let seen = 0;
+    for (const [index, token] of raw.entries()) {
+      if (FILLER.has(token)) continue;
+      seen += 1;
+      if (seen === 2) return index;
+    }
+    return -1;
+  })();
+
+  const multiplies =
+    second !== undefined &&
+    (second === 'dozen' ||
+      (PACKAGE_WORDS.has(second) && secondAt >= 0 && raw[secondAt + 1] === 'of'));
+
   const isCount =
     !singular &&
     !startsBrand &&
@@ -298,7 +338,7 @@ export function parseSpokenRequest(text: string): SpokenRequest {
     // only quantities above one get adjusted — so asking for none would add one.
     numeric > 0 &&
     tokens.length > 1 &&
-    !(second !== undefined && MEASURE_WORDS.has(second));
+    !(second !== undefined && MEASURE_WORDS.has(second) && !multiplies);
 
   if (isCount) {
     return { quantity: numeric, query: tokens.slice(1).join(' ') };

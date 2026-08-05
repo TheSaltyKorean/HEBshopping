@@ -709,6 +709,55 @@ describe('malformed pending state reads as no pending question', () => {
   });
 });
 
+describe('pending state whose kind and offer disagree', () => {
+  // Shape and `kind` can both look right while the two contradict each other. `kind` picks
+  // which mutation "yes" runs, so an offer that carries the *other* kind's id routes the
+  // answer into the wrong call — removal with `lineId: undefined`, or an add with no
+  // product. Either throws mid-dialog instead of reading as "no pending question".
+  const read = (pendingChoice: unknown) =>
+    readPending({
+      attributesManager: { getSessionAttributes: () => ({ pendingChoice }) },
+    } as unknown as Parameters<typeof readPending>[0]);
+
+  const pending = (kind: unknown, offer: unknown) => ({
+    kind,
+    spokenQuery: 'milk',
+    quantity: 1,
+    offers: [offer],
+    index: 0,
+  });
+
+  const addOffer = { productId: 'p1', spoken: 'Milk', full: 'H-E-B Milk' };
+  const removeOffer = { lineId: 'l1', spoken: 'Milk', full: 'H-E-B Milk' };
+
+  it('rejects a removal offering only a productId', () => {
+    expect(read(pending('remove', addOffer))).toBeNull();
+  });
+
+  it('rejects an add offering only a lineId', () => {
+    expect(read(pending('add', removeOffer))).toBeNull();
+  });
+
+  it('rejects a kind that is neither add nor remove', () => {
+    expect(read(pending('update', addOffer))).toBeNull();
+    expect(read(pending(undefined, addOffer))).toBeNull();
+  });
+
+  it('rejects an offer that is not an object', () => {
+    expect(read(pending('add', null))).toBeNull();
+    expect(read(pending('add', 'Milk'))).toBeNull();
+  });
+
+  it('rejects an empty id', () => {
+    expect(read(pending('add', { ...addOffer, productId: '' }))).toBeNull();
+  });
+
+  it('accepts each kind with its own id', () => {
+    expect(read(pending('add', addOffer))).not.toBeNull();
+    expect(read(pending('remove', removeOffer))).not.toBeNull();
+  });
+});
+
 describe('pending state that is not an object at all', () => {
   const read = (pendingChoice: unknown) =>
     readPending({

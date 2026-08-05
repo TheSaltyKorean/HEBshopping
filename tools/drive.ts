@@ -68,7 +68,17 @@ async function listedProducts(page: Page): Promise<Set<string>> {
  * is removed and a household member adds the same product, the replacement carries the
  * same label. HEB's own responses carry the item UUIDs, and the capture already has them.
  */
-function linesFromCapture(capture: Capture): Array<{ id: string; quantity: number }> {
+/**
+ * Returns `null` when no list payload was captured at all, and `[]` when one was captured
+ * and the list is empty. The distinction is the whole point.
+ *
+ * Skipping an empty `itemPage` and continuing to search backwards means a successful
+ * deletion — whose response legitimately carries zero rows — falls through to an older,
+ * pre-deletion response. `isThrowawayLine` then reads the line it just removed as still
+ * present, keeps the marker armed and reports failure after a clean cleanup. An empty page
+ * is an *answer*; only the absence of any recognised list payload is a missing one.
+ */
+function linesFromCapture(capture: Capture): Array<{ id: string; quantity: number }> | null {
   for (const call of [...capture.since()].reverse()) {
     const items = (
       call.responseBody as
@@ -82,17 +92,15 @@ function linesFromCapture(capture: Capture): Array<{ id: string; quantity: numbe
     )?.data;
     if (items === undefined) continue;
     for (const payload of Object.values(items)) {
-      const rows = payload?.itemPage?.items
-        ?.filter((item) => typeof item.id === 'string')
+      const rows = payload?.itemPage?.items;
+      if (rows === undefined) continue; // not a list payload — a search, say
+      return rows
+        .filter((item) => typeof item.id === 'string')
         .map((item) => ({ id: item.id!, quantity: item.quantity ?? 1 }));
-      if (rows !== undefined && rows.length > 0) return rows;
     }
   }
-  return [];
+  return null;
 }
-
-const lineIdsFromCapture = (capture: Capture): string[] =>
-  linesFromCapture(capture).map((line) => line.id);
 
 /**
  * How many lines the list holds right now.
@@ -136,18 +144,22 @@ async function isThrowawayLine(page: Page, capture?: Capture): Promise<boolean> 
 
   if (capture !== undefined) {
     const lines = linesFromCapture(capture);
-    // An empty capture is *unverified*, not *verified empty*. A cached page load or a
-    // response shape this parser does not recognise both produce zero rows — and falling
+    // No list payload at all is *unverified*, not *verified empty*. A cached page load or a
+    // response shape this parser does not recognise both produce nothing — and falling
     // through to the label comparison below then authorises deleting any line whose product
     // name matches, which is exactly the identity-free check the recorded id exists to
     // replace. No rows, no permission.
-    if (lines.length === 0) {
+    if (lines === null) {
       console.error(
         '⛔ This run captured no list rows, so the marked line cannot be identified.\n' +
           '   Refusing to treat any line as ours; reload the list and re-run.',
       );
       return false;
     }
+    // A captured *empty* list is a real answer: the marked line is not on it. That is what a
+    // successful `remove` looks like, and treating it as unverified there keeps the marker
+    // armed and reports failure after a clean cleanup.
+    if (lines.length === 0) return false;
     if (lines[0]!.id !== lineId) {
       console.error(
         '⛔ The first list line is not the one this marker describes — the throwaway is\n' +
@@ -279,7 +291,8 @@ async function main(): Promise<void> {
       await page.screenshot({ path: 'captures/list-page.png', fullPage: true });
       console.log('\nScreenshot: captures/list-page.png');
     } else if (command === 'add') {
-      capture.mark();
+      // `capture.mark()` moved inside `addItem` — it must not run until the page-load
+      // responses have been read for the baseline. See the note there.
       await addItem(page, argument, capture);
       console.log('\n=== calls provoked by the add flow ===');
       for (const call of capture.since()) {
@@ -316,7 +329,14 @@ async function addItem(page: Page, text: string, capture: Capture): Promise<void
   // Before anything is clicked: what is already on this list?
   const alreadyListed = await listedProducts(page);
   const linesBefore = await lineCount(page);
-  const idsBefore = lineIdsFromCapture(capture);
+
+  // The baseline comes from the page-load responses, so it must be read BEFORE the capture
+  // window is reset. `capture.mark()` makes `since()` empty, so taking the baseline after it
+  // saw no rows at all — and `createdLine` below, looking for the first id absent from an
+  // empty baseline, then picked the *first row of the list* rather than the new one. On any
+  // list whose new product does not sort first, that marks somebody's grocery as disposable.
+  const idsBefore = linesFromCapture(capture);
+  capture.mark();
   console.log(`\nList currently holds ${linesBefore} product line(s).`);
 
   console.log(`\nClicking "Add an item" …`);
@@ -410,7 +430,23 @@ async function addItem(page: Page, text: string, capture: Capture): Promise<void
   // The id of the line that appeared, taken from HEB's own response rather than the DOM.
   // Without it the marker names a product, and products outlive the lines that hold them.
   const linesNow = linesFromCapture(capture);
-  const createdLine = linesNow.find((line) => !idsBefore.includes(line.id)) ?? null;
+
+  // Both sides have to be real readings. An unknown baseline cannot tell a new line from an
+  // old one — every id looks unfamiliar — so it would name whichever row happens to sort
+  // first, which is exactly the mismarking the id was introduced to prevent.
+  if (idsBefore === null || linesNow === null) {
+    console.error(
+      '\n⛔ The captured responses did not carry the list' +
+        `${idsBefore === null ? ' before' : ' after'} the add, so this run cannot tell which\n` +
+        '   line it created. No ownership marker written — `remove` and `mutate` will\n' +
+        '   refuse. Delete the test item by hand.',
+    );
+    process.exitCode = 1;
+    return;
+  }
+
+  const before = new Set(idsBefore.map((line) => line.id));
+  const createdLine = linesNow.find((line) => !before.has(line.id)) ?? null;
 
   // No identity, no marker. A label-only marker is worth less than none: `isThrowawayLine`
   // falls back to comparing product names, so once the throwaway is removed in the H-E-B

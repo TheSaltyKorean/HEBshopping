@@ -138,8 +138,32 @@ async function main(): Promise<void> {
   await call('heb_search_product', { query: 'flour tortillas', limit: 3 });
 
   // A vague query must NOT write; it should hand back candidates.
+  //
+  // "Must not" is the assertion, not a guarantee — that is the point of testing it. Ranking
+  // and purchase history are live inputs, so this query can come back confident and write.
+  // Throwing straight from the failed assertion left that write with nothing armed: the
+  // finalizer had neither a line nor a product, and the run exited having put a real item on
+  // a real list while reporting only that the assertion failed.
   const vague = await call('heb_add_item', { query: 'oat milk' });
   if (!vague.includes('NOT added')) {
+    // The read is allowed to fail without hiding the assertion: throwing from in here would
+    // replace "the ambiguous query wrote" with a read error, which is the less useful of the
+    // two facts and the one that does not tell the operator to go look at their list.
+    const listing = await call('heb_read_list').catch(() => '');
+    const fresh = [...lineIdsIn(listing)].filter((id) => !before.has(id));
+    if (fresh.length === 1) {
+      createdLine = fresh[0]!;
+      console.error('\n⚠ The ambiguous query wrote a line. Armed for cleanup; failing the run.');
+    } else {
+      // No new line means it merged into an existing one, and MCP exposes no way to set a
+      // quantity back down — the reason this script only ever adds products it has proved
+      // absent. Nothing here can undo it.
+      console.error(
+        `\n⛔ The ambiguous query wrote, and ${fresh.length} new lines appeared, so this run\n` +
+          '  cannot identify what to undo. It may have incremented a household line.\n' +
+          '  Reconcile by hand.',
+      );
+    }
     throw new Error('expected an ambiguous query to be refused rather than written');
   }
 

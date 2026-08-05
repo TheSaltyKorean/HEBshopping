@@ -20,6 +20,15 @@ const PENDING_KEY = 'pendingChoice';
  */
 export const MAX_OFFERS = 3;
 
+/**
+ * Bounds on the amounts a pending add may carry, matching the MCP tool schema.
+ *
+ * Both surfaces reach the same `addItem`, so the voice path should not accept an amount the
+ * agent path rejects outright.
+ */
+export const MAX_QUANTITY = 20;
+export const MAX_WEIGHT_LB = 20;
+
 export interface Offer {
   /** Set for an add: the catalog product to add. */
   productId?: string;
@@ -91,6 +100,22 @@ export function readPending(input: HandlerInput): PendingChoice | null {
         : (offer as Offer).lineId
       : undefined;
   if (typeof id !== 'string' || id === '') return null;
+
+  // The amounts an "add" carries into `addItem`. This function is the boundary that
+  // promises arbitrary session JSON is tolerated, so the promise has to cover the numbers
+  // too: `quantity: {}` or `weight: "2"` reach the mutation and either write a unit nobody
+  // asked for or compute a nonsense counter-weight target. Bounds match the MCP schema.
+  if (pending.kind === 'add') {
+    if (!Number.isInteger(pending.quantity) || pending.quantity < 1 || pending.quantity > MAX_QUANTITY) {
+      return null;
+    }
+    if (
+      pending.weight !== undefined &&
+      (!Number.isFinite(pending.weight) || pending.weight <= 0 || pending.weight > MAX_WEIGHT_LB)
+    ) {
+      return null;
+    }
+  }
 
   return pending;
 }

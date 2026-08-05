@@ -12,7 +12,7 @@
  */
 
 import { resolve } from 'node:path';
-import { FileStore, HebClient, HebListOps, checkSession } from '@heb/core';
+import { FileStore, HebClient, HebListOps, checkSession, type HebList } from '@heb/core';
 import { createSkill } from '@heb/lambda-api';
 
 const SESSION_PATH = resolve('.session/session.json');
@@ -31,6 +31,31 @@ const createdLines = new Set<string>();
  * discard.
  */
 const raisedQuantities = new Map<string, { previous: number; produced: number }>();
+
+/**
+ * Read the list through a client that has cached nothing.
+ *
+ * `HebListOps` caches the resolved list, which is right within one operation and wrong
+ * across two. Every guard below runs *inside* an operation the skill is already performing —
+ * `RemoveItemIntent` calls `rankLines()` before `removeItem`, and that read populates the
+ * cache — so `ops.getList()` in a guard returns the snapshot the skill took a moment ago
+ * rather than the live list. A guard reading its own operation's opening snapshot cannot
+ * detect a change made during that operation, which is the only thing it is looking for.
+ *
+ * The resolved list id is remembered across calls. Without it every fresh instance re-runs
+ * `getShoppingLists` to find the default list, so each guard would cost two round trips
+ * instead of one — and the guards now run on every add and every removal.
+ */
+let resolvedListId: string | undefined;
+
+const freshList = async (): Promise<HebList> => {
+  const list = await new HebListOps({
+    client: new HebClient({ store }),
+    ...(resolvedListId === undefined ? {} : { listId: resolvedListId }),
+  }).getList();
+  resolvedListId = list.listId;
+  return list;
+};
 
 /**
  * `HebListOps` that physically cannot delete a line this run did not create.
@@ -52,7 +77,7 @@ function guardedListOps(): HebListOps {
     // line, and tracking only created line ids would leave that increment behind on a run
     // that otherwise reports success.
     const before = new Map(
-      (await ops.getList()).items.map((item) => [item.lineId, item.quantity] as const),
+      (await freshList()).items.map((item) => [item.lineId, item.quantity] as const),
     );
 
     try {
@@ -118,7 +143,7 @@ function guardedListOps(): HebListOps {
     // nothing. Only a successful read showing exactly one unit authorises the delete.
     let current;
     try {
-      current = (await ops.getList()).items.find((item) => item.lineId === input.lineId);
+      current = (await freshList()).items.find((item) => item.lineId === input.lineId);
     } catch (error) {
       throw new Error(
         `REFUSED: could not re-read the list to confirm line ${input.lineId} is still ` +
@@ -210,7 +235,7 @@ async function cleanUp(): Promise<void> {
   // Only lines this run created, never "everything absent from the opening snapshot".
   // A household member adding a grocery from the app while this runs would satisfy that
   // diff and be deleted — which is precisely the failure this cleanup exists to prevent.
-  const added = (await listOps.getList()).items.filter((item) => createdLines.has(item.lineId));
+  const added = (await freshList()).items.filter((item) => createdLines.has(item.lineId));
 
   for (const item of added) {
     // Created by this run, yes — but that was proved when the add returned, and a
@@ -223,6 +248,10 @@ async function cleanUp(): Promise<void> {
           `${item.quantity}.\n  Somebody added to it, so it is NOT being deleted. ` +
           'Reconcile by hand.',
       );
+      // A run that deliberately leaves test data on a real list has not verified cleanly,
+      // whatever the assertions said. Without this the green "verified" message prints and
+      // the process exits 0, so nobody learns there is a unit to remove.
+      process.exitCode = 1;
       continue;
     }
     await listOps.removeItem({ lineId: item.lineId });
@@ -267,6 +296,7 @@ async function cleanUp(): Promise<void> {
           `   Somebody changed it during the run, so it is NOT being restored to ${previous}.\n` +
           `   Reconcile by hand if the test's extra unit is unwanted.`,
       );
+      process.exitCode = 1;
       continue;
     }
     await listOps.setItemQuantity(lineId, previous);

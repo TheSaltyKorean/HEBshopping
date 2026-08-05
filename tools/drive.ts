@@ -479,6 +479,22 @@ async function addItem(page: Page, text: string, capture: Capture): Promise<void
     return;
   }
 
+  // Both mutating commands act on the *first* row — `isThrowawayLine` requires
+  // `lines[0].id === lineId`, and the counter and checkbox locators take `.first()`. A
+  // marker naming a line further down the category sort can therefore only ever produce a
+  // refusal later, which strands the test item with a confusing message instead of an
+  // immediate one. Say so now, while the operator still knows what was just added.
+  if (linesNow[0]?.id !== createdLine.id) {
+    console.error(
+      '\n⛔ The new line did not sort first, and `mutate` and `remove` both act on the first\n' +
+        '   row. A marker for it could only produce a refusal later, so none was written.\n' +
+        '   Delete the test item by hand, and run `add` against an empty list to exercise\n' +
+        '   the mutating commands.',
+    );
+    process.exitCode = 1;
+    return;
+  }
+
   await mkdir(dirname(THROWAWAY_PATH), { recursive: true });
   await writeFile(
     THROWAWAY_PATH,
@@ -539,6 +555,15 @@ async function exerciseQuantity(page: Page, capture: Capture): Promise<void> {
    */
   let owed = 0;
 
+  /**
+   * Set once the line stops being solely this run's.
+   *
+   * It gates the cleanup as well as the destructive step, because the two are the same
+   * decision: the decrement control operates on the line, so neither can act once somebody
+   * else's units are mixed in.
+   */
+  let ownershipLost = false;
+
   const step = async (
     label: string,
     action: () => Promise<void>,
@@ -578,6 +603,7 @@ async function exerciseQuantity(page: Page, capture: Capture): Promise<void> {
     // treat an unreadable counter as a mismatch.
     const beforeFinal = Number(await value.inputValue().catch(() => 'NaN'));
     if (beforeFinal !== startedAt) {
+      ownershipLost = true;
       console.error(
         `\n⛔ The line reads ${Number.isFinite(beforeFinal) ? beforeFinal : '(unreadable)'}, ` +
           `not the ${startedAt} this run expects before the final\n` +
@@ -589,14 +615,41 @@ async function exerciseQuantity(page: Page, capture: Capture): Promise<void> {
       await step('DECREMENT 1 → 0 (expect removal)', () => decrement.click(), -1);
     }
   } finally {
-    // Take back exactly what this run added, and nothing else.
-    if (owed > 0) {
+    // The cleanup has to respect the same finding that stopped the final decrement.
+    //
+    // Refusing the destructive step and then running this loop anyway undoes the refusal:
+    // the decrement control acts on the whole line, not on "this run's units", so once
+    // somebody else has contributed there is no click that takes back only ours. `owed`
+    // says how much this run put on; it does not say those units are still separable.
+    if (ownershipLost) {
+      if (owed > 0) {
+        console.error(
+          `\n⛔ NOT taking back this run's ${owed} unit(s): the line is no longer solely this\n` +
+            '   run\'s, and decrementing would remove somebody else\'s unit instead. Reconcile\n' +
+            '   by hand — the line holds one unit this exercise added.',
+        );
+      }
+    } else if (owed > 0) {
+      // Take back exactly what this run added, and nothing else.
       console.log(`\n🧹 taking back ${owed} unit(s) this run added`);
       for (let remaining = owed; remaining > 0; remaining -= 1) {
         await decrement.click().catch(() => undefined);
         await page.waitForTimeout(2_000);
       }
     }
+  }
+
+  // Ownership was lost mid-run, so neither branch below applies: the line is shared, this
+  // run's unit is still on it, and `isThrowawayLine` will now fail the quantity check —
+  // which would drop the marker and, with it, the only record that a unit was left behind.
+  if (ownershipLost) {
+    console.error(
+      '\n⛔ Keeping the ownership marker: the line is shared, so nothing here may delete or\n' +
+        '   decrement it, and the record of this run\'s unit should not be discarded.\n' +
+        '   Reconcile by hand.',
+    );
+    await page.screenshot({ path: 'captures/after-mutations.png', fullPage: true });
+    return;
   }
 
   // Same rule as `remove`: the documented behaviour of decrementing below one is a no-op,
@@ -624,6 +677,15 @@ async function exerciseQuantity(page: Page, capture: Capture): Promise<void> {
  * which is the bulk-edit affordance; that is the path tried here.
  */
 async function removeItem(page: Page, capture: Capture): Promise<void> {
+  // Reload before proving anything, so the proof is about the list as it is now.
+  //
+  // The evidence here is a page snapshot, and `main` navigates once at startup — so without
+  // this the ownership proof can be arbitrarily old by the time the operator reaches this
+  // command. Four interactions and several seconds then separate the proof from the
+  // irreversible click. Reloading is what makes that gap seconds rather than open-ended.
+  await page.reload({ waitUntil: 'domcontentloaded' }).catch(() => undefined);
+  await page.waitForTimeout(4_000);
+
   // This drives a *deletion* against a real household list, and the reproduction
   // instructions advertise the command — so it must prove the line belongs to this
   // exercise rather than to the household. "The list has one item" is not proof: a normal
@@ -682,6 +744,23 @@ async function removeItem(page: Page, capture: Capture): Promise<void> {
 
   const confirm = page.getByRole('button', { name: /^remove items?$/i }).first();
   if ((await confirm.count()) > 0) {
+    // Re-prove immediately before the irreversible click.
+    //
+    // Honest about what this does and does not do: it re-reads the freshest captured list
+    // payload, which the delete click may itself have provoked, so it catches a change
+    // visible in that response. It cannot see a change H-E-B has not told this page about —
+    // the dialog fires no read, and reloading here would dismiss it. The residual window is
+    // the dialog's lifetime, and closing it needs a read the UI does not make.
+    if (!(await isThrowawayLine(page, capture))) {
+      console.error(
+        '\n⛔ The marked line no longer checks out, and the confirmation deletes the whole\n' +
+          '   line. Refusing to confirm. The dialog is left open — close it by hand, and the\n' +
+          '   ownership marker is kept so this can be retried.',
+      );
+      process.exitCode = 1;
+      return;
+    }
+
     console.log('\nConfirmation required — clicking "Remove items" …');
     await confirm.click();
     await page.waitForTimeout(3_500);

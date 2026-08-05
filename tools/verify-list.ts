@@ -55,7 +55,15 @@ async function restoreLine(
   label: string,
   /** What this run left the line reading. Restoration is only safe while it still does. */
   produced: number,
-): Promise<void> {
+  /**
+   * True when the list is back to how this run found it.
+   *
+   * Every branch that deliberately declines to restore returns false, because "refused to
+   * touch a shared line" and "cleaned up" are opposite outcomes that used to be reported
+   * identically: `restoreLine` returned void, the caller cleared its marker, and the run
+   * printed the green success line with exit 0 while its unit sat on a household list.
+   */
+): Promise<boolean> {
   const preExisting = before.items.find((item) => item.lineId === lineId);
 
   // Absence from the opening snapshot is NOT proof this run created the line. If a
@@ -84,7 +92,7 @@ async function restoreLine(
             `      undone. Reconcile by hand. Cause: ${(error as Error).message}`,
         );
         process.exitCode = 1;
-        return;
+        return false;
       }
 
       if (live === undefined) {
@@ -95,11 +103,13 @@ async function restoreLine(
             '     somebody changed it since. NOT undoing; reconcile by hand.',
         );
         process.exitCode = 1;
-      } else {
+        return false;
+      }
+      if (live !== undefined) {
         console.log(`   undoing this run's extra unit on "${label}" (${produced} → ${produced - 1})`);
         await time('undo merged unit', () => lists.setItemQuantity(lineId, produced - 1));
       }
-      return;
+      return true;
     }
 
     // One unit *at the time the add returned* proves this run created the line. It does
@@ -109,17 +119,19 @@ async function restoreLine(
     const current = (await freshList(lists)).items.find((item) => item.lineId === lineId);
     if (current === undefined) {
       console.log(`   "${label}" is already gone; nothing to remove.`);
-      return;
+      return true;
     }
     if (current.quantity !== 1) {
       console.error(
         `   ⚠ "${label}" was created by this run but now reads ${current.quantity}, so\n` +
-          '     somebody added to it. NOT deleting it; reconcile by hand.',
+          '     somebody added to it. NOT deleting it; reconcile by hand — the line holds\n' +
+          "     one unit this run added.",
       );
-      return;
+      process.exitCode = 1;
+      return false;
     }
     await time('removeItem', () => lists.removeItem({ lineId }));
-    return;
+    return true;
   }
 
   // A *fresh* read, through a client that has not cached anything since the mutation —
@@ -127,7 +139,7 @@ async function restoreLine(
   const now = (await freshList(lists)).items.find((item) => item.lineId === lineId);
   if (now === undefined) {
     console.log(`   "${label}" is gone; nothing to restore.`);
-    return;
+    return true;
   }
 
   // Exactly what this run produced, not merely "above where it started". A household
@@ -138,7 +150,8 @@ async function restoreLine(
       `   ⚠ "${label}" reads ${now.quantity}, not the ${produced} this run left. Somebody\n` +
         '     changed it during the run, so it is NOT being restored.',
     );
-    return;
+    process.exitCode = 1;
+    return false;
   }
 
   // Take back this run's one unit — do NOT write the opening quantity.
@@ -153,7 +166,7 @@ async function restoreLine(
   if (target < preExisting.quantity) {
     // The add never landed (a server-side cap, most likely), so there is nothing to undo.
     console.log(`   "${label}" is unchanged from the opening quantity; nothing to restore.`);
-    return;
+    return true;
   }
 
   console.log(
@@ -161,6 +174,7 @@ async function restoreLine(
       (target === preExisting.quantity ? '' : `, above the opening ${preExisting.quantity}`),
   );
   await time('restore quantity', () => lists.setItemQuantity(lineId, target));
+  return true;
 }
 
 /**
@@ -309,16 +323,27 @@ async function main(): Promise<void> {
     }
 
     console.log('\n── 5. restore the list to how it was');
-    await restoreLine(lists, before, lineId, addedName, touchedQuantity);
+    const clean = await restoreLine(lists, before, lineId, addedName, touchedQuantity);
+    // Cleared either way: the restore has been attempted, and re-running it from the
+    // `finally` would repeat the identical refusal. What must not be cleared is the
+    // *verdict* — a run that left its unit behind is not a passing run.
     touchedLine = null;
 
     const after = await time('getList', () => lists.getList());
     console.log(`   ${after.items.length} item(s)`);
     done = true;
 
-    console.log(
-      `\n✅ add → read → remove verified. List restored to ${after.items.length} item(s).`,
-    );
+    if (clean) {
+      console.log(
+        `\n✅ add → read → remove verified. List restored to ${after.items.length} item(s).`,
+      );
+    } else {
+      console.error(
+        '\n⛔ add → read → remove ran, but cleanup deliberately left this run\'s data on the\n' +
+          '   list — see the warning above. Reconcile by hand; NOT reporting success.',
+      );
+      process.exitCode = 1;
+    }
   } finally {
     // The mutation happened but the run did not reach its own restore step. Undo it here
     // rather than leaving a grocery — or a raised quantity — on a real household list.

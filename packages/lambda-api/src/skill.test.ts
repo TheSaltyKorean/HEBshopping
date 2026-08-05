@@ -758,6 +758,59 @@ describe('pending state whose kind and offer disagree', () => {
   });
 });
 
+describe('pending add amounts are validated, not just its ids', () => {
+  // This function is the boundary that promises arbitrary session JSON is tolerated, so the
+  // promise has to cover the numbers the state carries into `addItem` — not only its shape.
+  // A malformed quantity or weight reaches the mutation and either writes a unit nobody
+  // asked for or computes a nonsense counter-weight target.
+  const read = (extra: Record<string, unknown>) =>
+    readPending({
+      attributesManager: {
+        getSessionAttributes: () => ({
+          pendingChoice: {
+            kind: 'add',
+            spokenQuery: 'sliced turkey',
+            quantity: 1,
+            offers: [{ productId: 'p1', spoken: 'Turkey', full: 'H-E-B Turkey' }],
+            index: 0,
+            ...extra,
+          },
+        }),
+      },
+    } as unknown as Parameters<typeof readPending>[0]);
+
+  it.each([
+    ['an object', {}],
+    ['a string', '2'],
+    ['zero', 0],
+    ['negative', -1],
+    ['fractional', 1.5],
+    ['NaN', Number.NaN],
+    ['past the ceiling', 21],
+  ] as Array<[string, unknown]>)('rejects %s quantity', (_label, quantity) => {
+    expect(read({ quantity })).toBeNull();
+  });
+
+  it.each([
+    ['a string', '2'],
+    ['zero', 0],
+    ['negative', -0.5],
+    ['NaN', Number.NaN],
+    ['Infinity', Number.POSITIVE_INFINITY],
+    ['past the ceiling', 21],
+  ] as Array<[string, unknown]>)('rejects %s weight', (_label, weight) => {
+    expect(read({ weight })).toBeNull();
+  });
+
+  it('accepts the amounts a real dialog produces', () => {
+    expect(read({ quantity: 2 })).not.toBeNull();
+    // A quarter pound: fractional weights are the normal case at the deli counter, and
+    // must not be caught by the integer rule that applies to quantity.
+    expect(read({ quantity: 1, weight: 0.25 })).not.toBeNull();
+    expect(read({ weight: undefined })).not.toBeNull();
+  });
+});
+
 describe('pending state that is not an object at all', () => {
   const read = (pendingChoice: unknown) =>
     readPending({

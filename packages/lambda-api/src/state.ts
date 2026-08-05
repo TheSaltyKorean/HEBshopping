@@ -8,6 +8,7 @@
  */
 
 import type { HandlerInput } from 'ask-sdk-core';
+import { MAX_QUANTITY, MAX_WEIGHT_LB } from '@heb/core';
 
 const PENDING_KEY = 'pendingChoice';
 
@@ -20,14 +21,7 @@ const PENDING_KEY = 'pendingChoice';
  */
 export const MAX_OFFERS = 3;
 
-/**
- * Bounds on the amounts a pending add may carry, matching the MCP tool schema.
- *
- * Both surfaces reach the same `addItem`, so the voice path should not accept an amount the
- * agent path rejects outright.
- */
-export const MAX_QUANTITY = 20;
-export const MAX_WEIGHT_LB = 20;
+
 
 export interface Offer {
   /** Set for an add: the catalog product to add. */
@@ -92,14 +86,26 @@ export function readPending(input: HandlerInput): PendingChoice | null {
   // right while the two disagree — `kind: 'remove'` over an offer holding only a
   // `productId`, say — and the yes handler then calls removal with `lineId: undefined`.
   // Validating the pair is the point: either field alone passes.
-  const offer = pending.offers[pending.index];
-  const id =
-    typeof offer === 'object' && offer !== null
-      ? pending.kind === 'add'
-        ? (offer as Offer).productId
-        : (offer as Offer).lineId
-      : undefined;
-  if (typeof id !== 'string' || id === '') return null;
+  // Every offer, not just the one on the table.
+  //
+  // `nextOffer` walks to the others and `ask` speaks each one's `spoken`; the give-up path
+  // maps `full` across all of them. So an offer that is never validated is still reachable,
+  // and the order of the dereferences is what makes it dangerous: `YesIntent` deletes the
+  // line *first* and then builds the confirmation from `offer.spoken`. A missing `spoken`
+  // throws after the mutation has committed, so Alexa reports failure for a removal that
+  // actually happened — the worst of both.
+  const usable = pending.offers.every((offer: unknown) => {
+    if (typeof offer !== 'object' || offer === null) return false;
+    const { spoken, full, productId, lineId } = offer as Offer;
+    if (typeof spoken !== 'string' || spoken === '') return false;
+    if (typeof full !== 'string' || full === '') return false;
+    const id = pending.kind === 'add' ? productId : lineId;
+    return typeof id === 'string' && id !== '';
+  });
+  if (!usable) return null;
+
+  // Spoken back verbatim on the give-up path.
+  if (typeof pending.spokenQuery !== 'string') return null;
 
   // The amounts an "add" carries into `addItem`. This function is the boundary that
   // promises arbitrary session JSON is tolerated, so the promise has to cover the numbers

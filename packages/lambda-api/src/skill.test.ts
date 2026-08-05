@@ -709,6 +709,27 @@ describe('malformed pending state reads as no pending question', () => {
   });
 });
 
+describe('a count above the ceiling is refused out loud', () => {
+  // The failure being avoided is silent: "21 bananas" still resolves to bananas, so simply
+  // dropping the count confirms the right product and adds one. `addRemainingUnits` issues
+  // one live mutation per unit, so acting on it is not an option either.
+  it('says so and writes nothing', async () => {
+    const ops = fakeOps();
+    const turn = await conversation(ops)(intent('AddItemIntent', { item: '50 bananas' }));
+
+    expect(ops.addItem).not.toHaveBeenCalled();
+    expect(turn.speech).toContain('20');
+    expect(turn.speech).toContain('50');
+  });
+
+  it('leaves ordinary counts alone', async () => {
+    const ops = fakeOps();
+    await conversation(ops)(intent('AddItemIntent', { item: 'two avocados' }));
+
+    expect(ops.addItem).toHaveBeenCalledWith(expect.objectContaining({ quantity: 2 }));
+  });
+});
+
 describe('pending state whose kind and offer disagree', () => {
   // Shape and `kind` can both look right while the two contradict each other. `kind` picks
   // which mutation "yes" runs, so an offer that carries the *other* kind's id routes the
@@ -800,6 +821,57 @@ describe('pending add amounts are validated, not just its ids', () => {
     ['past the ceiling', 21],
   ] as Array<[string, unknown]>)('rejects %s weight', (_label, weight) => {
     expect(read({ weight })).toBeNull();
+  });
+
+  it('rejects an offer with no speakable text', () => {
+    // The order of operations is what makes this dangerous: `YesIntent` deletes the line and
+    // *then* builds its confirmation from `offer.spoken`. A missing one throws after the
+    // mutation has committed, so Alexa reports failure for a removal that actually happened.
+    const withOffers = (offers: unknown[]) =>
+      readPending({
+        attributesManager: {
+          getSessionAttributes: () => ({
+            pendingChoice: { kind: 'remove', spokenQuery: 'milk', quantity: 1, offers, index: 0 },
+          }),
+        },
+      } as unknown as Parameters<typeof readPending>[0]);
+
+    expect(withOffers([{ lineId: 'l1', full: 'H-E-B Milk' }])).toBeNull();
+    expect(withOffers([{ lineId: 'l1', spoken: '', full: 'H-E-B Milk' }])).toBeNull();
+    expect(withOffers([{ lineId: 'l1', spoken: 'Milk' }])).toBeNull();
+    expect(withOffers([{ lineId: 'l1', spoken: 42, full: 'H-E-B Milk' }])).toBeNull();
+
+    // Every offer is checked, not just the one on the table: `nextOffer` walks to the rest
+    // and speaks each one, so an unvalidated offer is still reachable.
+    expect(
+      withOffers([
+        { lineId: 'l1', spoken: 'Milk', full: 'H-E-B Milk' },
+        { lineId: 'l2', full: 'H-E-B Oat Milk' },
+      ]),
+    ).toBeNull();
+
+    expect(withOffers([{ lineId: 'l1', spoken: 'Milk', full: 'H-E-B Milk' }])).not.toBeNull();
+  });
+
+  it('rejects a non-string spokenQuery, which the give-up path speaks back', () => {
+    const read = (spokenQuery: unknown) =>
+      readPending({
+        attributesManager: {
+          getSessionAttributes: () => ({
+            pendingChoice: {
+              kind: 'add',
+              spokenQuery,
+              quantity: 1,
+              offers: [{ productId: 'p1', spoken: 'Milk', full: 'H-E-B Milk' }],
+              index: 0,
+            },
+          }),
+        },
+      } as unknown as Parameters<typeof readPending>[0]);
+
+    expect(read(undefined)).toBeNull();
+    expect(read({})).toBeNull();
+    expect(read('milk')).not.toBeNull();
   });
 
   it('accepts the amounts a real dialog produces', () => {

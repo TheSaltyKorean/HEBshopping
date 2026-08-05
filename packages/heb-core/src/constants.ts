@@ -33,6 +33,23 @@ export const HEB_SESSION_HOSTS = [HEB_ORIGIN, HEB_ACCOUNTS_ORIGIN] as const;
  */
 export const CONFIRMATION_THRESHOLD = 0.7;
 
+/**
+ * The largest count any surface will act on, and the largest weight in pounds.
+ *
+ * Lives here because three places have to agree: the MCP tool schema, the Alexa pending-state
+ * validator, and the spoken-request parser. They did not — the parser accepted an unbounded
+ * digit, so "21 bananas" was read as a count of 21, which the schema and the validator both
+ * reject. That mismatch is not merely inconsistent: `addRemainingUnits` issues one live
+ * mutation per unit, so an unbounded count is a burst of real writes against someone's list,
+ * and an ambiguous one leaves pending state the next turn refuses to read.
+ *
+ * A number above the ceiling is not clamped. Silently turning "21 bananas" into 20 writes an
+ * amount nobody asked for; leaving it in the query keeps the words the speaker said, and the
+ * confirmation reads them back.
+ */
+export const MAX_QUANTITY = 20;
+export const MAX_WEIGHT_LB = 20;
+
 // ---------------------------------------------------------------------------
 // Timing — derived from Alexa's ~8s response ceiling (plan §3.2)
 // ---------------------------------------------------------------------------

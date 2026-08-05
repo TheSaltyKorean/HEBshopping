@@ -24,6 +24,7 @@ import {
   hasCode,
   isHebError,
   parseSpokenRequest,
+  MAX_QUANTITY,
   type AddResult,
   type HebErrorCode,
   type ListItem,
@@ -196,7 +197,18 @@ function addItemHandler(options: CreateSkillOptions): RequestHandler {
       // Quantity is parsed from the spoken phrase rather than a separate slot: "two
       // avocados" arrives as one AMAZON.SearchQuery, and heb-core already knows that
       // "two percent milk" is one carton rather than two.
-      const { quantity, query, weight } = parseSpokenRequest(spoken);
+      const { quantity, query, weight, quantityRefused } = parseSpokenRequest(spoken);
+
+      // A count above the ceiling every surface enforces. Say so rather than acting on some
+      // other number: adding `MAX_QUANTITY` writes an amount nobody asked for, and dropping
+      // the count adds one while confirming the right product — a silent undercount the
+      // speaker has no way to notice.
+      if (quantityRefused !== undefined) {
+        const message =
+          `I can add up to ${MAX_QUANTITY} at a time, and you asked for ${quantityRefused}. ` +
+          'Try again with a smaller number.';
+        return input.responseBuilder.speak(message).reprompt(message).getResponse();
+      }
 
       // "Add zero bananas" is a refusal, and the parser deliberately keeps the word in the
       // query rather than treating zero as a count. The catalog search must still run —

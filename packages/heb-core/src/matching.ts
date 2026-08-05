@@ -11,7 +11,7 @@
  * that HEB's ranking does not give us and cannot be tested offline.
  */
 
-import { CONFIRMATION_THRESHOLD } from './constants.js';
+import { CONFIRMATION_THRESHOLD, MAX_QUANTITY } from './constants.js';
 import type { MatchResult, Product } from './types.js';
 
 // ---------------------------------------------------------------------------
@@ -181,6 +181,15 @@ export interface SpokenRequest {
    * bought by the package. When present, `quantity` is 1.
    */
   weight?: number;
+  /**
+   * The count that was asked for and could not be honoured, when it exceeds `MAX_QUANTITY`.
+   *
+   * Present *instead of* acting on the number. Dropping it and searching the whole phrase
+   * looks safe and is not: "21 bananas" still resolves to bananas, so the surface confirms
+   * the right product and adds one — a silent undercount, which is the same failure that
+   * made suppressing "two dozen eggs" wrong. Surfaces must refuse out loud instead.
+   */
+  quantityRefused?: number;
 }
 
 /** Units that mean pounds. Ounces are deliberately absent — see `parseWeightPhrase`. */
@@ -337,11 +346,27 @@ export function parseSpokenRequest(text: string): SpokenRequest {
     // `addItem` with quantity 0, and the initial mutation adds a line regardless —
     // only quantities above one get adjusted — so asking for none would add one.
     numeric > 0 &&
+    // Above the ceiling every surface enforces, the number is not a count this system can
+    // act on — and treating it as one issues that many live mutations. It stays in the
+    // query instead, so the search sees the words that were actually said.
+    numeric <= MAX_QUANTITY &&
     tokens.length > 1 &&
     !(second !== undefined && MEASURE_WORDS.has(second) && !multiplies);
 
   if (isCount) {
     return { quantity: numeric, query: tokens.slice(1).join(' ') };
+  }
+  // A count this system will not act on. Reported rather than quietly folded into the
+  // query, so the surface can say so instead of adding one of something.
+  if (
+    !singular &&
+    !startsBrand &&
+    numeric !== undefined &&
+    numeric > MAX_QUANTITY &&
+    tokens.length > 1 &&
+    !(second !== undefined && MEASURE_WORDS.has(second) && !multiplies)
+  ) {
+    return { quantity: 1, query: tokens.join(' '), quantityRefused: numeric };
   }
   return { quantity: 1, query: tokens.join(' ') };
 }

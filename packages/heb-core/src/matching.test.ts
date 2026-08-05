@@ -107,6 +107,43 @@ describe('parseSpokenRequest', () => {
     });
   });
 
+  describe('counts above the ceiling every surface enforces', () => {
+    // `addRemainingUnits` issues one live mutation per unit, so an unbounded count is a
+    // burst of real writes against somebody's list — and the MCP schema and the pending-state
+    // validator both cap at 20, so an ambiguous match would build state the next turn
+    // refuses to read. The parser has to agree with them.
+    it.each([
+      ['21 bananas', 21],
+      ['100 eggs', 100],
+    ])('%s is refused rather than acted on', (input, refused) => {
+      expect(parseSpokenRequest(input)).toMatchObject({ quantity: 1, quantityRefused: refused });
+    });
+
+    it('still accepts the ceiling itself', () => {
+      expect(parseSpokenRequest('20 bananas')).toEqual({ quantity: 20, query: 'bananas' });
+    });
+
+    // Neither clamped nor silently dropped. Clamping writes an amount nobody asked for;
+    // dropping the count leaves a query that still resolves — "21 bananas" finds bananas —
+    // so the surface confirms the right product and adds one. That silent undercount is the
+    // same failure that made suppressing "two dozen eggs" wrong, so the count is reported
+    // and the surface refuses out loud.
+    it('does not clamp, and does not let the phrase resolve to a single item', () => {
+      const parsed = parseSpokenRequest('21 bananas');
+      expect(parsed.quantity).not.toBe(20);
+      expect(parsed.quantityRefused).toBe(21);
+    });
+
+    it('does not refuse phrases where the number was never a count', () => {
+      // A package size, a brand, and an amount below the ceiling: none of these is a
+      // refusal, and reporting one would block ordinary requests.
+      expect(parseSpokenRequest('24 pack soda').quantityRefused).toBeUndefined();
+      expect(parseSpokenRequest('seven up').quantityRefused).toBeUndefined();
+      expect(parseSpokenRequest('two avocados').quantityRefused).toBeUndefined();
+      expect(parseSpokenRequest('milk').quantityRefused).toBeUndefined();
+    });
+  });
+
   it('does not read a trailing-only number as a count', () => {
     expect(parseSpokenRequest('milk')).toEqual({ quantity: 1, query: 'milk' });
   });

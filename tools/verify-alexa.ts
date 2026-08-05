@@ -30,7 +30,23 @@ const createdLines = new Set<string>();
  * Anything else means somebody edited it during the run, and their change is not ours to
  * discard.
  */
-const raisedQuantities = new Map<string, { previous: number; produced: number }>();
+const raisedQuantities = new Map<
+  string,
+  {
+    previous: number;
+    produced: number;
+    /**
+     * Units this run put on the line.
+     *
+     * The number cleanup subtracts. `previous` is *not* safe to write back: it was read
+     * before the mutation, and a household member incrementing the same line in that gap is
+     * folded into `produced` — so restoring `previous` removes their unit along with this
+     * run's (1 → their 2 → our 3 → restore 1). Subtracting only what this run contributed
+     * leaves their change standing.
+     */
+    contributed: number;
+  }
+>();
 
 /**
  * Read the list through a client that has cached nothing.
@@ -88,19 +104,36 @@ function guardedListOps(): HebListOps {
       // showed nothing — still reports `added` with their line id. Deleting it during
       // cleanup would take their grocery. Only a line reading exactly one was created here;
       // anything higher is a merge, and is undone by restoring the quantity instead.
-      if (result.status === 'added') {
+      // What this call asked H-E-B to put on the line. `addItem` merges server-side, so a
+      // successful add contributes exactly this many units regardless of what else is
+      // happening to the line.
+      const contributed = input.quantity ?? 1;
+
+      // A counter line is measured in pounds, and `setItemQuantity` on one is meaningless —
+      // recording it for a quantity restore would write a number nobody buys by.
+      if (result.status !== 'needs_confirmation' && result.item.weight !== undefined) {
+        console.error(
+          `\n⚠ "${result.item.text}" is sold by weight, so this run cannot undo it by\n` +
+            '  quantity. Reconcile by hand.',
+        );
+        process.exitCode = 1;
+      } else if (result.status === 'added') {
         if (result.item.quantity === 1) createdLines.add(result.item.lineId);
         else if (!raisedQuantities.has(result.item.lineId)) {
           raisedQuantities.set(result.item.lineId, {
-            previous: result.item.quantity - 1,
+            previous: result.item.quantity - contributed,
             produced: result.item.quantity,
+            contributed,
           });
         }
-      }
-      if (result.status === 'already_present') {
+      } else if (result.status === 'already_present') {
         const previous = before.get(result.item.lineId);
         if (previous !== undefined && !raisedQuantities.has(result.item.lineId)) {
-          raisedQuantities.set(result.item.lineId, { previous, produced: result.item.quantity });
+          raisedQuantities.set(result.item.lineId, {
+            previous,
+            produced: result.item.quantity,
+            contributed,
+          });
         }
       }
       return result;
@@ -280,7 +313,7 @@ async function cleanUp(): Promise<void> {
     return;
   }
 
-  for (const [lineId, { previous, produced }] of raisedQuantities) {
+  for (const [lineId, { previous, produced, contributed }] of raisedQuantities) {
     // Only when the line still reads exactly what this run left it at. "Still above where
     // it started" is not enough: a household member incrementing the same line during the
     // run also satisfies it, and writing the opening quantity then discards their unit
@@ -299,8 +332,20 @@ async function cleanUp(): Promise<void> {
       process.exitCode = 1;
       continue;
     }
-    await listOps.setItemQuantity(lineId, previous);
-    console.log(`\n🧹 restored quantity ${previous} on a pre-existing line`);
+    // Subtract this run's contribution; do not write the pre-mutation reading. When nobody
+    // else touched the line the two are the same number, so the ordinary case is unchanged.
+    const target = produced - contributed;
+    if (target < previous) {
+      // Fewer units landed than were asked for — a server-side ceiling, most likely — so
+      // subtracting the full contribution would remove units this run never added.
+      console.log(`\n🧹 line unchanged from its opening quantity; nothing to restore`);
+      continue;
+    }
+    await listOps.setItemQuantity(lineId, target);
+    console.log(
+      `\n🧹 took back this run's ${contributed} unit(s): ${produced} → ${target}` +
+        (target === previous ? '' : `, above the opening ${previous}`),
+    );
   }
 
   if (added.length === 0 && raisedQuantities.size === 0) {

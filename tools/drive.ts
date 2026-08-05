@@ -202,6 +202,57 @@ async function clearThrowawayMarker(): Promise<void> {
   await rm(THROWAWAY_PATH, { force: true });
 }
 
+/**
+ * Is the marked line still on the list, according to the freshest captured payload?
+ *
+ * A separate question from `isThrowawayLine`, which answers "may this run act on the first
+ * row?" and says no for a line that is present but has moved down the category sort, has had
+ * its quantity changed, or could not be verified at all. Reading that no as "the line is
+ * gone" is what discarded the marker while the test line survived — leaving a throwaway on a
+ * real household list with no command authorised to remove it.
+ *
+ * `unknown` is a third answer on purpose: an unverifiable capture must not license either
+ * conclusion.
+ */
+async function markedLineState(capture: Capture): Promise<'absent' | 'present' | 'unknown'> {
+  const marker = await readFile(THROWAWAY_PATH, 'utf8').catch(() => null);
+  if (marker === null) return 'absent'; // nothing recorded, so nothing to keep
+
+  let lineId: string | null = null;
+  try {
+    ({ lineId = null } = JSON.parse(marker) as { lineId?: string | null });
+  } catch {
+    return 'unknown';
+  }
+  if (lineId === null) return 'unknown';
+
+  const lines = linesFromCapture(capture);
+  if (lines === null) return 'unknown';
+  return lines.some((line) => line.id === lineId) ? 'present' : 'absent';
+}
+
+/**
+ * Drop the marker only once the line it names is demonstrably gone.
+ *
+ * Anything else keeps it: the marker is what authorises a later cleanup, and discarding it
+ * on a surviving line strands test data permanently.
+ */
+async function releaseMarkerIfConsumed(capture: Capture, what: string): Promise<void> {
+  const state = await markedLineState(capture);
+  if (state === 'absent') {
+    await clearThrowawayMarker();
+    return;
+  }
+  console.error(
+    state === 'present'
+      ? `\n⛔ The marked line survived ${what} — keeping the ownership marker so it can be\n` +
+          '   cleaned up.'
+      : `\n⛔ Could not confirm whether the marked line survived ${what} — keeping the\n` +
+          '   ownership marker rather than stranding a line nothing may remove.',
+  );
+  process.exitCode = 1;
+}
+
 const LIST_URL = 'https://www.heb.com/shopping-list';
 
 interface ElementInfo {
@@ -657,15 +708,7 @@ async function exerciseQuantity(page: Page, capture: Capture): Promise<void> {
   // dropping the marker that authorizes removing it.
   await page.reload({ waitUntil: 'domcontentloaded' }).catch(() => undefined);
   await page.waitForTimeout(2_000);
-  if (await isThrowawayLine(page, capture)) {
-    console.error(
-      '\n⛔ The marked line survived the decrements — keeping the ownership marker so\n' +
-        '   `drive.ts remove` can clean it up.',
-    );
-    process.exitCode = 1;
-  } else {
-    await clearThrowawayMarker();
-  }
+  await releaseMarkerIfConsumed(capture, 'the decrements');
   await page.screenshot({ path: 'captures/after-mutations.png', fullPage: true });
 }
 
@@ -773,15 +816,7 @@ async function removeItem(page: Page, capture: Capture): Promise<void> {
   // delete control that produced no confirmation dialog, leaves the throwaway line on a
   // real household list — and clearing the marker there discards the only thing that
   // authorizes a later cleanup, stranding test data nothing is allowed to remove.
-  if (await isThrowawayLine(page, capture)) {
-    console.error(
-      '\n⛔ The marked line is still on the list — the removal did not take effect.\n' +
-        '   Keeping the ownership marker so `remove` can be run again.',
-    );
-    process.exitCode = 1;
-  } else {
-    await clearThrowawayMarker();
-  }
+  await releaseMarkerIfConsumed(capture, 'the removal');
 
   console.log('\n=== calls provoked by removal ===');
   for (const call of capture.since()) {

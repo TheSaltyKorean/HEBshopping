@@ -277,12 +277,14 @@ function parseWeightPhrase(raw: readonly string[]): { pounds: number; rest: stri
   let pounds = fraction ?? numeric ?? 1;
   if (fraction !== undefined || numeric !== undefined) index += 1;
 
-  // "a quarter of a pound of turkey" / "half of a pound of ham" — a bare leading fraction
-  // (no preceding number) can itself be followed by "of a" before the unit. Without skipping
-  // it here, "of" is read as the unit's own `of` one token early, "a pound of turkey" is left
-  // as the description, and the whole phrase falls through to a plain count-and-query parse
-  // that drops the weight and adds a counter product at its default size instead.
-  if (fraction !== undefined && raw[index] === 'of') {
+  // "a quarter of a pound of turkey" / "half of a pound of ham" / "1/2 of a pound of turkey" —
+  // a bare leading fraction (no preceding whole number), whether spelled as a word or written
+  // as "1/2" or "0.5", can itself be followed by "of a" before the unit. Without skipping it
+  // here, "of" is read as the unit's own `of` one token early, "a pound of turkey" is left as
+  // the description, and the whole phrase falls through to a plain count-and-query parse that
+  // drops the weight and adds a counter product at its default size instead.
+  const isNumericFraction = fractionMatch !== null || (numeric !== undefined && numeric > 0 && numeric < 1);
+  if ((fraction !== undefined || isNumericFraction) && raw[index] === 'of') {
     index += 1;
     skipArticles();
   }

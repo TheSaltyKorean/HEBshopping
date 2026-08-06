@@ -487,7 +487,7 @@ describe('a definitive weight refusal must not invite a retry', () => {
       addItem: vi.fn(async () => {
         throw new HebError('UPSTREAM_ERROR', 'HEB refused the requested weight.', {
           retryable: false,
-          details: { rejected: true },
+          details: { rejected: true, attempted: 'change the weight' },
         });
       }),
     });

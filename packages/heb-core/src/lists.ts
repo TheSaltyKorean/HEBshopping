@@ -656,8 +656,14 @@ export class HebListOps implements ListOps {
         assertMutationSucceeded(data.addShoppingListItemsV2, 'add the item');
         this.cachedList = undefined;
 
-        const seen = toHebList(data.addShoppingListItemsV2).items.find(
-          (item) => item.lineId === line.lineId,
+        // A household member can remove the line between two additive calls; the next add
+        // then recreates it under a new lineId. Matching on lineId alone would miss that row
+        // and fall back to fabricating another unit on the now-deleted line, so match on the
+        // product (or free-text) identity instead — whichever line this add actually landed
+        // on carries the same one.
+        const items = toHebList(data.addShoppingListItemsV2).items;
+        const seen = items.find((item) =>
+          line.product !== undefined ? item.product?.id === line.product.id : item.text === line.text,
         );
         // Trust the response where it has one, and fall back to counting our own unit —
         // never to a number computed from before this call.
@@ -1176,9 +1182,12 @@ function assertMutationSucceeded(
 
   // `rejected` marks this as a *definitive* refusal rather than a lost response. Callers
   // reconcile indeterminate failures by re-reading; a refusal has nothing to reconcile.
+  // `attempted` rides along so a surface can word the refusal for what was actually being
+  // done — "would not set that amount" only makes sense for a weight/quantity change, not
+  // for an add or a remove, which set no amount at all.
   throw new HebError('UPSTREAM_ERROR', `HEB refused to ${attempted}.`, {
     retryable: false,
-    details: { returned: payload?.__typename ?? 'null', rejected: true },
+    details: { returned: payload?.__typename ?? 'null', rejected: true, attempted },
   });
 }
 

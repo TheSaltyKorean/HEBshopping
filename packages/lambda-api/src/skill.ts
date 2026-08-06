@@ -615,10 +615,15 @@ function errorHandler(): ErrorHandler {
         // and said no. The generic UPSTREAM_ERROR copy invites a retry that will refuse the
         // same way again.
         if (error.details?.['rejected'] === true) {
-          return input.responseBuilder
-            .speak('H-E-B would not set that amount. Please check the quantity in the H-E-B app.')
-            .withShouldEndSession(true)
-            .getResponse();
+          // Only a weight/quantity update is actually "setting an amount" — an initial add
+          // wrote nothing, and a removal targets a line that still exists, so those get
+          // wording that matches what was actually attempted.
+          const attempted = error.details['attempted'];
+          const speech =
+            attempted === 'change the weight' || attempted === 'change the quantity'
+              ? 'H-E-B would not set that amount. Please check the quantity in the H-E-B app.'
+              : 'H-E-B would not make that change. Please check your list in the H-E-B app.';
+          return input.responseBuilder.speak(speech).withShouldEndSession(true).getResponse();
         }
 
         return input.responseBuilder

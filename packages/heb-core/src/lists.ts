@@ -740,7 +740,21 @@ export class HebListOps implements ListOps {
           // additive calls and this mutation recreated it — the recreated line holds one unit,
           // not the old quantity plus one.
           this.cachedList = undefined;
-          seen = (await this.getList(listId).catch(() => null))?.items.find(matches);
+          const relist = await this.getList(listId).catch(() => undefined);
+          // A failed re-read is not proof the mutation only added one unit — it is simply
+          // unknown. Falling through to `line.quantity + 1` here would fabricate the old
+          // total plus one, which is exactly wrong if a household member removed the old line
+          // and this mutation recreated it at quantity 1: subsequent units then chase a stale
+          // ceiling and report a total the list never held. Report indeterminate instead, the
+          // same as every other point this call cannot confirm its own write.
+          if (relist === undefined) {
+            throw new HebError(
+              'UPSTREAM_ERROR',
+              `Added ${line.text}, but the amount is not confirmed — a required re-read failed.`,
+              { retryable: false, details: { partialAdd: true, indeterminate: true } },
+            );
+          }
+          seen = relist.items.find(matches);
         }
         // Trust the response (or the re-read) where it has one, and fall back to counting our
         // own unit only when neither is available — never to a number computed from before

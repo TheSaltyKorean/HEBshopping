@@ -131,6 +131,10 @@ const MEASURE_WORDS = new Set([
   // toilet paper" is one product, not two. Same shape as "percent" and "pack" — the number
   // is part of what the product *is*, not how many are wanted.
   'ply',
+  // "wick" and "blade" describe a candle's or razor's style, not how many are wanted: "three
+  // wick candle" is one candle with three wicks, "five blade razor" is one razor with five
+  // blades — same shape as "ply".
+  'wick', 'blade',
   // Composition words — see `COMPOSITION_WORDS` below for why these are singled out.
   'cheese', 'layer', 'bean', 'meat',
 ]);
@@ -250,8 +254,25 @@ export interface SpokenRequest {
   weightRefused?: number;
 }
 
-/** Units that mean pounds. Ounces are deliberately absent — see `parseWeightPhrase`. */
+/** Units that mean pounds. */
 const POUND_WORDS = new Set(['pound', 'pounds', 'lb', 'lbs']);
+
+/**
+ * Units that mean a fraction of a pound, converted on the spot so "six ounces of turkey"
+ * lands on the same weight-add path as "half pound of turkey" — see `parseWeightPhrase`.
+ *
+ * Leaving these unit words unhandled used to fall through to the count parser, which reads
+ * `ounces`/`grams` as a `MEASURE_WORDS` descriptor ("two percent milk" style) rather than an
+ * amount: "six ounces of sliced turkey" became a plain search for "six ounces sliced turkey",
+ * and confirming a counter-product candidate silently added it at H-E-B's default weight —
+ * the six ounces asked for never made it into the mutation. Converting here, so the request
+ * reaches `adjustWeight`'s existing quarter-pound snapping the same way a pound request does,
+ * is safer than that silent drop.
+ */
+const SUB_POUND_UNITS: Readonly<Record<string, number>> = {
+  ounce: 1 / 16, ounces: 1 / 16, oz: 1 / 16,
+  gram: 1 / 453.59237, grams: 1 / 453.59237, g: 1 / 453.59237,
+};
 
 /**
  * Spoken fractions of a pound. A quarter is H-E-B's own smallest deli increment. Plural forms
@@ -293,9 +314,11 @@ function readFractionToken(token: string): number | undefined {
  * as much as "1.5 lb" does, and H-E-B really does sell half-pound patties. "Pound cake"
  * survives on the same rule — no `of` follows, so it stays in the query.
  *
- * Ounces are not handled. H-E-B's ladder is in quarter-pound steps, so an ounce request
- * cannot be honoured precisely, and silently rounding "six ounces" to half a pound is a
- * worse answer than searching for it as written.
+ * Ounces and grams are converted to pounds (see `SUB_POUND_UNITS`) and snapped to H-E-B's
+ * quarter-pound ladder the same way an honest pound request is. That rounding is imprecise,
+ * but it is a better answer than the alternative: leaving the unit unhandled falls through to
+ * the count parser, which reads it as a product descriptor and can confirm a counter-product
+ * candidate at H-E-B's default weight — silently dropping the amount altogether.
  *
  * Returns null when the phrase is not a weight request, leaving the caller's normal
  * count-and-query parse untouched.
@@ -433,7 +456,10 @@ function parseWeightPhrase(raw: readonly string[]): { pounds: number; rest: stri
   readAndAHalf();
 
   skipArticles();
-  if (index >= raw.length || !POUND_WORDS.has(raw[index]!)) return null;
+  const unit = raw[index];
+  const poundsPerUnit = unit === undefined ? undefined : POUND_WORDS.has(unit) ? 1 : SUB_POUND_UNITS[unit];
+  if (poundsPerUnit === undefined) return null;
+  pounds *= poundsPerUnit;
   index += 1;
 
   // "a pound and a half of turkey" — same fraction, on the other side of the unit.

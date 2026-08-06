@@ -121,7 +121,10 @@ function committableFiles(): string[] {
 /** Paths git has staged, i.e. the ones whose *index* content is what gets committed. */
 function stagedPaths(): Set<string> {
   try {
-    const output = execFileSync('git', ['diff', '--cached', '--name-only', '--diff-filter=ACMR'], {
+    // ACMR alone misses type changes (`T`): a tracked symlink staged as a regular file, or
+    // vice versa, carries whatever content is in the new staged blob and is exactly the kind
+    // of path this scanner exists to read from the index rather than the worktree.
+    const output = execFileSync('git', ['diff', '--cached', '--name-only', '--diff-filter=ACMRT'], {
       encoding: 'utf8',
     });
     return new Set(output.split('\n').filter(Boolean));

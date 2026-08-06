@@ -118,12 +118,33 @@ function guardedListOps(): HebListOps {
         );
         process.exitCode = 1;
       } else if (result.status === 'added') {
-        if (result.item.quantity === 1) createdLines.add(result.item.lineId);
+        // `added` means "no line in the opening snapshot", not "this call created it whole".
+        // If another household member creates or fills the same line to its ceiling between
+        // the snapshot and this write, HEB returns the unchanged ceiling line under `added`
+        // just the same, and the raw quantity is exactly as unprovable here as it is for
+        // `already_present` at the same ceiling: `quantityRequested` bounds our contribution
+        // from one side when present, and a ceiling hit without it makes the split
+        // unprovable, so it is left for manual reconciliation instead of risking cleanup that
+        // discards someone else's units.
+        const atCeiling =
+          result.item.maximumQuantity !== undefined &&
+          result.item.quantity >= result.item.maximumQuantity;
+        if (atCeiling && result.quantityRequested === undefined) {
+          console.error(
+            `\n⚠ "${result.item.text}" reads ${result.item.quantity}, its own ceiling, and ` +
+              'this run cannot prove which unit is its own. Reconcile by hand.',
+          );
+          process.exitCode = 1;
+        } else if (result.item.quantity === 1) createdLines.add(result.item.lineId);
         else if (!raisedQuantities.has(result.item.lineId)) {
+          const provenContribution =
+            result.quantityRequested === undefined
+              ? contributed
+              : Math.max(0, contributed - Math.max(0, result.quantityRequested - result.item.quantity));
           raisedQuantities.set(result.item.lineId, {
-            previous: result.item.quantity - contributed,
+            previous: result.item.quantity - provenContribution,
             produced: result.item.quantity,
-            contributed,
+            contributed: provenContribution,
           });
         }
       } else if (result.status === 'already_present') {

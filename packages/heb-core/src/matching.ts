@@ -440,15 +440,21 @@ export function parseSpokenRequest(text: string): SpokenRequest {
     return { quantity: 1, query: weighed.rest.join(' '), weight: weighed.pounds };
   }
 
-  // "A 3 Musketeers bar" is one bar. The article is filtered as filler a line later, which
-  // makes that phrase indistinguishable from "3 Musketeers bars" — and the brand cannot be
-  // enumerated, since numeric product names are open-ended. An article immediately before
-  // a *digit* is therefore treated as a singular marker.
+  // "A 3 Musketeers bar" is one bar, and so is "an Eight O'Clock coffee" — Alexa transcribes
+  // the same brand as a digit or spelled out depending on the utterance. The article is
+  // filtered as filler a line later, which makes either phrasing indistinguishable from "3
+  // Musketeers bars" / "eight o'clock coffees" — and the brand cannot be enumerated, since
+  // numeric product names are open-ended. An article immediately before a digit *or* an
+  // ordinary spelled-out number word is therefore treated as a singular marker.
   //
-  // Only before a digit: "a couple of lemons" and "a dozen eggs" are ordinary quantity
-  // phrases, and nobody says "a three Musketeers".
+  // Not "couple" or "few": those are quantity words in their own right ("a couple of
+  // lemons"), never the start of a number-led brand name, so they must stay counts.
   const article = raw[0] === 'a' || raw[0] === 'an';
-  const singular = article && raw[1] !== undefined && /^\d/.test(raw[1]);
+  const nextWord = raw[1];
+  const singular =
+    article &&
+    nextWord !== undefined &&
+    (/^\d/.test(nextWord) || (nextWord in NUMBER_WORDS && nextWord !== 'couple' && nextWord !== 'few'));
 
   const tokens = raw.filter((token) => !FILLER.has(token));
   if (tokens.length === 0) return { quantity: 1, query: '' };

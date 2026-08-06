@@ -163,6 +163,16 @@ let findings = 0;
 const staged = stagedPaths();
 
 for (const path of committableFiles()) {
+  // The path itself is committed content too — a fixture named for a real line UUID or an
+  // email address leaks the identifier even when the file's contents are clean.
+  for (const rule of RULES) {
+    for (const match of path.matchAll(rule.pattern)) {
+      console.error(`✗ ${path}  [${rule.name} in path] ${match[0].length} chars, not shown`);
+      console.error(`    ${rule.note}`);
+      findings += 1;
+    }
+  }
+
   const content = contentToScan(path, staged);
   if (content === null) {
     unscanned.push(path);

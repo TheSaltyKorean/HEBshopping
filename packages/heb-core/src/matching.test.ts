@@ -588,9 +588,19 @@ describe('articles and irregular plurals', () => {
   });
 
   it('still reads "a couple of lemons" as two', () => {
-    // Only an article directly before a *digit* marks the singular; nobody says
-    // "a three Musketeers".
+    // "couple" and "few" are quantity words in their own right and must stay counts even
+    // though they are also article-adjacent number words.
     expect(parseSpokenRequest('a couple of lemons')).toEqual({ quantity: 2, query: 'lemons' });
+  });
+
+  it('reads "an eight o\'clock coffee" as one, not eight', () => {
+    // "Eight O'Clock" is not in NUMBER_LED_BRANDS (it can't be enumerated), so without
+    // treating the article + spelled-out number as a singular marker this parsed as
+    // quantity 8 with query "o clock coffee" — a silent 8x overadd.
+    expect(parseSpokenRequest("an eight o'clock coffee")).toEqual({
+      quantity: 1,
+      query: 'eight o clock coffee',
+    });
   });
 
   it.each([

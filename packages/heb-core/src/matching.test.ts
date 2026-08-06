@@ -142,6 +142,16 @@ describe('parseSpokenRequest', () => {
       expect(parseSpokenRequest('two avocados').quantityRefused).toBeUndefined();
       expect(parseSpokenRequest('milk').quantityRefused).toBeUndefined();
     });
+
+    // `addItem` truncates a fractional quantity with `Math.trunc` and performs a live add
+    // at the reduced amount, confirming a count nobody asked for. It must be refused before
+    // any mutation, the same way an over-ceiling count is.
+    it('refuses a fractional count instead of truncating it', () => {
+      const parsed = parseSpokenRequest('1.5 bananas');
+      expect(parsed.quantity).toBe(1);
+      expect(parsed.quantityRefused).toBe(1.5);
+      expect(parsed.query).toBe('1.5 bananas');
+    });
   });
 
   describe('weights above the configured ceiling', () => {
@@ -566,6 +576,15 @@ describe('articles and irregular plurals', () => {
     // The article is filler, so without special handling this is indistinguishable from
     // "3 Musketeers bars" — and numeric brand names cannot be enumerated.
     expect(parseSpokenRequest('a 3 musketeers bar').quantity).toBe(1);
+  });
+
+  it('reads "a three musketeers bar" (spelled-out number) as one bar', () => {
+    // Alexa transcribes "3 Musketeers" as often in words as in digits. Without the spoken
+    // form in NUMBER_LED_BRANDS, this parsed as quantity 3 with query "musketeers bar".
+    expect(parseSpokenRequest('a three musketeers bar')).toEqual({
+      quantity: 1,
+      query: 'three musketeers bar',
+    });
   });
 
   it('still reads "a couple of lemons" as two', () => {

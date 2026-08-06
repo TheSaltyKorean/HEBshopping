@@ -155,6 +155,7 @@ const NUMBER_LED_BRANDS: ReadonlyArray<readonly string[]> = [
   ['seven', 'up'],
   ['five', 'guys'],
   ['three', 'bridges'],
+  ['three', 'musketeers'],
 ];
 
 export function tokenize(text: string): string[] {
@@ -558,6 +559,10 @@ export function parseSpokenRequest(text: string): SpokenRequest {
     // act on — and treating it as one issues that many live mutations. It stays in the
     // query instead, so the search sees the words that were actually said.
     numeric <= MAX_QUANTITY &&
+    // A fractional count ("1.5 bananas") is not a count this system can act on either —
+    // `addItem` truncates it and performs a live add at the reduced amount, confirming a
+    // quantity nobody asked for. It is refused below instead of silently rounded.
+    Number.isInteger(numeric) &&
     tokens.length > consumed &&
     !(second !== undefined && MEASURE_WORDS.has(second) && !multiplies);
 
@@ -570,7 +575,7 @@ export function parseSpokenRequest(text: string): SpokenRequest {
     !singular &&
     !startsBrand &&
     numeric !== undefined &&
-    numeric > MAX_QUANTITY &&
+    (numeric > MAX_QUANTITY || !Number.isInteger(numeric)) &&
     tokens.length > consumed &&
     !(second !== undefined && MEASURE_WORDS.has(second) && !multiplies)
   ) {
@@ -587,7 +592,7 @@ export function parseSpokenRequest(text: string): SpokenRequest {
  * Loose equality so "banana" matches "bananas" without a real stemmer, and so a token
  * matches its cross-language or alternate-spelling twin ("verde" ≡ "green").
  */
-function tokensMatch(queryToken: string, productToken: string): boolean {
+export function tokensMatch(queryToken: string, productToken: string): boolean {
   const query = canonical(queryToken);
   const product = canonical(productToken);
   if (query === product) return true;

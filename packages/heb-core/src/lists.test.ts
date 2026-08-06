@@ -347,6 +347,14 @@ describe('the head token gates every confident removal', () => {
 
     expect(ranked[0]?.confident).toBe(true);
   });
+
+  it('does not delete "H-E-B Chocolate Milk" for "milk chocolate"', async () => {
+    // Token membership alone passes: the spoken head "chocolate" appears in the line. But
+    // "milk chocolate" and "chocolate milk" name different things, and the line's own head
+    // is "milk" — the two heads have to agree before the shortcut authorizes a deletion.
+    const ranked = await opsWithList('H-E-B Chocolate Milk, 1 gal').rankLines('milk chocolate');
+    expect(ranked[0]?.confident ?? false).toBe(false);
+  });
 });
 
 describe('malformed reads are errors, not empty results', () => {

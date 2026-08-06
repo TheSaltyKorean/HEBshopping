@@ -26,6 +26,7 @@ import {
   matchProducts,
   meaningfulTokens,
   mergeCandidates,
+  tokensMatch,
 } from './matching.js';
 import type {
   AddItemInput,
@@ -1079,7 +1080,28 @@ export class HebListOps implements ListOps {
     // cake" covers three of four tokens of "organic dark chocolate milk" and separates
     // cleanly from an unrelated second line, so ordinary confidence deletes the milk — for
     // a request whose category word was never on the list at all.
-    const namesTheLine = head !== undefined && coverage([head], match.product) === 1;
+    //
+    // Membership alone is not enough either: "milk chocolate" against a line named
+    // "H-E-B Chocolate Milk" has every spoken token present, so plain coverage is
+    // satisfied — but the phrase names a different product, in the opposite order.
+    // Requiring the spoken words to appear on the line *in the order they were said*
+    // keeps the shortcut from authorizing a removal for a reordering of the line's words.
+    const productTokens = meaningfulTokens(match.product.name);
+    const isOrderedSubsequence = (needle: readonly string[], haystack: readonly string[]): boolean => {
+      let cursor = 0;
+      for (const token of needle) {
+        const found = haystack.findIndex(
+          (candidate, index) => index >= cursor && tokensMatch(token, candidate),
+        );
+        if (found === -1) return false;
+        cursor = found + 1;
+      }
+      return true;
+    };
+    const namesTheLine =
+      head !== undefined &&
+      coverage([head], match.product) === 1 &&
+      isOrderedSubsequence(spokenTokens, productTokens);
 
     const soleLine =
       list.items.length === 1 && coverage(spokenTokens, match.product) >= SOLE_LINE_COVERAGE;

@@ -95,10 +95,8 @@ const NUMBER_WORDS: Readonly<Record<string, number>> = {
 };
 
 /**
- * The digits that follow "twenty" in a compound weight ("twenty one pounds"). Only
- * "twenty" needs a compound at all — it is `NUMBER_WORDS`' own ceiling value, so it is the
- * only tens word a spoken weight can be built on top of and still be worth reading; see
- * `parseWeightPhrase`.
+ * The digits that follow a tens word in a compound amount ("twenty one pounds", "thirty
+ * five bananas"). See `parseWeightPhrase` and `parseSpokenRequest`.
  */
 const ONES_WORDS: Readonly<Record<string, number>> = {
   one: 1, two: 2, three: 3, four: 4, five: 5, six: 6, seven: 7, eight: 8, nine: 9,
@@ -270,11 +268,11 @@ function parseWeightPhrase(raw: readonly string[]): { pounds: number; rest: stri
   let pounds = fraction ?? numeric ?? 1;
   if (fraction !== undefined || numeric !== undefined) index += 1;
 
-  // "twenty one pounds" — NUMBER_WORDS stops at twenty, its own ceiling value, so a
-  // compound above it ("twenty one" through "twenty nine") is two tokens. Reading only the
-  // first leaves it at 20, under MAX_WEIGHT_LB, and lets an over-ceiling weight through as
-  // if it had never been refused.
-  if (numeric === 20) {
+  // "twenty one pounds" / "thirty five pounds" — every tens word from twenty through ninety
+  // can be followed by a ones word to build a compound. Reading only the bare tens word still
+  // refuses the weight (all of them exceed MAX_WEIGHT_LB), but misreports the spoken amount
+  // in the refusal message unless the ones word is consumed too.
+  if (numeric !== undefined && numeric >= 20 && numeric % 10 === 0) {
     const ones = ONES_WORDS[raw[index] ?? ''];
     if (ones !== undefined) {
       pounds += ones;
@@ -362,12 +360,13 @@ export function parseSpokenRequest(text: string): SpokenRequest {
   const first = tokens[0]!;
   let numeric = NUMBER_WORDS[first] ?? (/^\d+$/.test(first) ? Number(first) : undefined);
 
-  // "twenty one bananas" — NUMBER_WORDS stops at twenty, its own ceiling value, so a
-  // compound above it ("twenty one" through "twenty nine") is two tokens. Reading only the
-  // first leaves quantity at 20, under MAX_QUANTITY, and lets an over-ceiling count through
-  // as if it had never been refused — the same trap `parseWeightPhrase` guards against.
+  // "twenty one bananas" / "thirty five bananas" — every tens word from twenty through ninety
+  // can be followed by a ones word to build a compound. Reading only the bare tens word still
+  // refuses the count (all of them exceed MAX_QUANTITY), but misreports the spoken amount in
+  // the refusal message unless the ones word is consumed too — the same trap
+  // `parseWeightPhrase` guards against.
   let consumed = 1;
-  if (numeric === 20) {
+  if (numeric !== undefined && numeric >= 20 && numeric % 10 === 0) {
     const ones = ONES_WORDS[tokens[1] ?? ''];
     if (ones !== undefined) {
       numeric += ones;

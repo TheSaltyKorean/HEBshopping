@@ -230,7 +230,32 @@ export class HebListOps implements ListOps {
     // the expiry alarm all at once.
     assertReadableList(data.getShoppingListV2, 'ShoppingListV2', 'read the list');
 
-    const list = toHebList(data.getShoppingListV2);
+    const payload = data.getShoppingListV2;
+    const items = payload.itemPage?.items ?? [];
+
+    // H-E-B keeps checked-off rows on the list, and `totalItemCount` counts them — so a
+    // list with plenty of history can exceed `LIST_PAGE_SIZE` while holding far fewer than
+    // 500 still-needed lines, and those needed lines can land on a later page than the
+    // history that precedes them in CATEGORY order. Leaving them unfetched silently drops
+    // real groceries from reads, removals, and add's existing-line check alike. Rare in
+    // practice — most lists fit one page — so this only costs extra round trips on the
+    // lists that actually need them.
+    if (payload.totalItemCount !== undefined && items.length < payload.totalItemCount) {
+      let page = 1;
+      while (items.length < payload.totalItemCount) {
+        const more = await this.client.execute<{
+          getShoppingListV2: HebListPayload & { __typename?: string };
+        }>(getShoppingListDocument(id, page));
+        assertReadableList(more.getShoppingListV2, 'ShoppingListV2', 'read the list');
+        const nextItems = more.getShoppingListV2.itemPage?.items ?? [];
+        if (nextItems.length === 0) break;
+        items.push(...nextItems);
+        page += 1;
+      }
+      payload.itemPage = { items };
+    }
+
+    const list = toHebList(payload);
     this.cachedList = list;
     if (list.storeId !== null) {
       this.cachedStoreId = Number(list.storeId);

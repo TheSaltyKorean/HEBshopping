@@ -101,6 +101,44 @@ describe('toHebList — checked lines', () => {
   });
 });
 
+describe('toHebList — pagination', () => {
+  it('fetches later pages when totalItemCount exceeds one page', async () => {
+    // A list with plenty of checked-off history can hold more rows than one page returns,
+    // pushing still-needed lines onto later pages. Without following `totalItemCount`, they
+    // are silently dropped from the read.
+    const pageOf = (id: string, name: string) => ({
+      __typename: 'ProductShoppingListItemV2',
+      id,
+      quantity: 1,
+      product: { __typename: 'Product', id: `${id}-product`, fullDisplayName: name },
+    });
+
+    let calls = 0;
+    const fetchImpl = (async () => {
+      calls += 1;
+      const items = calls === 1 ? [pageOf('line-0', 'H-E-B Milk, 1 gal')] : [pageOf('line-1', 'H-E-B Eggs, dozen')];
+      const payload = {
+        __typename: 'ShoppingListV2',
+        id: 'list-1',
+        name: 'Shopping',
+        totalItemCount: 2,
+        fulfillment: { store: { storeNumber: 1 } },
+        itemPage: { items },
+      };
+      return new Response(JSON.stringify({ data: { getShoppingListV2: payload } }), { status: 200 });
+    }) as unknown as typeof fetch;
+
+    const ops = new HebListOps({
+      client: new HebClient({ store: storeWith(), fetchImpl, now: () => NOW, minDelayMs: 0 }),
+      listId: 'list-1',
+    });
+
+    const list = await ops.getList();
+    expect(calls).toBe(2);
+    expect(list.items.map((item) => item.text)).toEqual(['H-E-B Milk, 1 gal', 'H-E-B Eggs, dozen']);
+  });
+});
+
 describe('rankLines — the sole-line shortcut', () => {
   it('is confident when the request describes the only line', () => {
     // A one-item list is a closed set: asking a confirmation here is pointless.

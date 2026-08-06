@@ -89,6 +89,28 @@ describe('parseSpokenRequest', () => {
     });
   });
 
+  it('does NOT read "four cheese pizza" as four pizzas', () => {
+    // "cheese" here names the pizza's composition, and "pizza" — the noun right after it —
+    // is singular, the tell that this is one product, not a count.
+    expect(parseSpokenRequest('four cheese pizza')).toEqual({
+      quantity: 1,
+      query: 'four cheese pizza',
+    });
+  });
+
+  it('does NOT read "seven layer dip" as seven dips', () => {
+    expect(parseSpokenRequest('seven layer dip')).toEqual({
+      quantity: 1,
+      query: 'seven layer dip',
+    });
+  });
+
+  it('still reads "two cheese sticks" as two, since "sticks" is plural', () => {
+    // Unlike "four cheese pizza", the noun after "cheese" is plural — an honest count of
+    // string cheese sticks, not a composition description.
+    expect(parseSpokenRequest('two cheese sticks')).toEqual({ quantity: 2, query: 'cheese sticks' });
+  });
+
   // A package word after a number can be either reading, and both are common:
   //   "six pack soda"      — the number names the package        → one
   //   "two dozen eggs"     — the number counts packages          → two
@@ -215,6 +237,19 @@ describe('parseSpokenRequest', () => {
       expect(parsed.quantity).toBe(1);
       expect(parsed.quantityRefused).toBe(1.75);
       expect(parsed.query).toBe('one three quarters bananas');
+    });
+
+    it('refuses a bare leading spelled fraction ("half of a banana")', () => {
+      const parsed = parseSpokenRequest('half of a banana');
+      expect(parsed.quantity).toBe(1);
+      expect(parsed.quantityRefused).toBe(0.5);
+      expect(parsed.query).toBe('half banana');
+    });
+
+    it('does NOT treat a product that starts with "half" as a fraction', () => {
+      // "half and half" is a product name — no "of" follows "half" — and must not be
+      // misread as a request for half a unit of something else.
+      expect(parseSpokenRequest('half and half')).toEqual({ quantity: 1, query: 'half half' });
     });
   });
 
@@ -703,6 +738,14 @@ describe('articles and irregular plurals', () => {
     // "couple" and "few" are quantity words in their own right and must stay counts even
     // though they are also article-adjacent number words.
     expect(parseSpokenRequest('a couple of lemons')).toEqual({ quantity: 2, query: 'lemons' });
+  });
+
+  it('reads "a pair of avocados" as two', () => {
+    expect(parseSpokenRequest('a pair of avocados')).toEqual({ quantity: 2, query: 'avocados' });
+  });
+
+  it('reads "both avocados" as two', () => {
+    expect(parseSpokenRequest('both avocados')).toEqual({ quantity: 2, query: 'avocados' });
   });
 
   it('reads "an eight o\'clock coffee" as one, not eight', () => {

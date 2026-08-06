@@ -128,13 +128,23 @@ function guardedListOps(): HebListOps {
         }
       } else if (result.status === 'already_present') {
         // `already_present` does not mean this call wrote anything — a line already at its
-        // ceiling is reported `already_present` with the mutation never issued. The nominal
-        // `contributed` above assumes the write landed; the only proof it did is the line
-        // actually reading higher than the opening snapshot. Restoring on an unproven
-        // contribution subtracts a unit this run never added, taking a household member's.
+        // ceiling is reported `already_present` with the mutation never issued. The raw diff
+        // against the opening snapshot is not proof either: a household member incrementing
+        // the same line between that snapshot and this call's write inflates the diff past
+        // whatever this run actually contributed, and attributing the whole diff to this run
+        // restores the line to a value that discards their unit too. `quantityRequested`,
+        // when present, is the ceiling's own accounting of how much of *our* request landed —
+        // independent of anyone else's concurrent edits — so it bounds the claim from one
+        // side while the raw diff bounds it from the other; only the smaller of the two is
+        // proven to be this run's.
         const previous = before.get(result.item.lineId);
-        const actualContributed =
-          previous === undefined ? 0 : result.item.quantity - previous;
+        const rawDelta = previous === undefined ? 0 : result.item.quantity - previous;
+        const shortfall =
+          result.quantityRequested === undefined
+            ? 0
+            : Math.max(0, result.quantityRequested - result.item.quantity);
+        const provenContribution = Math.max(0, contributed - shortfall);
+        const actualContributed = Math.min(rawDelta, provenContribution);
         if (previous !== undefined && actualContributed > 0 && !raisedQuantities.has(result.item.lineId)) {
           raisedQuantities.set(result.item.lineId, {
             previous,

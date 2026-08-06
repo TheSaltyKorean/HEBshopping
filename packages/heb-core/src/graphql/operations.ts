@@ -62,8 +62,8 @@ const WEIGHT_FIELDS = 'pricedByWeight SKUs { weightSelectionIncrements }';
 /** Sort applied to every list read. CATEGORY groups items the way the HEB app does. */
 const PAGE = '{ sort: CATEGORY, sortDirection: ASC }';
 
-/** Read a whole list in one call; HEB's own client uses 500. */
-const LIST_PAGE_SIZE = 500;
+/** Read a whole list in one call when it fits; HEB's own client also uses 500. */
+export const LIST_PAGE_SIZE = 500;
 
 /** Matches the site's own page size so relevance ranking behaves identically. */
 export const SEARCH_PAGE_SIZE = 60;
@@ -143,13 +143,18 @@ export function getShoppingListsDocument(): GraphqlDocument {
   };
 }
 
-export function getShoppingListDocument(listId: string): GraphqlDocument {
+/**
+ * @param page Zero-based page index. H-E-B's own client pages at `LIST_PAGE_SIZE`, and a
+ * list past that many rows (checked-off history counts toward it, same as active lines)
+ * needs later pages fetched explicitly — see `fetchList`.
+ */
+export function getShoppingListDocument(listId: string, page = 0): GraphqlDocument {
   return {
     operationName: 'HebGetShoppingList',
     query: `query HebGetShoppingList {
       getShoppingListV2(input: {
         id: ${str(listId)}
-        page: { page: 0, size: ${LIST_PAGE_SIZE}, sort: CATEGORY, sortDirection: ASC }
+        page: { page: ${page}, size: ${LIST_PAGE_SIZE}, sort: CATEGORY, sortDirection: ASC }
       }) { __typename ... on ShoppingListV2 { ${LIST_FIELDS} } }
     }`,
   };

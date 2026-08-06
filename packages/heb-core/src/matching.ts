@@ -90,7 +90,7 @@ const NUMBER_WORDS: Readonly<Record<string, number>> = {
   // unmatched query text) is enough to route "thirty bananas" through the existing
   // refusal fields instead of silently searching for "thirty bananas" as a product name.
   thirty: 30, forty: 40, fifty: 50, sixty: 60, seventy: 70, eighty: 80, ninety: 90,
-  couple: 2, few: 3,
+  couple: 2, few: 3, pair: 2, both: 2,
   // NOT "dozen". "A dozen eggs" is one carton of twelve, not twelve cartons — the same
   // trap as "two percent milk", and the product name already carries the count.
 };
@@ -131,6 +131,11 @@ const MEASURE_WORDS = new Set([
   // toilet paper" is one product, not two. Same shape as "percent" and "pack" — the number
   // is part of what the product *is*, not how many are wanted.
   'ply',
+  // "cheese" and "layer" name a singular product's composition, not a count of products:
+  // "four cheese pizza" is one pizza made with four cheeses, and "seven layer dip" is one
+  // dip with seven layers — same shape as "two percent milk", where the number describes
+  // the product rather than how many are wanted.
+  'cheese', 'layer',
 ]);
 
 /**
@@ -464,8 +469,9 @@ export function parseSpokenRequest(text: string): SpokenRequest {
   // numeric product names are open-ended. An article immediately before a digit *or* an
   // ordinary spelled-out number word is therefore treated as a singular marker.
   //
-  // Not "couple" or "few": those are quantity words in their own right ("a couple of
-  // lemons"), never the start of a number-led brand name, so they must stay counts.
+  // Not "couple", "few", "pair", or "both": those are quantity words in their own right
+  // ("a couple of lemons", "a pair of avocados"), never the start of a number-led brand
+  // name, so they must stay counts.
   //
   // Not a scale word or a digit run at or above 100, either: no number-led brand in this
   // catalog opens with one ("3 Musketeers", "7 Up", "5 Guys" all use single-digit counts),
@@ -482,7 +488,11 @@ export function parseSpokenRequest(text: string): SpokenRequest {
     nextWord !== 'hundred' &&
     nextWord !== 'thousand' &&
     ((/^\d+$/.test(nextWord) && Number(nextWord) < 100) ||
-      (nextWord in NUMBER_WORDS && nextWord !== 'couple' && nextWord !== 'few'));
+      (nextWord in NUMBER_WORDS &&
+        nextWord !== 'couple' &&
+        nextWord !== 'few' &&
+        nextWord !== 'pair' &&
+        nextWord !== 'both'));
 
   const tokens = raw.filter((token) => !FILLER.has(token));
   if (tokens.length === 0) return { quantity: 1, query: '' };
@@ -498,10 +508,25 @@ export function parseSpokenRequest(text: string): SpokenRequest {
   // this, `numeric` stays undefined, "1/2" is left as query text, and the request resolves to
   // quantity 1 with a search for "1/2 bananas" instead of refusing the fractional count.
   const firstFractionMatch = /^(\d+)\/(\d+)$/.exec(first);
+  // A bare spelled fraction with no leading whole number ("half of a banana", "a quarter of
+  // a banana") — "of" and the article that would normally follow it are FILLER, already
+  // gone by the time `tokens` is built, so `first` is just "half"/"quarter"/"quarters"
+  // here. Reading `raw` directly (rather than `tokens`) to confirm "of" actually followed
+  // is required: without it, an ordinary product that happens to start with "half" — "Half
+  // & Half", "half and half" — would be misread as a fractional count too. Only the
+  // `fraction + of` form, the one this system cannot honour, is a count at all.
+  const firstIndexInRaw = (() => {
+    let index = 0;
+    while (index < raw.length && FILLER.has(raw[index]!)) index += 1;
+    return index;
+  })();
+  const isLeadingFractionPhrase =
+    FRACTION_WORDS[first] !== undefined && raw[firstIndexInRaw + 1] === 'of';
   let numeric =
     NUMBER_WORDS[first] ??
     (firstFractionMatch ? Number(firstFractionMatch[1]) / Number(firstFractionMatch[2]) : undefined) ??
-    (/^\d+(?:\.\d+)?$/.test(first) ? Number(first) : undefined);
+    (/^\d+(?:\.\d+)?$/.test(first) ? Number(first) : undefined) ??
+    (isLeadingFractionPhrase ? FRACTION_WORDS[first] : undefined);
 
   // "one hundred bananas" — "hundred" multiplies the digit word before it. Without this,
   // only "one" is read here, "hundred" stays in the query as ordinary text, and the request
@@ -620,6 +645,20 @@ export function parseSpokenRequest(text: string): SpokenRequest {
     (second === 'dozen' ||
       (PACKAGE_WORDS.has(second) && secondAt >= 0 && raw[secondAt + 1] === 'of'));
 
+  // "cheese" and "layer" only describe the product, rather than counting it, when the head
+  // noun right after them is singular: "four cheese pizza" is one pizza, "seven layer dip"
+  // is one dip — but "two cheese sticks" really is two sticks, and "sticks" being plural is
+  // exactly the tell. Every other `MEASURE_WORDS` entry ("percent", "pack", "ply", ...)
+  // describes the product regardless of what follows, so this check applies only to the two
+  // composition words that don't.
+  const third = tokens[consumed + 1];
+  const isMeasureWord =
+    second !== undefined &&
+    MEASURE_WORDS.has(second) &&
+    (second !== 'cheese' && second !== 'layer'
+      ? true
+      : third === undefined || !(third.length > 3 && third.endsWith('s') && !third.endsWith('ss')));
+
   const isCount =
     !singular &&
     !startsBrand &&
@@ -637,7 +676,7 @@ export function parseSpokenRequest(text: string): SpokenRequest {
     // quantity nobody asked for. It is refused below instead of silently rounded.
     Number.isInteger(numeric) &&
     tokens.length > consumed &&
-    !(second !== undefined && MEASURE_WORDS.has(second) && !multiplies);
+    !(isMeasureWord && !multiplies);
 
   if (isCount) {
     return { quantity: numeric!, query: tokens.slice(consumed).join(' ') };
@@ -650,7 +689,7 @@ export function parseSpokenRequest(text: string): SpokenRequest {
     numeric !== undefined &&
     (numeric > MAX_QUANTITY || !Number.isInteger(numeric)) &&
     tokens.length > consumed &&
-    !(second !== undefined && MEASURE_WORDS.has(second) && !multiplies)
+    !(isMeasureWord && !multiplies)
   ) {
     return { quantity: 1, query: tokens.join(' '), quantityRefused: numeric };
   }

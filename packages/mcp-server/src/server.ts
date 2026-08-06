@@ -65,6 +65,10 @@ function toErrorText(error: unknown): TextResult {
       'catalog is named in Spanish. If nothing matches, call heb_add_item again with ' +
       '`text` to put the request on the list as a plain written line, exactly as the ' +
       "H-E-B app's own \"Add … to list\" button does.",
+    // This is a refusal, not a missing-match — the request named a quantity of zero, and
+    // retrying with `text` would write a one-unit plain line, undoing the refusal. Do not
+    // offer that remedy here.
+    ZERO_COUNT: 'The request asks for zero, which is not something to add. Ask the user what amount they meant.',
     AMBIGUOUS_LIST_EMPTY:
       'This HEB account has no shopping lists at all. Tell the user to create one in the ' +
       'H-E-B app; nothing can be added until they do.',
@@ -83,7 +87,9 @@ function toErrorText(error: unknown): TextResult {
   const key =
     error.code === 'AMBIGUOUS_LIST' && error.details?.['listCount'] === 0
       ? 'AMBIGUOUS_LIST_EMPTY'
-      : error.code;
+      : error.code === 'PRODUCT_NOT_FOUND' && error.details?.['zeroCount'] === true
+        ? 'ZERO_COUNT'
+        : error.code;
 
   const extra = guidance[key];
 

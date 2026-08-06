@@ -131,6 +131,16 @@ describe('parseSpokenRequest', () => {
     });
   });
 
+  it('reads "two cheese pizzas for dinner" as two, since "pizzas" — not the trailing "dinner" — is the head noun', () => {
+    // "for dinner" trails the head noun rather than sitting between it and the composition
+    // word. "for" is filler already stripped from `tokens`, so a naive last-token read picks
+    // "dinner" as the head and treats this as one description instead of two pizzas.
+    expect(parseSpokenRequest('two cheese pizzas for dinner')).toEqual({
+      quantity: 2,
+      query: 'cheese pizzas dinner',
+    });
+  });
+
   // A package word after a number can be either reading, and both are common:
   //   "six pack soda"      — the number names the package        → one
   //   "two dozen eggs"     — the number counts packages          → two
@@ -273,6 +283,16 @@ describe('parseSpokenRequest', () => {
       const parsed = parseSpokenRequest('two kilograms of sliced turkey');
       expect(parsed.weight).toBeCloseTo(4.409, 2);
       expect(parsed.query).toBe('sliced turkey');
+    });
+
+    it('reads a spoken decimal weight ("one point five pounds")', () => {
+      // Alexa transcribes a spoken decimal as digit words joined by "point" rather than a
+      // numeral. Without reading "point five" here, "point" is left as an unmatched unit
+      // word and the whole phrase falls through to the count parser, which would confirm a
+      // counter product at H-E-B's default weight instead of the 1.5 lb actually requested.
+      const parsed = parseSpokenRequest('one point five pounds of turkey');
+      expect(parsed.weight).toBe(1.5);
+      expect(parsed.query).toBe('turkey');
     });
 
     it('does NOT treat a product that starts with "half" as a fraction', () => {

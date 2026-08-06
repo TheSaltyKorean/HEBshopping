@@ -586,8 +586,8 @@ describe('a confident zero-count match must not write', () => {
       listId: 'list-1',
     });
 
-    await expect(ops.addItem({ query: 'zero bananas' })).rejects.toSatisfy((error: unknown) =>
-      hasCode(error, 'PRODUCT_NOT_FOUND'),
+    await expect(ops.addItem({ query: 'zero bananas' })).rejects.toSatisfy(
+      (error: unknown) => hasCode(error, 'PRODUCT_NOT_FOUND') && error.details?.['zeroCount'] === true,
     );
   });
 });

@@ -346,6 +346,24 @@ function parseWeightPhrase(raw: readonly string[]): { pounds: number; rest: stri
   let pounds = fraction ?? numeric ?? 1;
   if (fraction !== undefined || numeric !== undefined) index += 1;
 
+  // "one point five pounds of turkey" — Alexa speaks a decimal weight as digit words joined
+  // by "point" rather than a numeral. Without reading it here, "point" is left as an
+  // unmatched unit word and the whole phrase falls through to a count-and-query parse that
+  // drops the weight and writes a counter product at H-E-B's default size instead of the
+  // 1.5 lb actually requested.
+  if (numeric !== undefined && raw[index] === 'point') {
+    const digits: number[] = [];
+    let cursor = index + 1;
+    while (cursor < raw.length && NUMBER_WORDS[raw[cursor]!] !== undefined && NUMBER_WORDS[raw[cursor]!]! <= 9) {
+      digits.push(NUMBER_WORDS[raw[cursor]!]!);
+      cursor += 1;
+    }
+    if (digits.length > 0) {
+      pounds = numeric + Number(`0.${digits.join('')}`);
+      index = cursor;
+    }
+  }
+
   // "a quarter of a pound of turkey" / "half of a pound of ham" / "1/2 of a pound of turkey" —
   // a bare leading fraction (no preceding whole number), whether spelled as a word or written
   // as "1/2" or "0.5", can itself be followed by "of a" before the unit. Without skipping it
@@ -728,12 +746,24 @@ export function parseSpokenRequest(text: string): SpokenRequest {
   // to that set rather than all of `MEASURE_WORDS`. Words ending in "us" (hummus, couscous)
   // are excluded from the plural heuristic since they are singular despite the trailing s.
   //
-  // The head noun is the *last* token, not the one immediately after the composition word —
-  // "four cheese Texas toast" has an adjective ("Texas") between "cheese" and the actual head
-  // noun "toast". Checking only the immediately following token reads "Texas" as the plural
-  // head and refuses/multiplies the request instead of treating "cheese" as a description of
-  // one product.
-  const headNoun = tokens.length > consumed + 1 ? tokens[tokens.length - 1] : undefined;
+  // The head noun is the last word of the noun phrase that starts right after the
+  // composition word, not simply the last token of the whole utterance — "four cheese Texas
+  // toast" has an adjective ("Texas") between "cheese" and the actual head noun "toast", so
+  // the noun phrase runs to the end. But "two cheese pizzas for dinner" has a trailing
+  // modifier ("for dinner") *after* the head noun, and "for" is filler already stripped from
+  // `tokens`, so reading the last token there picks "dinner" instead of "pizzas". Walking
+  // `raw` (which still has the filler) from the composition word to the next filler word, or
+  // to the end if none follows, finds the noun phrase's actual boundary in both cases.
+  let headEnd = raw.length;
+  if (secondAt >= 0) {
+    for (let i = secondAt + 1; i < raw.length; i += 1) {
+      if (FILLER.has(raw[i]!)) {
+        headEnd = i;
+        break;
+      }
+    }
+  }
+  const headNoun = secondAt >= 0 && headEnd > secondAt + 1 ? raw[headEnd - 1] : undefined;
   const isMeasureWord =
     second !== undefined &&
     MEASURE_WORDS.has(second) &&

@@ -463,7 +463,7 @@ export class HebListOps implements ListOps {
         !/\b(?:zero|0)\b/i.test(match.product.name)
       ) {
         throw new HebError('PRODUCT_NOT_FOUND', `"${input.query}" asks for zero.`, {
-          details: { query: input.query },
+          details: { query: input.query, zeroCount: true },
         });
       }
 

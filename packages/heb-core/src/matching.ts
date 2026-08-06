@@ -309,7 +309,7 @@ function parseWeightPhrase(raw: readonly string[]): { pounds: number; rest: stri
   // so no digit word precedes "hundred" here at all; treat the bare word as an implicit one,
   // the same way "a pound" above means one pound.
   const isBareHundred = numeric === undefined && fraction === undefined && first === 'hundred';
-  if (((numeric !== undefined && numeric >= 1 && numeric <= 9) || isBareHundred) && raw[index] === 'hundred') {
+  if (((numeric !== undefined && numeric >= 1) || isBareHundred) && raw[index] === 'hundred') {
     pounds = (numeric ?? 1) * 100;
     index += 1;
 
@@ -331,7 +331,7 @@ function parseWeightPhrase(raw: readonly string[]): { pounds: number; rest: stri
   // unit word (or, for the bare form, as ordinary query text) and the phrase falls through
   // to a count-and-query parse that drops the weight instead of refusing it.
   const isBareThousand = numeric === undefined && fraction === undefined && first === 'thousand';
-  if (((numeric !== undefined && numeric >= 1 && numeric <= 9) || isBareThousand) && raw[index] === 'thousand') {
+  if (((numeric !== undefined && numeric >= 1) || isBareThousand) && raw[index] === 'thousand') {
     pounds = (numeric ?? 1) * 1000;
     index += 1;
   }
@@ -463,7 +463,7 @@ export function parseSpokenRequest(text: string): SpokenRequest {
   // so no digit word precedes "hundred" here either; treat the bare word as an implicit one.
   const isBareHundred = numeric === undefined && first === 'hundred';
   let consumedHundred = 1;
-  if (((numeric !== undefined && numeric >= 1 && numeric <= 9) || isBareHundred) && tokens[isBareHundred ? 0 : 1] === 'hundred') {
+  if (((numeric !== undefined && numeric >= 1) || isBareHundred) && tokens[isBareHundred ? 0 : 1] === 'hundred') {
     numeric = (numeric ?? 1) * 100;
     consumedHundred = isBareHundred ? 1 : 2;
 
@@ -485,7 +485,7 @@ export function parseSpokenRequest(text: string): SpokenRequest {
   // request resolves to quantity 1 with a search for "thousand bananas" instead of refusing.
   const isBareThousand = numeric === undefined && first === 'thousand';
   if (
-    ((numeric !== undefined && numeric >= 1 && numeric <= 9) || isBareThousand) &&
+    ((numeric !== undefined && numeric >= 1) || isBareThousand) &&
     tokens[isBareThousand ? 0 : 1] === 'thousand'
   ) {
     numeric = (numeric ?? 1) * 1000;

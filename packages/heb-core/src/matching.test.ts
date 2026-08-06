@@ -175,6 +175,20 @@ describe('parseSpokenRequest', () => {
     it('does not refuse weights below the ceiling', () => {
       expect(parseSpokenRequest('two pounds of sliced turkey').weightRefused).toBeUndefined();
     });
+
+    it('refuses a scale amount with a multi-digit coefficient', () => {
+      // "twelve thousand" — the hundred/thousand multiplier used to require the leading
+      // number to be a single digit (one through nine), so "twelve" fell through and this
+      // resolved to a plain count-and-query parse instead of a refusal.
+      const weight = parseSpokenRequest('twelve thousand pounds of turkey');
+      expect(weight.weight).toBeUndefined();
+      expect(weight.weightRefused).toBe(12000);
+      expect(weight.query).toBe('turkey');
+
+      const count = parseSpokenRequest('ten thousand bananas');
+      expect(count.quantity).not.toBe(10000);
+      expect(count.quantityRefused).toBe(10000);
+    });
   });
 
   it('does not read a trailing-only number as a count', () => {

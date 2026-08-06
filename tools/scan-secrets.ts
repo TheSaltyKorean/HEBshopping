@@ -38,8 +38,14 @@ const RULES: Rule[] = [
     // `FileStore` and Playwright both serialise cookies as objects, so the header-style
     // rule above cannot see them. A session copied to a filename `.gitignore` does not
     // cover would otherwise scan clean while holding the primary live credentials.
+    //
+    // JSON object key order is not significant, so a captured or reserialised jar can put
+    // `value` before `name`, or another field like `domain` between them. `[^{}]*?` matches
+    // any such in-between fields without crossing into a neighbouring object, so both key
+    // orders are caught either way.
     name: 'serialised cookie jar',
-    pattern: /"name"\s*:\s*"(reese84|sat|sst|sst\.sig|_session[^"]*|visid_incap_\d+)"\s*,\s*"value"\s*:\s*"[^"]{16,}"/g,
+    pattern:
+      /"name"\s*:\s*"(?:reese84|sat|sst|sst\.sig|_session[^"]*|visid_incap_\d+)"[^{}]*?"value"\s*:\s*"[^"]{16,}"|"value"\s*:\s*"[^"]{16,}"[^{}]*?"name"\s*:\s*"(?:reese84|sat|sst|sst\.sig|_session[^"]*|visid_incap_\d+)"/g,
     note: 'live credential in JSON form — this is what a session/storage-state file looks like',
   },
   {

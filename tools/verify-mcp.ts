@@ -137,6 +137,23 @@ async function main(): Promise<void> {
 
   await call('heb_search_product', { query: 'flour tortillas', limit: 3 });
 
+  // Prove every product this probe could resolve to is absent from the household list
+  // *before* risking the write. If ranking or purchase history makes "oat milk" confident,
+  // HEB merges the add into an existing line of the same product rather than creating one,
+  // and MCP exposes no way to set a quantity back down — so a merge here could not be
+  // undone. Checking absence first, rather than only after the fact, means a confident write
+  // is guaranteed to create a brand-new line that the cleanup below can find and remove.
+  const oatMilkCandidates = await call('heb_search_product', { query: 'oat milk', limit: 5 });
+  const alreadyOwned = [...oatMilkCandidates.matchAll(/^•\s*(.+?)\s*\[productId: \d+\]/gm)]
+    .map((match) => match[1]!.trim())
+    .find((name) => initial.includes(name));
+  if (alreadyOwned !== undefined) {
+    throw new Error(
+      `the ambiguity probe is unsafe right now: "${alreadyOwned}" is already on the list, ` +
+        'so a confident "oat milk" add would merge into it instead of creating a removable line',
+    );
+  }
+
   // A vague query must NOT write; it should hand back candidates.
   //
   // "Must not" is the assertion, not a guarantee — that is the point of testing it. Ranking

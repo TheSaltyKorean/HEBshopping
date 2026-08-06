@@ -84,6 +84,11 @@ const NUMBER_WORDS: Readonly<Record<string, number>> = {
   one: 1, two: 2, three: 3, four: 4, five: 5, six: 6, seven: 7, eight: 8,
   nine: 9, ten: 10, eleven: 11, twelve: 12, thirteen: 13, fourteen: 14,
   fifteen: 15, sixteen: 16, seventeen: 17, eighteen: 18, nineteen: 19, twenty: 20,
+  // Past the ceiling, only the bare tens word needs recognising — it already exceeds
+  // MAX_QUANTITY/MAX_WEIGHT_LB on its own, so reading it (rather than leaving it as
+  // unmatched query text) is enough to route "thirty bananas" through the existing
+  // refusal fields instead of silently searching for "thirty bananas" as a product name.
+  thirty: 30, forty: 40, fifty: 50, sixty: 60, seventy: 70, eighty: 80, ninety: 90,
   couple: 2, few: 3,
   // NOT "dozen". "A dozen eggs" is one carton of twelve, not twelve cartons — the same
   // trap as "two percent milk", and the product name already carries the count.
@@ -273,6 +278,18 @@ function parseWeightPhrase(raw: readonly string[]): { pounds: number; rest: stri
     const ones = ONES_WORDS[raw[index] ?? ''];
     if (ones !== undefined) {
       pounds += ones;
+      index += 1;
+    }
+  }
+
+  // "one half pound of turkey" — Alexa tokenizes "one-half" the same way it would speak
+  // "one and a half", but without the "and". Reading only a bare number here would leave
+  // "half" behind as an unmatched unit word and fail the whole phrase, silently falling
+  // through to a plain count-and-query parse that drops the weight entirely.
+  if (numeric !== undefined) {
+    const adjacent = FRACTION_WORDS[raw[index] ?? ''];
+    if (adjacent !== undefined) {
+      pounds += adjacent;
       index += 1;
     }
   }

@@ -888,6 +888,19 @@ export class HebListOps implements ListOps {
         });
       }
 
+      // A schema-drift failure is definitive too, same as the add-item catches above: GraphQL
+      // validation runs before the mutation resolver, so the write never reached it.
+      // Reconciling below would repackage this as a generic UPSTREAM_ERROR, losing the
+      // "skill must be updated" guidance that only fires off this code.
+      if (isHebError(error) && error.details?.['schemaDrift'] === true) {
+        if (!justCreated) throw error;
+        throw new HebError(error.code, error.message, {
+          cause: error.cause,
+          retryable: false,
+          details: { ...error.details, partialAdd: true },
+        });
+      }
+
       let current: HebList;
       try {
         current = await this.getList(listId);

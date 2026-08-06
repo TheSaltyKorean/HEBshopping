@@ -101,7 +101,7 @@ function toErrorText(error: unknown): TextResult {
   return text(`${error.code}: ${error.message}${extra ? `\n${extra}` : ''}${partial}`, true);
 }
 
-function describeAddResult(result: AddResult): TextResult {
+function describeAddResult(result: AddResult, requested: { quantity?: number; weight?: number } = {}): TextResult {
   // The server's per-item cap can stop a multi-unit add short of what was requested. Say so
   // rather than reporting the capped quantity as if it were the full amount — an agent
   // relaying "added" back to the user would otherwise claim a bigger add than actually
@@ -143,9 +143,22 @@ function describeAddResult(result: AddResult): TextResult {
       const options = [product, ...alternatives]
         .map((candidate, index) => `  ${index + 1}. ${candidate.name}  [productId: ${candidate.id}]`)
         .join('\n');
+      // The server keeps no pending state between calls — the confirming call is a fresh
+      // `addItem`, so any `quantity`/`weight` from this request is lost unless the caller
+      // resends it. Without this reminder, a confirmed "three avocados" or "two pounds of
+      // turkey" silently becomes quantity 1 or the counter's default weight.
+      const amountReminder =
+        requested.quantity !== undefined || requested.weight !== undefined
+          ? ` Resend ${[
+              requested.quantity !== undefined ? `quantity: ${requested.quantity}` : null,
+              requested.weight !== undefined ? `weight: ${requested.weight}` : null,
+            ]
+              .filter((part) => part !== null)
+              .join(' and ')} with it — it is not remembered from this call.`
+          : '';
       return text(
         `NOT added — the request was ambiguous (confidence ${confidence.toFixed(2)}).\n` +
-          `Ask the user which they meant, then call heb_add_item again with that productId.\n\n` +
+          `Ask the user which they meant, then call heb_add_item again with that productId.${amountReminder}\n\n` +
           `Candidates:\n${options}`,
       );
     }
@@ -285,7 +298,7 @@ export function createHebMcpServer({ createListOps }: CreateServerOptions): McpS
           ...(quantity === undefined ? {} : { quantity }),
           ...(weight === undefined ? {} : { weight }),
         });
-        return describeAddResult(result);
+        return describeAddResult(result, { quantity, weight });
       } catch (error) {
         return toErrorText(error);
       }

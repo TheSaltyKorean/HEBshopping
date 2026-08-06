@@ -304,8 +304,13 @@ function parseWeightPhrase(raw: readonly string[]): { pounds: number; rest: stri
   // this, only "one" is read here, "hundred" is left as an unmatched unit word, and the
   // whole phrase falls through to a plain count-and-query parse that drops the weight and
   // can add a counter product at its default size instead of refusing.
-  if (numeric !== undefined && numeric >= 1 && numeric <= 9 && raw[index] === 'hundred') {
-    pounds = numeric * 100;
+  //
+  // "a hundred pounds of turkey" — the leading article was already stripped by skipArticles,
+  // so no digit word precedes "hundred" here at all; treat the bare word as an implicit one,
+  // the same way "a pound" above means one pound.
+  const isBareHundred = numeric === undefined && fraction === undefined && first === 'hundred';
+  if (((numeric !== undefined && numeric >= 1 && numeric <= 9) || isBareHundred) && raw[index] === 'hundred') {
+    pounds = (numeric ?? 1) * 100;
     index += 1;
 
     // "one hundred and five pounds" / "one hundred five pounds" — an optional "and" and a
@@ -443,10 +448,14 @@ export function parseSpokenRequest(text: string): SpokenRequest {
   // "one hundred bananas" — "hundred" multiplies the digit word before it. Without this,
   // only "one" is read here, "hundred" stays in the query as ordinary text, and the request
   // resolves to quantity 1 with a search for "hundred bananas" instead of refusing.
+  //
+  // "a hundred bananas" — the leading article is filtered as FILLER before `tokens` is built,
+  // so no digit word precedes "hundred" here either; treat the bare word as an implicit one.
+  const isBareHundred = numeric === undefined && first === 'hundred';
   let consumedHundred = 1;
-  if (numeric !== undefined && numeric >= 1 && numeric <= 9 && tokens[1] === 'hundred') {
-    numeric *= 100;
-    consumedHundred = 2;
+  if (((numeric !== undefined && numeric >= 1 && numeric <= 9) || isBareHundred) && tokens[isBareHundred ? 0 : 1] === 'hundred') {
+    numeric = (numeric ?? 1) * 100;
+    consumedHundred = isBareHundred ? 1 : 2;
 
     // "one hundred and five bananas" / "one hundred five bananas" — an optional "and" and a
     // trailing ones word extend the hundred, same as `parseWeightPhrase` does. Without this,

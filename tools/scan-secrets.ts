@@ -70,7 +70,7 @@ const RULES: Rule[] = [
 ];
 
 /** Paths that legitimately contain hash-like or id-like strings. */
-const SKIP = [/package-lock\.json$/, /^\.gitignore$/, /^tools\/scan-secrets\.ts$/, /\.tsbuildinfo$/];
+const SKIP = [/package-lock\.json$/, /^tools\/scan-secrets\.ts$/, /\.tsbuildinfo$/];
 
 function committableFiles(): string[] {
   const output = execFileSync('git', ['ls-files', '-co', '--exclude-standard'], {

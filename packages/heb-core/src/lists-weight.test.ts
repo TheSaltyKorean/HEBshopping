@@ -220,6 +220,20 @@ describe('counter lines are never driven by quantity', () => {
     expect(quantityUpdates(sent)).toHaveLength(0);
     expect(sent.filter((query) => query.includes('addShoppingListItemsV2'))).toHaveLength(3);
   });
+
+  it('warns rather than silently dropping a weight request on a packaged good', async () => {
+    // "Two pounds of ground beef" resolving to an ordinary prepacked tray has no unit to
+    // apply the weight to — one package is added — but the caller must be told the pounds
+    // asked for were not honoured rather than confirming a bare "added".
+    const { ops } = scripted([]);
+
+    const result = await ops.addItem({ productId: 'p-milk', quantity: 1, weight: 2 });
+
+    expect(result.status).toBe('added');
+    expect(result.status === 'added' && result.item.weight).toBeUndefined();
+    expect(result.status === 'added' && result.item.quantity).toBe(1);
+    expect(result.status === 'added' && result.weightRequested).toBe(2);
+  });
 });
 
 describe('weight on a counter line', () => {
@@ -597,6 +611,10 @@ describe('the product path matches the written-line path', () => {
     // Their 5, plus this call's two units, reached additively.
     expect(result.status === 'added' && result.item.quantity).toBe(7);
     expect(quantityUpdates(sent)).toHaveLength(0);
+    // What this request actually asked for was 2, not the merged total of 7 — the caller
+    // needs that to say "added 2, the list now has 7" instead of crediting the concurrent
+    // unit to this request.
+    expect(result.status === 'added' && result.quantityRequested).toBe(2);
   });
 
   it('rethrows a definitively refused product add instead of reconciling', async () => {

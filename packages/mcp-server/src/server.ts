@@ -114,20 +114,37 @@ function describeAddResult(result: AddResult, requested: { quantity?: number; we
         `requested ${result.quantityRequested} could not be added)`
       : '';
 
+  // The other direction, only possible on a brand-new line: a concurrent add of the same
+  // previously-absent product merged into this line before this request's own units
+  // landed, so `item.quantity` reads higher than what was asked for. Say so rather than
+  // crediting the whole merged total to this request.
+  const mergedNotice =
+    result.status === 'added' &&
+    result.quantityRequested !== undefined &&
+    result.item.quantity > result.quantityRequested
+      ? ` (another request added this item too — asked for ${result.quantityRequested}, list now has ${result.item.quantity})`
+      : '';
+
   // Same idea for a counter product whose weight ladder tops out below the ask — the item
-  // was written at its last rung, not the pounds actually requested.
+  // was written at its last rung, not the pounds actually requested. A packaged product has
+  // no ladder at all — `item.weight` stays undefined and the requested pounds were dropped
+  // entirely in favor of one package.
   const weightCappedNotice =
-    (result.status === 'added' || result.status === 'already_present') &&
-    result.weightRequested !== undefined &&
-    result.item.weight !== undefined &&
-    result.weightRequested > result.item.weight
-      ? ` (HEB only sells this item up to ${result.item.weight} lb — the remainder of the ` +
-        `requested ${result.weightRequested} lb could not be added)`
+    (result.status === 'added' || result.status === 'already_present') && result.weightRequested !== undefined
+      ? result.item.weight === undefined
+        ? ` (this item is sold by the package, not the pound — added one package instead of ` +
+          `the requested ${result.weightRequested} lb)`
+        : result.weightRequested > result.item.weight
+          ? ` (HEB only sells this item up to ${result.item.weight} lb — the remainder of the ` +
+            `requested ${result.weightRequested} lb could not be added)`
+          : ''
       : '';
 
   switch (result.status) {
     case 'added':
-      return text(`Added to the HEB list: ${describeItem(result.item)}${cappedNotice}${weightCappedNotice}`);
+      return text(
+        `Added to the HEB list: ${describeItem(result.item)}${cappedNotice}${mergedNotice}${weightCappedNotice}`,
+      );
     case 'already_present':
       return text(
         (result.item.weight === undefined

@@ -162,6 +162,16 @@ describe('parseSpokenRequest', () => {
       expect(parsed.quantityRefused).toBe(1.5);
       expect(parsed.query).toBe('one half bananas');
     });
+
+    // Tokenize deliberately keeps "1/2" whole. Without reading it as a fraction here, it is
+    // left in the query as unmatched text and the request resolves to quantity 1 with a
+    // search for "1/2 bananas" instead of refusing the fractional count.
+    it('refuses a digit-slash fractional count ("1/2 bananas")', () => {
+      const parsed = parseSpokenRequest('1/2 bananas');
+      expect(parsed.quantity).toBe(1);
+      expect(parsed.quantityRefused).toBe(0.5);
+      expect(parsed.query).toBe('1/2 bananas');
+    });
   });
 
   describe('weights above the configured ceiling', () => {

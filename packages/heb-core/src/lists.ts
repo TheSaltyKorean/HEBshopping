@@ -627,9 +627,16 @@ export class HebListOps implements ListOps {
     }
 
     // The mutation contributed the first unit; the rest go the same way.
-    return this.addRemainingUnits(listId, added, quantity - 1, status, () =>
+    const result = await this.addRemainingUnits(listId, added, quantity - 1, status, () =>
       addItemsDocument(listId, [productId]),
     );
+    // A packaged product has no unit to apply a weight request to — HEB sells it by the
+    // package, not the pound — so the branch above is skipped and one package is added
+    // instead. Report the weight that went unhonoured rather than confirming a bare "added"
+    // as if the pounds asked for were irrelevant.
+    return input.weight !== undefined && result.status !== 'needs_confirmation'
+      ? { ...result, weightRequested: input.weight }
+      : result;
   }
 
   /**
@@ -657,7 +664,15 @@ export class HebListOps implements ListOps {
   ): Promise<AddResult> {
     let line = added;
     const cap = added.maximumQuantity ?? Number.POSITIVE_INFINITY;
-    const totalRequested = added.quantity + remaining;
+    // For a brand-new line (`status === 'added'`), what was actually asked for is `remaining
+    // + 1` — the one unit this call's first mutation contributed plus the rest it is about to
+    // add. `added.quantity` is not that number: a household member merging the same
+    // previously-absent product into this line between the opening read and the first
+    // mutation inflates it, and basing the request total on it would credit their unit to
+    // this request instead of flagging the merge below. An existing line has no such
+    // ambiguity — `added.quantity` there already is the pre-existing total plus this call's
+    // first unit, which is exactly the baseline the shortfall check needs.
+    const totalRequested = status === 'added' ? remaining + 1 : added.quantity + remaining;
 
     for (let unit = 0; unit < remaining; unit += 1) {
       // The server's own ceiling. Adding past it is refused, and asking is pointless.
@@ -713,9 +728,16 @@ export class HebListOps implements ListOps {
     // The server's cap can stop this short of what was asked. Reporting it here — rather
     // than letting the caller confirm `line.quantity` as if it were the full amount — is
     // what tells a household member their five-unit request only picked up two.
-    return line.quantity < totalRequested
-      ? { status, item: line, quantityRequested: totalRequested }
-      : { status, item: line };
+    if (line.quantity < totalRequested) return { status, item: line, quantityRequested: totalRequested };
+    // A new line can also come back *higher* than requested: a household member adding the
+    // same previously-absent product between the opening read and this call's mutations
+    // merges into the same line server-side. `quantityRequested` here still means "what this
+    // request asked for" — the surface uses it to say one was added and the list now holds
+    // more, instead of crediting the whole merged total to this one request.
+    if (status === 'added' && line.quantity > totalRequested) {
+      return { status, item: line, quantityRequested: totalRequested };
+    }
+    return { status, item: line };
   }
 
   /**

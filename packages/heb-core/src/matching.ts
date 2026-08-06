@@ -464,7 +464,16 @@ export function parseSpokenRequest(text: string): SpokenRequest {
   // below can multiply it into a refusal, the same way `parseWeightPhrase` already reads
   // "1.5 lb" — without this, `numeric` stays undefined, "thousand" is left as query text, and
   // the request resolves to quantity 1 with a search for "thousand bananas" instead of refusing.
-  let numeric = NUMBER_WORDS[first] ?? (/^\d+(?:\.\d+)?$/.test(first) ? Number(first) : undefined);
+  //
+  // Slash fractions too: tokenize deliberately keeps "1/2" whole (see tokenize's comment), so
+  // "1/2 bananas" must read 0.5 here the same way `parseWeightPhrase` reads "1/2 lb" — without
+  // this, `numeric` stays undefined, "1/2" is left as query text, and the request resolves to
+  // quantity 1 with a search for "1/2 bananas" instead of refusing the fractional count.
+  const firstFractionMatch = /^(\d+)\/(\d+)$/.exec(first);
+  let numeric =
+    NUMBER_WORDS[first] ??
+    (firstFractionMatch ? Number(firstFractionMatch[1]) / Number(firstFractionMatch[2]) : undefined) ??
+    (/^\d+(?:\.\d+)?$/.test(first) ? Number(first) : undefined);
 
   // "one hundred bananas" — "hundred" multiplies the digit word before it. Without this,
   // only "one" is read here, "hundred" stays in the query as ordinary text, and the request

@@ -152,6 +152,16 @@ function confirmAdded(
   // Confirm with the *resolved* product name, never the spoken text: the whole point of
   // the dialog is that those two can differ, and echoing the request back would hide it.
   const name = escapeSsml(speakableItem(item));
+
+  // A concurrent add of the same, previously-absent product merges into this line before
+  // this request's own units land, so `item.quantity` can read higher than what was asked
+  // for. Speak the amount this request actually contributed, not the merged total — the
+  // `mergedNotice` below says what the list now holds.
+  const requestedCount =
+    !wasPresent && quantityRequested !== undefined && item.quantity > quantityRequested
+      ? quantityRequested
+      : item.quantity;
+
   // A counter line is measured in pounds, so speak pounds. Its `quantity` is an artefact
   // of how HEB stores the row, and "you now have 1" beside two pounds of turkey is wrong.
   const speech = wasPresent
@@ -159,7 +169,7 @@ function confirmAdded(
       ? `${name} was already on your list. You now have ${item.quantity}.`
       : `${name} was already on your list. You now have ${speakablePounds(item.weight)}.`
     : item.weight === undefined
-      ? `Added ${item.quantity > 1 ? `${item.quantity} ` : ''}${name}.`
+      ? `Added ${requestedCount > 1 ? `${requestedCount} ` : ''}${name}.`
       : `Added ${speakablePounds(item.weight)} of ${name}.`;
 
   // The server's per-item cap can stop a multi-unit add short of what was asked. Saying so
@@ -169,15 +179,28 @@ function confirmAdded(
       ? ` H-E-B only allows ${item.quantity} of ${name}, so I could not add all ${quantityRequested}.`
       : '';
 
-  // Same idea for a counter product whose own weight ladder tops out below the ask: the
-  // line was written at the last rung, not the pounds actually requested.
-  const weightCappedNotice =
-    weightRequested !== undefined && item.weight !== undefined && weightRequested > item.weight
-      ? ` H-E-B only sells ${name} up to ${speakablePounds(item.weight)}, so I could not add the full ${speakablePounds(weightRequested)}.`
+  // The other direction: someone else added the same item in the gap, so the list holds
+  // more than this request asked for.
+  const mergedNotice =
+    !wasPresent && quantityRequested !== undefined && item.quantity > quantityRequested
+      ? ` Someone else added it too, so the list now has ${item.quantity}.`
       : '';
 
+  // Same idea for a counter product whose own weight ladder tops out below the ask: the
+  // line was written at the last rung, not the pounds actually requested. A packaged
+  // product has no ladder at all — `item.weight` stays undefined and the pounds asked for
+  // were dropped entirely in favor of one package.
+  const weightCappedNotice =
+    weightRequested === undefined
+      ? ''
+      : item.weight === undefined
+        ? ` ${name} is sold by the package, not the pound, so I added one instead of ${speakablePounds(weightRequested)}.`
+        : weightRequested > item.weight
+          ? ` H-E-B only sells ${name} up to ${speakablePounds(item.weight)}, so I could not add the full ${speakablePounds(weightRequested)}.`
+          : '';
+
   return input.responseBuilder
-    .speak(`${speech}${cappedNotice}${weightCappedNotice} Anything else?`)
+    .speak(`${speech}${cappedNotice}${mergedNotice}${weightCappedNotice} Anything else?`)
     .reprompt(REPROMPT)
     .getResponse();
 }

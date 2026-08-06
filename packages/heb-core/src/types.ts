@@ -169,10 +169,20 @@ export interface AddItemInput {
  * `maximumQuantity` stopped the adds short, so the caller can report the shortfall instead
  * of confirming the full amount as if it had all gone through.
  *
+ * On a brand-new line (`status: 'added'`) it can also differ the other way: a household
+ * member merging the same previously-absent product into the line mid-request makes
+ * `item.quantity` come back *higher* than what this request asked for. `quantityRequested`
+ * still names what this request actually asked for, so the caller can say one was added and
+ * the list now holds more, instead of crediting the whole merged total to this request.
+ *
  * `weightRequested` is the same idea for counter goods: present when the product's own
  * weight ladder tops out below what was asked for, so `item.weight` is the last rung and
  * not the full request. Without it, a 5 lb request against a 2 lb ladder confirms 2 lb as
  * if that were the whole ask instead of reporting the shortfall.
+ *
+ * `weightRequested` is also present when a weight was asked for but the resolved product
+ * turned out to be packaged, not priced by weight — there `item.weight` is undefined
+ * entirely, and the caller says one package was added instead of the pounds requested.
  */
 export type AddResult =
   | { status: 'added'; item: ListItem; quantityRequested?: number; weightRequested?: number }

@@ -45,11 +45,12 @@ const RULES: Rule[] = [
     // orders are caught either way.
     //
     // A fixture pasted as a JS/TS object literal rather than strict JSON drops the quotes
-    // around keys and may use single quotes for values — `"name"` allows either matching
-    // pair (`"…"` or `'…'`) around the value so those object literals are caught too.
+    // around keys and may use single quotes for either the keys or the values —
+    // `["']?name["']?` allows the key to be bare, double- or single-quoted, and `["'](…)["']`
+    // does the same for the value, so those object literals are caught too.
     name: 'serialised cookie jar',
     pattern:
-      /"?name"?\s*:\s*["'](?:reese84|sat|sst|sst\.sig|_session[^"']*|visid_incap_\d+)["'][^{}]*?"?value"?\s*:\s*["'][^"']{16,}["']|"?value"?\s*:\s*["'][^"']{16,}["'][^{}]*?"?name"?\s*:\s*["'](?:reese84|sat|sst|sst\.sig|_session[^"']*|visid_incap_\d+)["']/g,
+      /["']?name["']?\s*:\s*["'](?:reese84|sat|sst|sst\.sig|_session[^"']*|visid_incap_\d+)["'][^{}]*?["']?value["']?\s*:\s*["'][^"']{16,}["']|["']?value["']?\s*:\s*["'][^"']{16,}["'][^{}]*?["']?name["']?\s*:\s*["'](?:reese84|sat|sst|sst\.sig|_session[^"']*|visid_incap_\d+)["']/g,
     note: 'live credential in JSON/JS-object form — this is what a session/storage-state file looks like',
   },
   {

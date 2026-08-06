@@ -456,12 +456,23 @@ export function parseSpokenRequest(text: string): SpokenRequest {
   //
   // Not "couple" or "few": those are quantity words in their own right ("a couple of
   // lemons"), never the start of a number-led brand name, so they must stay counts.
+  //
+  // Not a scale word or a digit run at or above 100, either: no number-led brand in this
+  // catalog opens with one ("3 Musketeers", "7 Up", "5 Guys" all use single-digit counts),
+  // and "a hundred bananas" / "a 100 bananas" / "a 1000 bananas" are genuine over-ceiling
+  // counts. Without this exclusion the singular marker swallows them ahead of the count and
+  // refusal branches below — both of which require `!singular` — so the request silently
+  // falls through as a one-unit search for "100 bananas" instead of reporting the refused
+  // quantity.
   const article = raw[0] === 'a' || raw[0] === 'an';
   const nextWord = raw[1];
   const singular =
     article &&
     nextWord !== undefined &&
-    (/^\d/.test(nextWord) || (nextWord in NUMBER_WORDS && nextWord !== 'couple' && nextWord !== 'few'));
+    nextWord !== 'hundred' &&
+    nextWord !== 'thousand' &&
+    ((/^\d+$/.test(nextWord) && Number(nextWord) < 100) ||
+      (nextWord in NUMBER_WORDS && nextWord !== 'couple' && nextWord !== 'few'));
 
   const tokens = raw.filter((token) => !FILLER.has(token));
   if (tokens.length === 0) return { quantity: 1, query: '' };

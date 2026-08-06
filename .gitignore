@@ -7,6 +7,7 @@
 # Browser session / auth state
 *storage-state*.json
 *storagestate*.json
+*storageState*.json
 .session/
 .auth/
 cookies.json

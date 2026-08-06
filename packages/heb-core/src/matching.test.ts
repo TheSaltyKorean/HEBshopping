@@ -666,6 +666,22 @@ describe('articles and irregular plurals', () => {
     });
   });
 
+  it('refuses "a 100 bananas" and "a 1000 bananas" instead of silently searching for them', () => {
+    // "100"/"1000" are digits, so the article-before-a-number singular marker used to catch
+    // them the same as "a 3 Musketeers bar" — suppressing both the count and refusal
+    // branches and falling through to a silent one-unit search for "100 bananas".
+    expect(parseSpokenRequest('a 100 bananas')).toEqual({
+      quantity: 1,
+      query: '100 bananas',
+      quantityRefused: 100,
+    });
+    expect(parseSpokenRequest('a 1000 bananas')).toEqual({
+      quantity: 1,
+      query: '1000 bananas',
+      quantityRefused: 1000,
+    });
+  });
+
   it('still reads "a couple of lemons" as two', () => {
     // "couple" and "few" are quantity words in their own right and must stay counts even
     // though they are also article-adjacent number words.

@@ -215,13 +215,15 @@ describe('counter lines are never driven by quantity', () => {
 
   it('does not issue a quantity update for a newly created counter line', async () => {
     // "Add three sliced turkeys" is not expressible: counter goods have no unit to
-    // multiply. The line is created and confirmed at the weight HEB gave it.
+    // multiply. The line is created and confirmed at the weight HEB gave it, and the
+    // ignored count is surfaced the same way it is for an existing counter line above.
     const { ops, sent } = scripted([]);
 
     const result = await ops.addItem({ productId: 'p-turkey', quantity: 3 });
 
     expect(result.status).toBe('added');
     expect(result.status === 'added' && result.item.weight).toBe(0.25);
+    expect(result.status === 'added' && result.quantityRequested).toBe(3);
     expect(quantityUpdates(sent)).toHaveLength(0);
   });
 

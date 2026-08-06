@@ -596,7 +596,12 @@ export class HebListOps implements ListOps {
       if (input.weight === undefined) {
         // Counter goods have no unit to multiply. HEB assigned this line its own default
         // weight, and the surface confirms in pounds, so nothing is reported as a silent "1".
-        return { status, item: added };
+        //
+        // A count-led request ("three sliced turkeys", or an MCP `quantity: 3`) still asked
+        // for more than this one default-weight line delivers. The existing-line branch
+        // above already surfaces the ignored count as `quantityRequested`; a newly created
+        // line drops it just as silently otherwise.
+        return quantity > 1 ? { status, item: added, quantityRequested: quantity } : { status, item: added };
       }
       // Deliberately NO re-read here, unlike the existing-line path above. The two look
       // symmetrical and are not.

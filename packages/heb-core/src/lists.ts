@@ -770,11 +770,26 @@ export class HebListOps implements ListOps {
             );
           }
           seen = relist.items.find(matches);
+          // The re-read is authoritative — unlike the mutation response, it cannot be a
+          // truncated page (`getList` itself pages through the whole list). If the line is
+          // genuinely absent here, a household member removed it after this mutation
+          // recreated it, and `line.quantity + 1` would fabricate a unit count for a line
+          // that no longer exists. That is indistinguishable from this call's own write
+          // never having landed, so it is reported the same way as every other point this
+          // call cannot confirm its own write, rather than assumed successful.
+          if (seen === undefined) {
+            throw new HebError(
+              'UPSTREAM_ERROR',
+              `Added ${line.text}, but the amount is not confirmed — the line was not found ` +
+                'on a required re-read.',
+              { retryable: false, details: { partialAdd: true, indeterminate: true } },
+            );
+          }
         }
-        // Trust the response (or the re-read) where it has one, and fall back to counting our
-        // own unit only when neither is available — never to a number computed from before
-        // this call.
-        line = seen ?? { ...line, quantity: line.quantity + 1 };
+        // Trust the response (or the re-read), which is always defined by this point — the
+        // mutation's own page found it, or the re-read above did, or the re-read's absence
+        // was already reported as indeterminate.
+        line = seen;
       } catch (error) {
         // A line exists either way, so a blind retry of the whole request would add the
         // full amount again. This holds even for an expired session, whose remedy alone

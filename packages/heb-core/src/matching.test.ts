@@ -304,6 +304,16 @@ describe('parseSpokenRequest', () => {
       expect(parseSpokenRequest('two point five liter soda').query).toBe('two point five liter soda');
     });
 
+    it('refuses a spoken decimal count with no leading whole number ("point five bananas")', () => {
+      // The bare "point" form requires a preceding parsed number, so `numeric` stayed
+      // undefined here and the guard never ran — this resolved to quantity 1 with query
+      // "point five bananas" instead of refusing the fractional count.
+      const parsed = parseSpokenRequest('point five bananas');
+      expect(parsed.quantity).toBe(1);
+      expect(parsed.quantityRefused).toBe(0.5);
+      expect(parsed.query).toBe('point five bananas');
+    });
+
     it('converts kilograms to pounds', () => {
       // "kg"/"kilogram"/"kilograms" were in MEASURE_WORDS but not in the pound-conversion
       // table, so a weight request in kilograms fell through to a plain count-and-query parse

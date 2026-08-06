@@ -178,10 +178,20 @@ function confirmAdded(
   // `quantityRequested` is the line's desired *total*, not the increment this request asked
   // to add — a line already at 5 asking to add 2 reports `quantityRequested: 7`. Wording this
   // as "could not add all 7" claims the shopper asked to add seven, when they asked for two.
+  //
+  // A counter item (`item.weight !== undefined`) reaching here is a different case entirely:
+  // `HebListOps` sets `quantityRequested` on a weight-priced line not because the server
+  // capped it, but to surface a count it never even attempted to apply — the row's own
+  // quantity stays 1 regardless of what was asked for. Wording that as "H-E-B only allows 1"
+  // falsely blames a server ceiling; it must ask for pounds instead.
   const cappedNotice =
-    quantityRequested !== undefined && quantityRequested > item.quantity
-      ? ` H-E-B only allows ${item.quantity} of ${name}, so I could not bring it up to ${quantityRequested}.`
-      : '';
+    quantityRequested === undefined
+      ? ''
+      : item.weight !== undefined
+        ? ` ${name} is sold by the pound, so I could not add ${quantityRequested} of them — ask for it in pounds instead.`
+        : quantityRequested > item.quantity
+          ? ` H-E-B only allows ${item.quantity} of ${name}, so I could not bring it up to ${quantityRequested}.`
+          : '';
 
   // The other direction: someone else added the same item in the gap, so the list holds
   // more than this request asked for.

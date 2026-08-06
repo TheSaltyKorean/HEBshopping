@@ -592,6 +592,80 @@ describe('a confident zero-count match must not write', () => {
   });
 });
 
+describe('a re-read that still cannot find the line is reported, not fabricated', () => {
+  it('reports indeterminate rather than inventing a quantity when a follow-up unit\'s ' +
+    'line is absent from both the mutation response and the re-read', async () => {
+    // The line existed after the first unit landed. A household member removes it before
+    // the second unit's mutation response comes back — that response's page doesn't carry
+    // the line either (same truncation the initial add re-reads for), and the authoritative
+    // re-read confirms it is genuinely gone. Falling back to `line.quantity + 1` here would
+    // fabricate a unit count for a line that no longer exists.
+    let addCalls = 0;
+    const addedLine = {
+      __typename: 'ProductShoppingListItemV2',
+      id: 'line-new',
+      quantity: 1,
+      product: { __typename: 'Product', id: 'p-new', fullDisplayName: 'H-E-B Whole Milk, 1 gal' },
+    };
+
+    const fetchImpl = (async (_url: unknown, init: { body?: string }) => {
+      const body = String(init.body ?? '');
+      if (body.includes('addShoppingListItemsV2')) {
+        addCalls += 1;
+        const items = addCalls === 1 ? [addedLine] : [];
+        return new Response(
+          JSON.stringify({
+            data: {
+              addShoppingListItemsV2: {
+                __typename: 'ShoppingListV2',
+                id: 'list-1',
+                name: 'Shopping',
+                fulfillment: { store: { storeNumber: 1 } },
+                itemPage: { items },
+              },
+            },
+          }),
+          { status: 200 },
+        );
+      }
+      // The opening existence check and every re-read: the line is either not yet created
+      // (opening check) or already removed (re-read after the second unit) — either way,
+      // no line for this product.
+      return new Response(
+        JSON.stringify({
+          data: {
+            getShoppingListV2: {
+              __typename: 'ShoppingListV2',
+              id: 'list-1',
+              name: 'Shopping',
+              fulfillment: { store: { storeNumber: 1 } },
+              itemPage: { items: [] },
+            },
+          },
+        }),
+        { status: 200 },
+      );
+    }) as unknown as typeof fetch;
+
+    const ops = new HebListOps({
+      client: new HebClient({ store: storeWith(), fetchImpl, now: () => NOW, minDelayMs: 0 }),
+      listId: 'list-1',
+    });
+
+    await expect(ops.addItem({ productId: 'p-new', quantity: 2 })).rejects.toSatisfy(
+      (error: unknown) => {
+        const typed = error as { retryable?: boolean; details?: Record<string, unknown> };
+        return (
+          hasCode(error, 'UPSTREAM_ERROR') &&
+          typed.retryable === false &&
+          typed.details?.['indeterminate'] === true &&
+          typed.details?.['partialAdd'] === true
+        );
+      },
+    );
+  });
+});
+
 describe('a multi-unit add never reduces a concurrent quantity', () => {
   it('floors the follow-up target at what the add returned', async () => {
     // The opening read found no line, but a household member created the same product in

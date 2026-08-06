@@ -167,6 +167,24 @@ describe('adding — the confident path', () => {
     expect(turn.speech).toContain('What would you like to add');
     expect(ops.addItem).not.toHaveBeenCalled();
   });
+
+  it('explains an ignored count on a counter item as sold-by-the-pound, not a server cap', async () => {
+    // `HebListOps` sets `quantityRequested` on a weight-priced line to surface a count it
+    // never attempted to apply — the row's own quantity stays 1 regardless of what was
+    // asked for. That is not the server refusing to raise a ceiling, and must not be worded
+    // as one ("H-E-B only allows 1 ... could not bring it up to 3").
+    const ops = fakeOps({
+      addItem: vi.fn(async () => ({
+        status: 'added' as const,
+        item: { ...line('l1', '1', 'Sliced Turkey'), weight: 1 },
+        quantityRequested: 3,
+      })),
+    });
+    const turn = await conversation(ops)(intent('AddItemIntent', { item: 'three sliced turkeys' }));
+
+    expect(turn.speech).toContain('sold by the pound');
+    expect(turn.speech).not.toContain('only allows');
+  });
 });
 
 describe('adding — the confirmation dialog', () => {

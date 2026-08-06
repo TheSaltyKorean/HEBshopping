@@ -116,12 +116,22 @@ function describeAddResult(result: AddResult, requested: { quantity?: number; we
   // `quantityRequested` is the line's desired *total*, not the increment this call asked to
   // add — a line already at 5 asking to add 2 reports `quantityRequested: 7`. Phrasing this
   // as "requested 7 could not be added" claims a bigger increment than was actually asked for.
+  //
+  // A counter item (`result.item.weight !== undefined`) is a different case: `HebListOps`
+  // sets `quantityRequested` on a weight-priced line not because the server capped it, but
+  // to surface a count it never attempted to apply — the row's own quantity stays 1
+  // regardless of what was asked for. Reporting that as a server ceiling is wrong; it must
+  // ask for pounds instead.
   const cappedNotice =
     (result.status === 'added' || result.status === 'already_present') &&
-    result.quantityRequested !== undefined &&
-    result.quantityRequested > result.item.quantity
-      ? ` (HEB only allows ${result.item.quantity} of this item — could not bring it up to ` +
-        `the requested total of ${result.quantityRequested})`
+    result.quantityRequested !== undefined
+      ? result.item.weight !== undefined
+        ? ` (this item is sold by the pound — could not add ${result.quantityRequested} of them by ` +
+          `count; request it in pounds instead)`
+        : result.quantityRequested > result.item.quantity
+          ? ` (HEB only allows ${result.item.quantity} of this item — could not bring it up to ` +
+            `the requested total of ${result.quantityRequested})`
+          : ''
       : '';
 
   // The other direction, only possible on a brand-new line: a concurrent add of the same

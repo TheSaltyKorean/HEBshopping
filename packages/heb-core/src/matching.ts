@@ -617,16 +617,22 @@ export function parseSpokenRequest(text: string): SpokenRequest {
   // alone confirms a count of 2 instead of refusing the unsupported fractional count of 2.5
   // — or, when a measure word follows ("two point five liter soda"), miscounts two packages
   // instead of matching the one 2.5-liter product.
+  //
+  // "point five bananas" — same as `parseWeightPhrase`, the leading whole-number word can be
+  // omitted entirely. `first` is then `point` itself and `numeric` is undefined, so the check
+  // below must not require a preceding number.
   let pointTokens = 0;
-  if (numeric !== undefined && tokens[1] === 'point') {
+  const isBarePoint = numeric === undefined && first === 'point';
+  if (isBarePoint || (numeric !== undefined && tokens[1] === 'point')) {
+    const digitStart = isBarePoint ? 1 : 2;
     const digits: number[] = [];
-    let cursor = 2;
+    let cursor = digitStart;
     while (cursor < tokens.length && NUMBER_WORDS[tokens[cursor]!] !== undefined && NUMBER_WORDS[tokens[cursor]!]! <= 9) {
       digits.push(NUMBER_WORDS[tokens[cursor]!]!);
       cursor += 1;
     }
     if (digits.length > 0) {
-      numeric += Number(`0.${digits.join('')}`);
+      numeric = (numeric ?? 0) + Number(`0.${digits.join('')}`);
       pointTokens = cursor - 1;
     }
   }

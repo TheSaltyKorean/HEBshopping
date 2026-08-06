@@ -324,11 +324,16 @@ export class HebListOps implements ListOps {
     const broader = broadenQuery(query);
     if (broader === null) return match;
 
-    // Best-effort. The broadened search exists to *add* reach; if it times out or is
-    // challenged, the candidates already in hand are still perfectly good — failing the
-    // whole add would turn every ambiguous multi-word query into an upstream error rather
-    // than the confirmation choices we already have.
-    const extra = await this.searchProducts(broader, listId).catch(() => []);
+    // Best-effort only when there is already a match to fall back on. The broadened search
+    // exists to *add* reach; if it times out or is challenged while candidates are already in
+    // hand, failing the whole add would turn every ambiguous multi-word query into an upstream
+    // error rather than the confirmation choices we already have. But when the initial search
+    // found nothing, degrading a failed recovery search to an empty result is indistinguishable
+    // from a genuine no-match — `addItem` would treat a transient search failure as
+    // PRODUCT_NOT_FOUND and write the spoken request as a plain list line. Propagate instead.
+    const extra = match !== null
+      ? await this.searchProducts(broader, listId).catch(() => [])
+      : await this.searchProducts(broader, listId);
     if (extra.length === 0) return match;
 
     const merged = mergeCandidates(candidates, extra);
@@ -535,6 +540,12 @@ export class HebListOps implements ListOps {
 
       // A definitive refusal likewise has nothing to reconcile.
       if (isHebError(error) && error.details?.['rejected'] === true) throw error;
+
+      // A schema-drift failure is definitive too: GraphQL validation runs before the
+      // mutation resolver, so the write never reached it. Funnelling this into the
+      // indeterminate case below would tell the caller the add may have landed, and would
+      // suppress Alexa's "skill must be updated" guidance that only fires off this code.
+      if (isHebError(error) && error.details?.['schemaDrift'] === true) throw error;
 
       // A transport failure is genuinely ambiguous and *cannot* be resolved by looking at
       // the list. A line that appeared may be this call's lost write or a household
@@ -748,6 +759,7 @@ export class HebListOps implements ListOps {
       // anything, and neither needs evidence gathered about it.
       if (isHebError(error) && error.code === 'SESSION_EXPIRED') throw error;
       if (isHebError(error) && error.details?.['rejected'] === true) throw error;
+      if (isHebError(error) && error.details?.['schemaDrift'] === true) throw error;
 
       // Everything else is a transport failure, and the list cannot resolve it. A quantity
       // above the snapshot is not proof this write landed: a household member merging the

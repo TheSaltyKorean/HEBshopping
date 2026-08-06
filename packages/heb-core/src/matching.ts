@@ -273,6 +273,17 @@ function parseWeightPhrase(raw: readonly string[]): { pounds: number; rest: stri
     (fractionMatch ? Number(fractionMatch[1]) / Number(fractionMatch[2]) : undefined) ??
     (/^\d+(?:\.\d+)?$/.test(first) ? Number(first) : undefined);
 
+  // A fraction token, spelled ("half") or numeric ("1/2", "0.5") — shared by the leading
+  // read above and by `readAndAHalf` below, so "one and 1/2 pounds" and "one and 0.5 pounds"
+  // are parsed the same way "one and a half pounds" already is.
+  const readFractionToken = (token: string): number | undefined => {
+    if (FRACTION_WORDS[token] !== undefined) return FRACTION_WORDS[token];
+    const match = /^(\d+)\/(\d+)$/.exec(token);
+    if (match) return Number(match[1]) / Number(match[2]);
+    if (/^0?\.\d+$/.test(token)) return Number(token);
+    return undefined;
+  };
+
   // No leading amount at all means an implicit one: "a pound of ham".
   let pounds = fraction ?? numeric ?? 1;
   if (fraction !== undefined || numeric !== undefined) index += 1;
@@ -363,7 +374,7 @@ function parseWeightPhrase(raw: readonly string[]): { pounds: number; rest: stri
     // count-and-query parse that drops the weight entirely.
     const leadingOnes = ONES_WORDS[raw[cursor] ?? ''];
     const fractionCursor = leadingOnes !== undefined ? cursor + 1 : cursor;
-    const extra = FRACTION_WORDS[raw[fractionCursor] ?? ''];
+    const extra = readFractionToken(raw[fractionCursor] ?? '');
     if (extra === undefined) return;
     pounds += extra * (leadingOnes ?? 1);
     index = fractionCursor + 1;
@@ -436,6 +447,18 @@ export function parseSpokenRequest(text: string): SpokenRequest {
   if (numeric !== undefined && numeric >= 1 && numeric <= 9 && tokens[1] === 'hundred') {
     numeric *= 100;
     consumedHundred = 2;
+
+    // "one hundred and five bananas" / "one hundred five bananas" — an optional "and" and a
+    // trailing ones word extend the hundred, same as `parseWeightPhrase` does. Without this,
+    // a refusal for exceeding the count ceiling reports 100 instead of the 105 actually asked
+    // for.
+    let cursor = consumedHundred;
+    if (tokens[cursor] === 'and') cursor += 1;
+    const hundredOnes = ONES_WORDS[tokens[cursor] ?? ''];
+    if (hundredOnes !== undefined) {
+      numeric += hundredOnes;
+      consumedHundred = cursor + 1;
+    }
   }
 
   // "twenty one bananas" / "thirty five bananas" — every tens word from twenty through ninety

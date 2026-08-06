@@ -277,6 +277,16 @@ function parseWeightPhrase(raw: readonly string[]): { pounds: number; rest: stri
   let pounds = fraction ?? numeric ?? 1;
   if (fraction !== undefined || numeric !== undefined) index += 1;
 
+  // "a quarter of a pound of turkey" / "half of a pound of ham" — a bare leading fraction
+  // (no preceding number) can itself be followed by "of a" before the unit. Without skipping
+  // it here, "of" is read as the unit's own `of` one token early, "a pound of turkey" is left
+  // as the description, and the whole phrase falls through to a plain count-and-query parse
+  // that drops the weight and adds a counter product at its default size instead.
+  if (fraction !== undefined && raw[index] === 'of') {
+    index += 1;
+    skipArticles();
+  }
+
   // "one hundred pounds of turkey" — "hundred" multiplies the digit word before it. Without
   // this, only "one" is read here, "hundred" is left as an unmatched unit word, and the
   // whole phrase falls through to a plain count-and-query parse that drops the weight and
@@ -343,10 +353,18 @@ function parseWeightPhrase(raw: readonly string[]): { pounds: number; rest: stri
     if (raw[cursor] !== 'and') return;
     cursor += 1;
     while (cursor < raw.length && ARTICLES.has(raw[cursor]!)) cursor += 1;
-    const extra = FRACTION_WORDS[raw[cursor] ?? ''];
+
+    // "a pound and three quarters of turkey" — the same wording `speakablePounds(1.75)`
+    // generates. A leading ones word before the fraction multiplies it, same as "twenty
+    // one pounds" above; without reading it here, "three" is left as an unmatched fraction
+    // lookup, the whole tail is unconsumed, and the phrase falls through to a plain
+    // count-and-query parse that drops the weight entirely.
+    const leadingOnes = ONES_WORDS[raw[cursor] ?? ''];
+    const fractionCursor = leadingOnes !== undefined ? cursor + 1 : cursor;
+    const extra = FRACTION_WORDS[raw[fractionCursor] ?? ''];
     if (extra === undefined) return;
-    pounds += extra;
-    index = cursor + 1;
+    pounds += extra * (leadingOnes ?? 1);
+    index = fractionCursor + 1;
   };
   readAndAHalf();
 

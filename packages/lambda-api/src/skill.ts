@@ -147,6 +147,7 @@ function confirmAdded(
   item: ListItem,
   wasPresent: boolean,
   quantityRequested?: number,
+  weightRequested?: number,
 ): Response {
   // Confirm with the *resolved* product name, never the spoken text: the whole point of
   // the dialog is that those two can differ, and echoing the request back would hide it.
@@ -168,8 +169,15 @@ function confirmAdded(
       ? ` H-E-B only allows ${item.quantity} of ${name}, so I could not add all ${quantityRequested}.`
       : '';
 
+  // Same idea for a counter product whose own weight ladder tops out below the ask: the
+  // line was written at the last rung, not the pounds actually requested.
+  const weightCappedNotice =
+    weightRequested !== undefined && item.weight !== undefined && weightRequested > item.weight
+      ? ` H-E-B only sells ${name} up to ${speakablePounds(item.weight)}, so I could not add the full ${speakablePounds(weightRequested)}.`
+      : '';
+
   return input.responseBuilder
-    .speak(`${speech}${cappedNotice} Anything else?`)
+    .speak(`${speech}${cappedNotice}${weightCappedNotice} Anything else?`)
     .reprompt(REPROMPT)
     .getResponse();
 }
@@ -284,10 +292,10 @@ function addItemHandler(options: CreateSkillOptions): RequestHandler {
       }
 
       if (result.status === 'added') {
-        return confirmAdded(input, result.item, false, result.quantityRequested);
+        return confirmAdded(input, result.item, false, result.quantityRequested, result.weightRequested);
       }
       if (result.status === 'already_present') {
-        return confirmAdded(input, result.item, true, result.quantityRequested);
+        return confirmAdded(input, result.item, true, result.quantityRequested, result.weightRequested);
       }
 
       const pending: PendingChoice = {
@@ -412,6 +420,7 @@ function yesHandler(options: CreateSkillOptions): RequestHandler {
         result.item,
         result.status === 'already_present',
         result.quantityRequested,
+        result.weightRequested,
       );
     },
   };

@@ -114,15 +114,27 @@ function describeAddResult(result: AddResult): TextResult {
         `requested ${result.quantityRequested} could not be added)`
       : '';
 
+  // Same idea for a counter product whose weight ladder tops out below the ask — the item
+  // was written at its last rung, not the pounds actually requested.
+  const weightCappedNotice =
+    (result.status === 'added' || result.status === 'already_present') &&
+    result.weightRequested !== undefined &&
+    result.item.weight !== undefined &&
+    result.weightRequested > result.item.weight
+      ? ` (HEB only sells this item up to ${result.item.weight} lb — the remainder of the ` +
+        `requested ${result.weightRequested} lb could not be added)`
+      : '';
+
   switch (result.status) {
     case 'added':
-      return text(`Added to the HEB list: ${describeItem(result.item)}${cappedNotice}`);
+      return text(`Added to the HEB list: ${describeItem(result.item)}${cappedNotice}${weightCappedNotice}`);
     case 'already_present':
       return text(
         (result.item.weight === undefined
           ? `Already on the list — quantity is now ${result.item.quantity}: ${result.item.text}`
           : `Already on the list — now ${result.item.weight} lb of ${result.item.text}`) +
-          cappedNotice,
+          cappedNotice +
+          weightCappedNotice,
       );
     case 'needs_confirmation': {
       // Candidates are returned inline precisely so the model does not need a separate

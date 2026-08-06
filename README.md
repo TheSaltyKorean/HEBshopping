@@ -172,27 +172,12 @@ the phrase is left in the search query. Ask in pounds — "half a pound", "a pou
 half" — and the whole ladder is available.
 
 
-**Adding more than one unit at a time can lose a concurrent change.** Asking for *one* of
-something is safe: `addShoppingListItemsV2` merges into an existing line and increments it
-server-side, so two people saying "add milk" at the same moment reliably end at three.
-
-Asking for several is not. There is no way to add N at once — H-E-B rejects a duplicate
-product inside a single `listItems` array (verified) — so the only route is one atomic add
-followed by an absolute `updateShoppingListItem`, which has no ETag, version, or
-compare-and-set. If somebody edits that line inside the gap, the absolute write lands on
-top of their change.
-
-The window is one round trip, and the target is computed from what the add itself returned
-rather than from a snapshot taken earlier, so it is as small as this API allows. The
-remaining fixes each cost more than the problem:
-
-- Serialising Alexa to one invocation would make Lambda *reject* the second person to
-  speak, turning a rare miscount into a dropped command with no spoken response.
-- A lock in DynamoDB would reintroduce write access for two internet-facing functions —
-  authority deliberately removed — and add a round trip to every add inside an ~8s ceiling.
-
-The failure is visible on the list and correctable in a second. If H-E-B ever exposes a
-delta or conditional update, it becomes a small change.
+**Adding more than one unit at a time is safe against a concurrent change.** Asking for
+*one* of something is safe: `addShoppingListItemsV2` merges into an existing line and
+increments it server-side, so two people saying "add milk" at the same moment reliably end
+at three. Asking for several is handled the same way — one additive `addShoppingListItemsV2`
+call per remaining unit, not a single absolute write of the total — so N adds always land N
+units on whatever the line currently holds, whoever else is touching it in between.
 
 **Weight is absolute, so counter lines have the same gap.** There is no additive form for
 `quantityOrWeight: { weight }`. The line is re-read immediately before the write to keep the

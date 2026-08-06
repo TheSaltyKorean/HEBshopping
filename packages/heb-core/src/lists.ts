@@ -470,10 +470,19 @@ export class HebListOps implements ListOps {
       // is precisely the overwrite this refresh exists to prevent. A read failure must stop
       // the write, not license it.
       const base = fresh.weight ?? 0;
-      const target = Math.max(base, snapWeight(base + input.weight, fresh.product?.weightIncrements));
+      const requested = base + input.weight;
+      const increments = fresh.product?.weightIncrements;
+      const target = Math.max(base, snapWeight(requested, increments));
+      // The ladder tops out below what was asked for: report the shortfall the same way a
+      // blocked quantity ceiling does, rather than confirming the last rung as the full ask.
+      const shortfall =
+        increments !== undefined && increments.length > 0 && requested > increments[increments.length - 1]!
+          ? { weightRequested: requested }
+          : {};
       return {
         status: 'already_present',
         item: await this.adjustWeight(listId, fresh, target),
+        ...shortfall,
       };
     }
 
@@ -588,11 +597,19 @@ export class HebListOps implements ListOps {
       // `Math.max` is what bounds the damage. It never lowers the line below the weight the
       // add response reported, so the only value at risk is one written inside that final
       // window.
-      const target = Math.max(
-        added.weight ?? 0,
-        snapWeight(input.weight, added.product.weightIncrements),
-      );
-      return { status, item: await this.adjustWeight(listId, added, target, !wasPresent) };
+      const increments = added.product.weightIncrements;
+      const target = Math.max(added.weight ?? 0, snapWeight(input.weight, increments));
+      // Same shortfall reporting as the existing-line path above: the ladder's top rung is
+      // not the full request.
+      const shortfall =
+        increments !== undefined && increments.length > 0 && input.weight > increments[increments.length - 1]!
+          ? { weightRequested: input.weight }
+          : {};
+      return {
+        status,
+        item: await this.adjustWeight(listId, added, target, !wasPresent),
+        ...shortfall,
+      };
     }
 
     // The mutation contributed the first unit; the rest go the same way.

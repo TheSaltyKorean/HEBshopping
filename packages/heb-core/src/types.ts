@@ -168,13 +168,18 @@ export interface AddItemInput {
  * hold had every unit landed. It differs from `item.quantity` when HEB's own
  * `maximumQuantity` stopped the adds short, so the caller can report the shortfall instead
  * of confirming the full amount as if it had all gone through.
+ *
+ * `weightRequested` is the same idea for counter goods: present when the product's own
+ * weight ladder tops out below what was asked for, so `item.weight` is the last rung and
+ * not the full request. Without it, a 5 lb request against a 2 lb ladder confirms 2 lb as
+ * if that were the whole ask instead of reporting the shortfall.
  */
 export type AddResult =
-  | { status: 'added'; item: ListItem; quantityRequested?: number }
+  | { status: 'added'; item: ListItem; quantityRequested?: number; weightRequested?: number }
   /** Confidence below threshold. Nothing was written. */
   | { status: 'needs_confirmation'; match: MatchResult }
   /** Already on the list; quantity was incremented instead of adding a line. */
-  | { status: 'already_present'; item: ListItem; quantityRequested?: number };
+  | { status: 'already_present'; item: ListItem; quantityRequested?: number; weightRequested?: number };
 
 export interface RemoveItemInput {
   listId?: string;

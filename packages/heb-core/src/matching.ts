@@ -268,6 +268,15 @@ function parseWeightPhrase(raw: readonly string[]): { pounds: number; rest: stri
   let pounds = fraction ?? numeric ?? 1;
   if (fraction !== undefined || numeric !== undefined) index += 1;
 
+  // "one hundred pounds of turkey" — "hundred" multiplies the digit word before it. Without
+  // this, only "one" is read here, "hundred" is left as an unmatched unit word, and the
+  // whole phrase falls through to a plain count-and-query parse that drops the weight and
+  // can add a counter product at its default size instead of refusing.
+  if (numeric !== undefined && numeric >= 1 && numeric <= 9 && raw[index] === 'hundred') {
+    pounds = numeric * 100;
+    index += 1;
+  }
+
   // "twenty one pounds" / "thirty five pounds" — every tens word from twenty through ninety
   // can be followed by a ones word to build a compound. Reading only the bare tens word still
   // refuses the weight (all of them exceed MAX_WEIGHT_LB), but misreports the spoken amount
@@ -284,10 +293,15 @@ function parseWeightPhrase(raw: readonly string[]): { pounds: number; rest: stri
   // "one and a half", but without the "and". Reading only a bare number here would leave
   // "half" behind as an unmatched unit word and fail the whole phrase, silently falling
   // through to a plain count-and-query parse that drops the weight entirely.
+  //
+  // Without the "and", "one" is the fraction's numerator, not a whole number to add to it:
+  // "one half" is 0.5, not 1.5. That only applies when the leading number is exactly one —
+  // "two half" is not a phrase anyone says — so every other number keeps adding, the way
+  // "two and a half" does once the "and" form matches below.
   if (numeric !== undefined) {
     const adjacent = FRACTION_WORDS[raw[index] ?? ''];
     if (adjacent !== undefined) {
-      pounds += adjacent;
+      pounds = numeric === 1 ? adjacent : pounds + adjacent;
       index += 1;
     }
   }
@@ -360,17 +374,26 @@ export function parseSpokenRequest(text: string): SpokenRequest {
   const first = tokens[0]!;
   let numeric = NUMBER_WORDS[first] ?? (/^\d+$/.test(first) ? Number(first) : undefined);
 
+  // "one hundred bananas" — "hundred" multiplies the digit word before it. Without this,
+  // only "one" is read here, "hundred" stays in the query as ordinary text, and the request
+  // resolves to quantity 1 with a search for "hundred bananas" instead of refusing.
+  let consumedHundred = 1;
+  if (numeric !== undefined && numeric >= 1 && numeric <= 9 && tokens[1] === 'hundred') {
+    numeric *= 100;
+    consumedHundred = 2;
+  }
+
   // "twenty one bananas" / "thirty five bananas" — every tens word from twenty through ninety
   // can be followed by a ones word to build a compound. Reading only the bare tens word still
   // refuses the count (all of them exceed MAX_QUANTITY), but misreports the spoken amount in
   // the refusal message unless the ones word is consumed too — the same trap
   // `parseWeightPhrase` guards against.
-  let consumed = 1;
+  let consumed = consumedHundred;
   if (numeric !== undefined && numeric >= 20 && numeric % 10 === 0) {
-    const ones = ONES_WORDS[tokens[1] ?? ''];
+    const ones = ONES_WORDS[tokens[consumed] ?? ''];
     if (ones !== undefined) {
       numeric += ones;
-      consumed = 2;
+      consumed += 1;
     }
   }
   const second = tokens[consumed];

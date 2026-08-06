@@ -48,11 +48,22 @@ function parseArgs(argv: string[]): Options {
     process.exit(1);
   }
 
+  const sessionId = value('--session-id');
+  // The Terraform in `infra/` never sets `HEB_SESSION_ID` on either Lambda, so both always
+  // construct their store with the default session id and would never read a row written
+  // under a custom one — this command would report success while Alexa and MCP stayed on
+  // the old session. Refuse rather than upload a row nothing deployed can reach.
+  if (sessionId !== undefined) {
+    console.error('⛔ --session-id has no effect: the deployed Lambdas are not configured');
+    console.error('   with a matching HEB_SESSION_ID and will keep reading the default row.');
+    process.exit(1);
+  }
+
   return {
     table,
     region: value('--region') ?? process.env['AWS_REGION'],
     sessionPath: resolve(value('--session') ?? '.session/session.json'),
-    sessionId: value('--session-id'),
+    sessionId,
   };
 }
 

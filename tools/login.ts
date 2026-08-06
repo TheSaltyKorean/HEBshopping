@@ -22,6 +22,7 @@ import {
   FileStore,
   HebClient,
   HEB_ACCOUNTS_ORIGIN,
+  HEB_SESSION_HOSTS,
   checkSession,
   cookieMatchesHost,
   getShoppingListsDocument,
@@ -169,8 +170,16 @@ async function main(): Promise<void> {
   let session: SessionState | null = null;
   let lastReason = '';
 
+  const hebHosts = HEB_SESSION_HOSTS.map((origin) => new URL(origin).hostname);
+
   while (Date.now() < deadline) {
-    const cookies = (await context.cookies()) as Cookie[];
+    // The persistent profile's jar holds cookies for every site visited in it, not just
+    // HEB — checking an emailed OTP in the same window brings the email provider's cookies
+    // along. Keep only what authenticates www.heb.com/accounts.heb.com; anything else is a
+    // stranger's cookie riding along in the session file and, later, in DynamoDB.
+    const cookies = ((await context.cookies()) as Cookie[]).filter((cookie) =>
+      hebHosts.some((host) => cookieMatchesHost(cookie, host)),
+    );
     const candidate: SessionState = { cookies, capturedAt: Date.now(), buildId: null };
     const health = checkSession(candidate, Date.now());
 

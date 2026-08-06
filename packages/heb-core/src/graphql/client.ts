@@ -236,6 +236,22 @@ export class HebClient {
     }
 
     if (!response.ok) {
+      // HEB sometimes serves a GraphQL error envelope (e.g. GRAPHQL_VALIDATION_FAILED for
+      // schema drift) with a non-2xx status instead of the usual 200. Route it through the
+      // same classifier a 200 envelope would use rather than reporting it as a generic HTTP
+      // error — otherwise it loses `schemaDrift`, is marked retryable purely by status, and a
+      // mutation caller can misread a definitively pre-execution validation failure as an
+      // indeterminate write.
+      let parsedEnvelope: GraphqlEnvelope<T> | undefined;
+      try {
+        parsedEnvelope = JSON.parse(body) as GraphqlEnvelope<T>;
+      } catch {
+        parsedEnvelope = undefined;
+      }
+      if (parsedEnvelope?.errors?.length) {
+        throw toGraphqlError(document, parsedEnvelope.errors);
+      }
+
       // Include a snippet on 4xx: those are our fault (a malformed document) and the
       // body names the reason, which is otherwise invisible. 5xx bodies are HEB's
       // internals and are deliberately not echoed. GraphQL validation errors carry no

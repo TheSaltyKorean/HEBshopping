@@ -96,6 +96,19 @@ const NUMBER_WORDS: Readonly<Record<string, number>> = {
 };
 
 /**
+ * A single decimal digit following a spoken "point" — either the spelled-out word ("five")
+ * or, when Alexa's transcription mixes words and numerals ("one point 5"), the bare numeral
+ * character itself. Shared by the weight and count decimal-digit loops in `parseWeightPhrase`
+ * and `parseSpokenRequest` below.
+ */
+function spokenDigit(token: string | undefined): number | undefined {
+  if (token === undefined) return undefined;
+  const word = NUMBER_WORDS[token];
+  if (word !== undefined && word <= 9) return word;
+  return /^[0-9]$/.test(token) ? Number(token) : undefined;
+}
+
+/**
  * The digits that follow a tens word in a compound amount ("twenty one pounds", "thirty
  * five bananas"). See `parseWeightPhrase` and `parseSpokenRequest`.
  */
@@ -122,6 +135,10 @@ const MEASURE_WORDS = new Set([
   'l', 'ml', 'g', 'kg', 'gram', 'grams', 'kilogram', 'kilograms',
   'milliliter', 'milliliters', 'millilitre', 'millilitres', 'litre', 'liters', 'litres',
   'gal', 'qt', 'pt', 'pint', 'pints', 'quarts', 'gallons', 'fl',
+  // Dosage units. "200 mg ibuprofen" is one bottle of 200 mg tablets, not 200 items — same
+  // trap as "two percent milk", and without these the leading number is read as a quantity
+  // instead of staying part of the catalog query.
+  'mg', 'mcg', 'milligram', 'milligrams', 'microgram', 'micrograms',
   // "hour" — a genuine duration unit, exactly like "percent": "five hour energy berry" is
   // one bottle of 5-hour Energy, not five bottles of "hour energy berry". Handling it here,
   // rather than adding "5-hour energy" to `NUMBER_LED_BRANDS`, generalises to any number-led
@@ -358,8 +375,8 @@ function parseWeightPhrase(raw: readonly string[]): { pounds: number; rest: stri
   if (raw[index] === 'point') {
     const digits: number[] = [];
     let cursor = index + 1;
-    while (cursor < raw.length && NUMBER_WORDS[raw[cursor]!] !== undefined && NUMBER_WORDS[raw[cursor]!]! <= 9) {
-      digits.push(NUMBER_WORDS[raw[cursor]!]!);
+    while (cursor < raw.length && spokenDigit(raw[cursor]) !== undefined) {
+      digits.push(spokenDigit(raw[cursor])!);
       cursor += 1;
     }
     if (digits.length > 0) {
@@ -627,8 +644,8 @@ export function parseSpokenRequest(text: string): SpokenRequest {
     const digitStart = isBarePoint ? 1 : 2;
     const digits: number[] = [];
     let cursor = digitStart;
-    while (cursor < tokens.length && NUMBER_WORDS[tokens[cursor]!] !== undefined && NUMBER_WORDS[tokens[cursor]!]! <= 9) {
-      digits.push(NUMBER_WORDS[tokens[cursor]!]!);
+    while (cursor < tokens.length && spokenDigit(tokens[cursor]) !== undefined) {
+      digits.push(spokenDigit(tokens[cursor])!);
       cursor += 1;
     }
     if (digits.length > 0) {
@@ -807,6 +824,14 @@ export function parseSpokenRequest(text: string): SpokenRequest {
       : headNoun === undefined ||
         !(headNoun.length > 3 && headNoun.endsWith('s') && !headNoun.endsWith('ss') && !headNoun.endsWith('us')));
 
+  // "2-in-1 shampoo" tokenizes to "2 in 1 shampoo" — the leading number describes the
+  // product's formulation, not how many are wanted, the same trap as "two percent milk".
+  // "in" is not itself a measure word (it is ordinary filler everywhere else), so it is
+  // only read this way immediately followed by "one"/"1"; without this, the phrase reads
+  // as quantity 2 with query "in 1 shampoo", and confirming the product adds two.
+  const isNumberInOne =
+    second === 'in' && (tokens[consumed + 1] === 'one' || tokens[consumed + 1] === '1');
+
   const isCount =
     !singular &&
     !startsBrand &&
@@ -824,7 +849,8 @@ export function parseSpokenRequest(text: string): SpokenRequest {
     // quantity nobody asked for. It is refused below instead of silently rounded.
     Number.isInteger(numeric) &&
     tokens.length > consumed &&
-    !(isMeasureWord && !multiplies);
+    !(isMeasureWord && !multiplies) &&
+    !isNumberInOne;
 
   if (isCount) {
     return { quantity: numeric!, query: tokens.slice(consumed).join(' ') };
@@ -837,7 +863,8 @@ export function parseSpokenRequest(text: string): SpokenRequest {
     numeric !== undefined &&
     (numeric > MAX_QUANTITY || !Number.isInteger(numeric)) &&
     tokens.length > consumed &&
-    !(isMeasureWord && !multiplies)
+    !(isMeasureWord && !multiplies) &&
+    !isNumberInOne
   ) {
     return { quantity: 1, query: tokens.join(' '), quantityRefused: numeric };
   }

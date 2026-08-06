@@ -141,6 +141,43 @@ describe('HebClient', () => {
     expect(error.retryable).toBe(false);
   });
 
+  it('classifies a GraphQL validation envelope served with a non-2xx status as schema drift', async () => {
+    // HEB sometimes returns the same error envelope schema drift produces on a 200 response,
+    // but wrapped in an HTTP 400. Without parsing the body first, this fell through to the
+    // generic HTTP-error branch: no `schemaDrift`, retryable purely by status code, and a
+    // mutation caller couldn't tell a rejected write from an indeterminate one.
+    const fetchImpl = respond(
+      JSON.stringify({
+        errors: [
+          {
+            message: 'Cannot query field "totalItemCount" on type "ShoppingListResponseV2".',
+            extensions: { code: 'GRAPHQL_VALIDATION_FAILED' },
+          },
+        ],
+      }),
+      400,
+    );
+
+    const error = await client(fetchImpl)
+      .execute(addItemsDocument('list-1', ['p-1']))
+      .catch((e: unknown) => e as HebError);
+
+    expect(error.code).toBe('UPSTREAM_ERROR');
+    expect(error.details?.schemaDrift).toBe(true);
+    expect(error.retryable).toBe(false);
+  });
+
+  it('still reports a plain 4xx with no error envelope as a generic HTTP error', async () => {
+    const fetchImpl = respond('not json', 400);
+    const error = await client(fetchImpl)
+      .execute(addItemsDocument('list-1', ['p-1']))
+      .catch((e: unknown) => e as HebError);
+
+    expect(error.code).toBe('UPSTREAM_ERROR');
+    expect(error.details?.schemaDrift).toBeUndefined();
+    expect(error.message).toContain('HTTP 400');
+  });
+
   it('times out rather than awaiting indefinitely', async () => {
     // An unbounded await would blow Alexa's ~8s budget and produce no spoken response.
     const fetchImpl = vi.fn(

@@ -81,6 +81,27 @@ describe('parseSpokenRequest', () => {
     });
   });
 
+  it('does NOT read "200 mg ibuprofen" as 200 items', () => {
+    // "mg" is a dosage unit, exactly like "percent" — the number names the strength of the
+    // tablet, not a count of bottles, and 200 also exceeds MAX_QUANTITY.
+    expect(parseSpokenRequest('200 mg ibuprofen')).toEqual({ quantity: 1, query: '200 mg ibuprofen' });
+  });
+
+  it('does NOT read "5 mg melatonin" as five bottles', () => {
+    expect(parseSpokenRequest('5 mg melatonin')).toEqual({ quantity: 1, query: '5 mg melatonin' });
+  });
+
+  it('does NOT read "2-in-1 shampoo" as two bottles', () => {
+    // Tokenization turns "2-in-1" into "2 in 1" — "in" is ordinary filler everywhere else,
+    // so it is only read as part of the product description when immediately followed by
+    // "one"/"1", the same shape as "two percent milk".
+    expect(parseSpokenRequest('2-in-1 shampoo')).toEqual({ quantity: 1, query: '2 in 1 shampoo' });
+  });
+
+  it('does NOT read "two-in-one shampoo" as two bottles', () => {
+    expect(parseSpokenRequest('two-in-one shampoo')).toEqual({ quantity: 1, query: 'two in one shampoo' });
+  });
+
   it('does NOT read "two ply charmin toilet paper" as two packages', () => {
     // "ply" describes the sheet count of the roll, not how many rolls were asked for.
     expect(parseSpokenRequest('two ply charmin toilet paper')).toEqual({
@@ -347,6 +368,23 @@ describe('parseSpokenRequest', () => {
       // "half and half" is a product name — no "of" follows "half" — and must not be
       // misread as a request for half a unit of something else.
       expect(parseSpokenRequest('half and half')).toEqual({ quantity: 1, query: 'half half' });
+    });
+
+    it('refuses a spoken decimal count with a numeral digit after "point" ("one point 5 bananas")', () => {
+      // Alexa's transcription sometimes mixes words and numerals — "one point 5" rather than
+      // "one point five". The decimal-digit loop only recognized spelled-out NUMBER_WORDS, so
+      // it stopped at "5" and this resolved to quantity 1 with "point 5 bananas" left in the
+      // query instead of refusing the fractional count.
+      const parsed = parseSpokenRequest('one point 5 bananas');
+      expect(parsed.quantity).toBe(1);
+      expect(parsed.quantityRefused).toBe(1.5);
+      expect(parsed.query).toBe('one point 5 bananas');
+    });
+
+    it('reads a spoken decimal weight with a numeral digit after "point" ("one point 5 pounds")', () => {
+      const parsed = parseSpokenRequest('one point 5 pounds of turkey');
+      expect(parsed.weight).toBe(1.5);
+      expect(parsed.query).toBe('turkey');
     });
   });
 

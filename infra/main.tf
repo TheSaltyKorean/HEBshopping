@@ -110,24 +110,43 @@ data "aws_iam_policy_document" "assume" {
   }
 }
 
-resource "aws_iam_role" "lambda" {
-  name               = "${local.name}-lambda"
+resource "aws_iam_role" "alexa" {
+  name               = "${local.name}-alexa"
   assume_role_policy = data.aws_iam_policy_document.assume.json
 }
 
+resource "aws_iam_role" "mcp" {
+  name               = "${local.name}-mcp"
+  assume_role_policy = data.aws_iam_policy_document.assume.json
+}
+
+# Read only. The handlers never call `putSession` — the sole production writer is
+# `tools/push-session.ts`, running under the operator's own credentials. Granting
+# PutItem to two internet-facing functions would let compromised runtime code replace
+# or destroy the household's stored credential, for no capability they actually use.
+data "aws_iam_policy_document" "session_read" {
+  statement {
+    actions   = ["dynamodb:GetItem"]
+    resources = [aws_dynamodb_table.session.arn]
+  }
+
+  statement {
+    actions   = ["logs:CreateLogGroup", "logs:CreateLogStream", "logs:PutLogEvents"]
+    resources = ["arn:aws:logs:*:*:*"]
+  }
+}
+
+resource "aws_iam_role_policy" "alexa" {
+  role   = aws_iam_role.alexa.id
+  policy = data.aws_iam_policy_document.session_read.json
+}
+
 /**
- * Exactly the actions the functions perform, on exactly their own resources.
- *
- * Notably absent: `sns:Publish`. The alarms publish on their own behalf, not through the
- * execution role, so granting it gave two internet-facing runtimes the ability to spam the
- * alert topic — the channel that exists to tell the household something is wrong — while
- * enabling no application behaviour at all.
+ * `mcp-http.ts` is the only handler that reads the bearer token, so it is the only role
+ * that can. The Alexa role shares nothing with it: a compromised Alexa handler must not be
+ * able to fetch the sole credential guarding the separate internet-facing MCP URL.
  */
-data "aws_iam_policy_document" "lambda" {
-  # Read only. The handlers never call `putSession` — the sole production writer is
-  # `tools/push-session.ts`, running under the operator's own credentials. Granting
-  # PutItem to two internet-facing functions would let compromised runtime code replace
-  # or destroy the household's stored credential, for no capability they actually use.
+data "aws_iam_policy_document" "mcp" {
   statement {
     actions   = ["dynamodb:GetItem"]
     resources = [aws_dynamodb_table.session.arn]
@@ -144,9 +163,9 @@ data "aws_iam_policy_document" "lambda" {
   }
 }
 
-resource "aws_iam_role_policy" "lambda" {
-  role   = aws_iam_role.lambda.id
-  policy = data.aws_iam_policy_document.lambda.json
+resource "aws_iam_role_policy" "mcp" {
+  role   = aws_iam_role.mcp.id
+  policy = data.aws_iam_policy_document.mcp.json
 }
 
 /**
@@ -167,7 +186,7 @@ resource "aws_cloudwatch_log_group" "mcp" {
 
 resource "aws_lambda_function" "alexa" {
   function_name    = "${local.name}-alexa"
-  role             = aws_iam_role.lambda.arn
+  role             = aws_iam_role.alexa.arn
   filename         = var.bundle_path
   source_code_hash = filebase64sha256(var.bundle_path)
   handler          = "alexa.handler"
@@ -206,7 +225,7 @@ resource "aws_lambda_function" "alexa" {
 
 resource "aws_lambda_function" "mcp" {
   function_name    = "${local.name}-mcp"
-  role             = aws_iam_role.lambda.arn
+  role             = aws_iam_role.mcp.arn
   filename         = var.bundle_path
   source_code_hash = filebase64sha256(var.bundle_path)
   handler          = "mcp.handler"

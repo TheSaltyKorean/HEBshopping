@@ -689,10 +689,19 @@ describe('articles and irregular plurals', () => {
   });
 
   it('reads "an eight o\'clock coffee" as one, not eight', () => {
-    // "Eight O'Clock" is not in NUMBER_LED_BRANDS (it can't be enumerated), so without
-    // treating the article + spelled-out number as a singular marker this parsed as
-    // quantity 8 with query "o clock coffee" — a silent 8x overadd.
+    // The article + spelled-out number singular marker also catches this, but "eight o
+    // clock" is now in NUMBER_LED_BRANDS too — see the bare-brand test below.
     expect(parseSpokenRequest("an eight o'clock coffee")).toEqual({
+      quantity: 1,
+      query: 'eight o clock coffee',
+    });
+  });
+
+  it('reads "eight o\'clock coffee" (no article) as one, not eight', () => {
+    // Without "eight o clock" in NUMBER_LED_BRANDS, only the article-led phrasing was
+    // protected — the equally natural bare brand name still parsed as quantity 8 with
+    // query "coffee", an 8x overadd.
+    expect(parseSpokenRequest("eight o'clock coffee")).toEqual({
       quantity: 1,
       query: 'eight o clock coffee',
     });

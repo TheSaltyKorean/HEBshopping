@@ -157,6 +157,7 @@ const NUMBER_LED_BRANDS: ReadonlyArray<readonly string[]> = [
   ['three', 'bridges'],
   ['three', 'musketeers'],
   ['thousand', 'island'],
+  ['eight', 'o', 'clock'],
 ];
 
 export function tokenize(text: string): string[] {

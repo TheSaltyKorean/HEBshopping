@@ -567,6 +567,21 @@ function errorHandler(): ErrorHandler {
         // would retain a household's shopping in CloudWatch indefinitely.
         console.error(`HebError ${error.code}`);
 
+        // Schema drift is permanent until someone changes the code, and takes priority over
+        // `partialAdd` when both are set: suggesting a retry or "check the quantity" makes a
+        // broken integration look transient, and the log line — a bare code — gives no hint
+        // either, so an Alexa-only deployment could stay broken for weeks.
+        if (error.details?.['schemaDrift'] === true) {
+          console.error('HebError UPSTREAM_ERROR (schema drift — operations.ts needs updating)');
+          return input.responseBuilder
+            .speak(
+              'H-E-B has changed something on their side, and I cannot reach your list ' +
+                'until this skill is updated. Retrying will not help.',
+            )
+            .withShouldEndSession(true)
+            .getResponse();
+        }
+
         // Keyed on the specific marker, not on "non-retryable UPSTREAM_ERROR" — plenty of
         // other failures are non-retryable (a refused removal, schema drift on a read),
         // and telling someone their item was added when nothing was added is worse than
@@ -582,20 +597,6 @@ function errorHandler(): ErrorHandler {
               : 'That went through only partly — the item is on your list, but H-E-B would ' +
                 'not set the amount. Please check the quantity in the H-E-B app.';
           return input.responseBuilder.speak(speech).withShouldEndSession(true).getResponse();
-        }
-
-        // Schema drift is permanent until someone changes the code. Suggesting a retry
-        // makes a broken integration look transient, and the log line — a bare code —
-        // gives no hint either, so an Alexa-only deployment could stay broken for weeks.
-        if (error.details?.['schemaDrift'] === true) {
-          console.error('HebError UPSTREAM_ERROR (schema drift — operations.ts needs updating)');
-          return input.responseBuilder
-            .speak(
-              'H-E-B has changed something on their side, and I cannot reach your list ' +
-                'until this skill is updated. Retrying will not help.',
-            )
-            .withShouldEndSession(true)
-            .getResponse();
         }
 
         // Indeterminate: the write may well have landed and the confirming read failed

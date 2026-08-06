@@ -326,6 +326,16 @@ function parseWeightPhrase(raw: readonly string[]): { pounds: number; rest: stri
     }
   }
 
+  // "one thousand pounds of turkey" / "a thousand pounds of turkey" — same reasoning as
+  // "hundred" above, one scale word up. Without this, "thousand" is left as an unmatched
+  // unit word (or, for the bare form, as ordinary query text) and the phrase falls through
+  // to a count-and-query parse that drops the weight instead of refusing it.
+  const isBareThousand = numeric === undefined && fraction === undefined && first === 'thousand';
+  if (((numeric !== undefined && numeric >= 1 && numeric <= 9) || isBareThousand) && raw[index] === 'thousand') {
+    pounds = (numeric ?? 1) * 1000;
+    index += 1;
+  }
+
   // "twenty one pounds" / "thirty five pounds" — every tens word from twenty through ninety
   // can be followed by a ones word to build a compound. Reading only the bare tens word still
   // refuses the weight (all of them exceed MAX_WEIGHT_LB), but misreports the spoken amount
@@ -468,6 +478,18 @@ export function parseSpokenRequest(text: string): SpokenRequest {
       numeric += hundredOnes;
       consumedHundred = cursor + 1;
     }
+  }
+
+  // "one thousand bananas" / "a thousand bananas" — same reasoning as "hundred" above, one
+  // scale word up. Without this, "thousand" is left in the query as ordinary text and the
+  // request resolves to quantity 1 with a search for "thousand bananas" instead of refusing.
+  const isBareThousand = numeric === undefined && first === 'thousand';
+  if (
+    ((numeric !== undefined && numeric >= 1 && numeric <= 9) || isBareThousand) &&
+    tokens[isBareThousand ? 0 : 1] === 'thousand'
+  ) {
+    numeric = (numeric ?? 1) * 1000;
+    consumedHundred = isBareThousand ? 1 : 2;
   }
 
   // "twenty one bananas" / "thirty five bananas" — every tens word from twenty through ninety

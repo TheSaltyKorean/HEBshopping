@@ -122,6 +122,15 @@ const MEASURE_WORDS = new Set([
   'l', 'ml', 'g', 'kg', 'gram', 'grams', 'kilogram', 'kilograms',
   'milliliter', 'milliliters', 'millilitre', 'millilitres', 'litre', 'liters', 'litres',
   'gal', 'qt', 'pt', 'pint', 'pints', 'quarts', 'gallons', 'fl',
+  // "hour" — a genuine duration unit, exactly like "percent": "five hour energy berry" is
+  // one bottle of 5-hour Energy, not five bottles of "hour energy berry". Handling it here,
+  // rather than adding "5-hour energy" to `NUMBER_LED_BRANDS`, generalises to any number-led
+  // product named after a duration instead of growing an allowlist one brand at a time.
+  'hour', 'hours',
+  // "ply" describes the sheet count of the roll, not how many rolls: "two-ply Charmin
+  // toilet paper" is one product, not two. Same shape as "percent" and "pack" — the number
+  // is part of what the product *is*, not how many are wanted.
+  'ply',
 ]);
 
 /**

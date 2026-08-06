@@ -106,12 +106,16 @@ function describeAddResult(result: AddResult, requested: { quantity?: number; we
   // rather than reporting the capped quantity as if it were the full amount — an agent
   // relaying "added" back to the user would otherwise claim a bigger add than actually
   // happened.
+  //
+  // `quantityRequested` is the line's desired *total*, not the increment this call asked to
+  // add — a line already at 5 asking to add 2 reports `quantityRequested: 7`. Phrasing this
+  // as "requested 7 could not be added" claims a bigger increment than was actually asked for.
   const cappedNotice =
     (result.status === 'added' || result.status === 'already_present') &&
     result.quantityRequested !== undefined &&
     result.quantityRequested > result.item.quantity
-      ? ` (HEB only allows ${result.item.quantity} of this item — the remainder of the ` +
-        `requested ${result.quantityRequested} could not be added)`
+      ? ` (HEB only allows ${result.item.quantity} of this item — could not bring it up to ` +
+        `the requested total of ${result.quantityRequested})`
       : '';
 
   // The other direction, only possible on a brand-new line: a concurrent add of the same

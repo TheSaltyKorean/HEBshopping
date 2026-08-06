@@ -174,9 +174,13 @@ function confirmAdded(
 
   // The server's per-item cap can stop a multi-unit add short of what was asked. Saying so
   // is what tells the shopper the line reads 10, not the 15 they actually asked for.
+  //
+  // `quantityRequested` is the line's desired *total*, not the increment this request asked
+  // to add — a line already at 5 asking to add 2 reports `quantityRequested: 7`. Wording this
+  // as "could not add all 7" claims the shopper asked to add seven, when they asked for two.
   const cappedNotice =
     quantityRequested !== undefined && quantityRequested > item.quantity
-      ? ` H-E-B only allows ${item.quantity} of ${name}, so I could not add all ${quantityRequested}.`
+      ? ` H-E-B only allows ${item.quantity} of ${name}, so I could not bring it up to ${quantityRequested}.`
       : '';
 
   // The other direction: someone else added the same item in the gap, so the list holds

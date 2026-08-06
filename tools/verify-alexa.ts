@@ -127,12 +127,19 @@ function guardedListOps(): HebListOps {
           });
         }
       } else if (result.status === 'already_present') {
+        // `already_present` does not mean this call wrote anything — a line already at its
+        // ceiling is reported `already_present` with the mutation never issued. The nominal
+        // `contributed` above assumes the write landed; the only proof it did is the line
+        // actually reading higher than the opening snapshot. Restoring on an unproven
+        // contribution subtracts a unit this run never added, taking a household member's.
         const previous = before.get(result.item.lineId);
-        if (previous !== undefined && !raisedQuantities.has(result.item.lineId)) {
+        const actualContributed =
+          previous === undefined ? 0 : result.item.quantity - previous;
+        if (previous !== undefined && actualContributed > 0 && !raisedQuantities.has(result.item.lineId)) {
           raisedQuantities.set(result.item.lineId, {
             previous,
             produced: result.item.quantity,
-            contributed,
+            contributed: actualContributed,
           });
         }
       }

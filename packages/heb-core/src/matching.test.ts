@@ -72,6 +72,23 @@ describe('parseSpokenRequest', () => {
     expect(parseSpokenRequest('two percent milk')).toEqual({ quantity: 1, query: 'two percent milk' });
   });
 
+  it('does NOT read "five hour energy berry" as five products', () => {
+    // "hour" is a duration unit, exactly like "percent" — the number names the product
+    // (5-hour Energy), not a count of bottles.
+    expect(parseSpokenRequest('five hour energy berry')).toEqual({
+      quantity: 1,
+      query: 'five hour energy berry',
+    });
+  });
+
+  it('does NOT read "two ply charmin toilet paper" as two packages', () => {
+    // "ply" describes the sheet count of the roll, not how many rolls were asked for.
+    expect(parseSpokenRequest('two ply charmin toilet paper')).toEqual({
+      quantity: 1,
+      query: 'two ply charmin toilet paper',
+    });
+  });
+
   // A package word after a number can be either reading, and both are common:
   //   "six pack soda"      — the number names the package        → one
   //   "two dozen eggs"     — the number counts packages          → two

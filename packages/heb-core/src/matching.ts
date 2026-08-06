@@ -516,6 +516,18 @@ export function parseSpokenRequest(text: string): SpokenRequest {
       consumed += 1;
     }
   }
+  // "one and a half bananas" — Alexa's spoken fraction, with "and" and the article already
+  // dropped as filler by the time `tokens` is built, so "half" would otherwise sit right
+  // where a measure word goes. Folding it into `numeric` here turns the count into 1.5,
+  // which the existing `Number.isInteger` check below already refuses the same way it
+  // refuses a digit fraction like "1.5 bananas" — instead of silently reading a plain count
+  // of 1 and leaving "half" behind as query text.
+  const fraction = tokens[consumed] !== undefined ? FRACTION_WORDS[tokens[consumed]!] : undefined;
+  if (numeric !== undefined && numeric >= 1 && fraction !== undefined) {
+    numeric += fraction;
+    consumed += 1;
+  }
+
   const second = tokens[consumed];
 
   // A number that starts a brand name belongs to the query, not to the count. Alexa

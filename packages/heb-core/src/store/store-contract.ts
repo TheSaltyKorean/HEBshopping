@@ -21,7 +21,7 @@ export function sampleSession(overrides: Partial<SessionState> = {}): SessionSta
     cookies: [
       {
         name: 'sat',
-        value: 'fixture-value-not-a-real-token',
+        value: 'fixture-val',
         domain: 'www.heb.com',
         path: '/',
         expires: 1_800_000_000,
@@ -31,7 +31,7 @@ export function sampleSession(overrides: Partial<SessionState> = {}): SessionSta
       },
       {
         name: '_session',
-        value: 'fixture-value-not-a-real-token',
+        value: 'fixture-val',
         domain: 'accounts.heb.com',
         path: '/',
         expires: 1_800_000_000,

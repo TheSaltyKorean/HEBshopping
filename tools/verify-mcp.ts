@@ -143,10 +143,27 @@ async function main(): Promise<void> {
   // and MCP exposes no way to set a quantity back down — so a merge here could not be
   // undone. Checking absence first, rather than only after the fact, means a confident write
   // is guaranteed to create a brand-new line that the cleanup below can find and remove.
-  const oatMilkCandidates = await call('heb_search_product', { query: 'oat milk', limit: 5 });
-  const alreadyOwned = [...oatMilkCandidates.matchAll(/^•\s*(.+?)\s*\[productId: \d+\]/gm)]
-    .map((match) => match[1]!.trim())
-    .find((name) => initial.includes(name));
+  //
+  // `heb_search_product` fetches more candidates internally than it renders — `limit` only
+  // caps the *shown* list, and `heb_add_item` can also merge in a second, broadened search
+  // that this probe never sees at all. 25 is the tool's own maximum, so it is the most this
+  // check can inspect; the reply's own "N match(es)" count says whether that maximum still
+  // left candidates unseen, and the probe refuses to run rather than guess past it.
+  const oatMilkCandidates = await call('heb_search_product', { query: 'oat milk', limit: 25 });
+  const totalMatches = Number(oatMilkCandidates.match(/^(\d+) match\(es\)/)?.[1] ?? NaN);
+  const shownNames = [...oatMilkCandidates.matchAll(/^•\s*(.+?)\s*\[productId: \d+\]/gm)].map(
+    (match) => match[1]!.trim(),
+  );
+  if (!Number.isFinite(totalMatches) || totalMatches > shownNames.length) {
+    throw new Error(
+      `the ambiguity probe is unsafe right now: "oat milk" has ${
+        Number.isFinite(totalMatches) ? totalMatches : 'an unknown number of'
+      } candidate(s) but only ${shownNames.length} could be inspected, so absence from the ` +
+        'household list cannot be proven for all of them — a confident add could merge into ' +
+        'an unseen one and there would be no way to undo it',
+    );
+  }
+  const alreadyOwned = shownNames.find((name) => initial.includes(name));
   if (alreadyOwned !== undefined) {
     throw new Error(
       `the ambiguity probe is unsafe right now: "${alreadyOwned}" is already on the list, ` +

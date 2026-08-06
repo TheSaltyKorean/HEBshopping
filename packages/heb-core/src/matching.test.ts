@@ -152,6 +152,16 @@ describe('parseSpokenRequest', () => {
       expect(parsed.quantityRefused).toBe(1.5);
       expect(parsed.query).toBe('1.5 bananas');
     });
+
+    // Alexa's "and" is dropped as filler before the count is read, so "one and a half
+    // bananas" would otherwise resolve to a plain count of 1 with "half bananas" left as the
+    // query — a live one-unit add for a request the system cannot honour precisely.
+    it('refuses a spoken fractional count ("one and a half") the same way', () => {
+      const parsed = parseSpokenRequest('one and a half bananas');
+      expect(parsed.quantity).toBe(1);
+      expect(parsed.quantityRefused).toBe(1.5);
+      expect(parsed.query).toBe('one half bananas');
+    });
   });
 
   describe('weights above the configured ceiling', () => {

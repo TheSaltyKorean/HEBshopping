@@ -91,6 +91,12 @@ describe('parseSpokenRequest', () => {
     expect(parseSpokenRequest('5 mg melatonin')).toEqual({ quantity: 1, query: '5 mg melatonin' });
   });
 
+  it('does NOT read "400 IU vitamin D" as 400 items', () => {
+    // "IU" (international units) is the standard supplement-strength unit, exactly like
+    // "mg" — the number names the strength, not a count of bottles.
+    expect(parseSpokenRequest('400 iu vitamin d')).toEqual({ quantity: 1, query: '400 iu vitamin d' });
+  });
+
   it('does NOT read "2-in-1 shampoo" as two bottles', () => {
     // Tokenization turns "2-in-1" into "2 in 1" — "in" is ordinary filler everywhere else,
     // so it is only read as part of the product description when immediately followed by
@@ -384,6 +390,34 @@ describe('parseSpokenRequest', () => {
     it('reads a spoken decimal weight with a numeral digit after "point" ("one point 5 pounds")', () => {
       const parsed = parseSpokenRequest('one point 5 pounds of turkey');
       expect(parsed.weight).toBe(1.5);
+      expect(parsed.query).toBe('turkey');
+    });
+
+    it('reads a spoken decimal weight with grouped digits after "point" ("one point 25 pounds")', () => {
+      // A grouped numeral token ("25"), not one digit per token — the decimal-digit loop
+      // only accepted single-character numerals, so it stopped before "25" and this fell
+      // through to a count-and-query parse instead of the 1.25 lb actually requested.
+      const parsed = parseSpokenRequest('one point 25 pounds of turkey');
+      expect(parsed.weight).toBe(1.25);
+      expect(parsed.query).toBe('turkey');
+    });
+
+    it('reads an adjacent numeric mixed-fraction weight ("1 1/2 pounds")', () => {
+      // The written mixed-fraction form: a whole number directly followed by a numeric
+      // slash fraction. The adjacent-fraction branch only recognized spelled words
+      // ("one half"), so this fell through to a count-and-query parse instead of 1.5 lb.
+      const parsed = parseSpokenRequest('1 1/2 pounds of turkey');
+      expect(parsed.weight).toBe(1.5);
+      expect(parsed.query).toBe('turkey');
+    });
+
+    it('reads "a couple of pounds" as a weight, not a stray "of"', () => {
+      // "couple" is a count idiom that takes its own "of" ("a couple of lemons"). Weight
+      // parsing treats "of" as the significant marker before the unit, so without skipping
+      // the idiom's own "of" first, this fell through to a count-and-query parse instead of
+      // the 2 lb actually requested.
+      const parsed = parseSpokenRequest('a couple of pounds of turkey');
+      expect(parsed.weight).toBe(2);
       expect(parsed.query).toBe('turkey');
     });
   });

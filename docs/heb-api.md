@@ -183,7 +183,8 @@ field is `addShoppingListItemsV2`, which does *not* match the operation name.
              "page": { "sort": "CATEGORY", "sortDirection": "ASC" } } }
 ```
 
-`quantityOrWeight` implies a weight-based variant for by-the-pound goods — not yet captured.
+`quantityOrWeight` implies a weight-based variant for by-the-pound goods — see
+[Weight-based items](#weight-based-items) below for the captured shape.
 
 ### Remove — `deleteShoppingListItems`
 

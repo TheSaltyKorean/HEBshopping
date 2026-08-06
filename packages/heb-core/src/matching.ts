@@ -105,7 +105,10 @@ function spokenDigit(token: string | undefined): number | undefined {
   if (token === undefined) return undefined;
   const word = NUMBER_WORDS[token];
   if (word !== undefined && word <= 9) return word;
-  return /^[0-9]$/.test(token) ? Number(token) : undefined;
+  // A grouped numeral token ("25" in "one point 25 pounds") rather than one digit per
+  // token — Alexa's transcription mixes both forms, and without this the decimal loops
+  // below stop at the first grouped token instead of consuming its digits whole.
+  return /^[0-9]+$/.test(token) ? Number(token) : undefined;
 }
 
 /**
@@ -137,8 +140,9 @@ const MEASURE_WORDS = new Set([
   'gal', 'qt', 'pt', 'pint', 'pints', 'quarts', 'gallons', 'fl',
   // Dosage units. "200 mg ibuprofen" is one bottle of 200 mg tablets, not 200 items — same
   // trap as "two percent milk", and without these the leading number is read as a quantity
-  // instead of staying part of the catalog query.
-  'mg', 'mcg', 'milligram', 'milligrams', 'microgram', 'micrograms',
+  // instead of staying part of the catalog query. "IU" (international units) is the standard
+  // strength unit for supplements like vitamin D — "400 IU vitamin D" is one bottle, not 400.
+  'mg', 'mcg', 'milligram', 'milligrams', 'microgram', 'micrograms', 'iu',
   // "hour" — a genuine duration unit, exactly like "percent": "five hour energy berry" is
   // one bottle of 5-hour Energy, not five bottles of "hour energy berry". Handling it here,
   // rather than adding "5-hour energy" to `NUMBER_LED_BRANDS`, generalises to any number-led
@@ -363,6 +367,18 @@ function parseWeightPhrase(raw: readonly string[]): { pounds: number; rest: stri
   let pounds = fraction ?? numeric ?? 1;
   if (fraction !== undefined || numeric !== undefined) index += 1;
 
+  // "a couple of pounds of turkey" — "couple", "few", "pair", and "both" take their own "of"
+  // right after them ("a couple of lemons"), which the plain count parser never sees because
+  // "of" is filler there. This parser reads "of" as the significant marker before the unit,
+  // so the idiom's own "of" has to be consumed here or it is mistaken for the unit token and
+  // the whole phrase fails, falling through to a count-and-query parse that drops the weight.
+  if (
+    (first === 'couple' || first === 'few' || first === 'pair' || first === 'both') &&
+    raw[index] === 'of'
+  ) {
+    index += 1;
+  }
+
   // "one point five pounds of turkey" — Alexa speaks a decimal weight as digit words joined
   // by "point" rather than a numeral. Without reading it here, "point" is left as an
   // unmatched unit word and the whole phrase falls through to a count-and-query parse that
@@ -485,6 +501,16 @@ function parseWeightPhrase(raw: readonly string[]): { pounds: number; rest: stri
       if (raw[index] === 'of') {
         index += 1;
         skipArticles();
+      }
+    } else {
+      // "1 1/2 pounds of turkey" — the common written mixed-number form, a whole number
+      // directly followed by a numeric slash fraction. Unlike the spelled "one half" form
+      // above, this is addition (1 + 1/2 = 1.5), the ordinary reading of a mixed number, not
+      // a denominator naming the leading number.
+      const slashMatch = /^(\d+)\/(\d+)$/.exec(raw[index] ?? '');
+      if (slashMatch) {
+        pounds += Number(slashMatch[1]) / Number(slashMatch[2]);
+        index += 1;
       }
     }
   }

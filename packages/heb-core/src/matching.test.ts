@@ -189,6 +189,16 @@ describe('parseSpokenRequest', () => {
       expect(parsed.quantityRefused).toBe(1.5);
       expect(parsed.query).toBe('one 0.5 bananas');
     });
+
+    // The fraction reader only consumed a single token, so "three" (the multiplier on
+    // "quarters") was left as unmatched query text and the count resolved to a plain 1 —
+    // performing a live one-unit add for a 1.75-item request instead of refusing it.
+    it('refuses a multiword spoken fractional count ("one and three quarters")', () => {
+      const parsed = parseSpokenRequest('one and three quarters bananas');
+      expect(parsed.quantity).toBe(1);
+      expect(parsed.quantityRefused).toBe(1.75);
+      expect(parsed.query).toBe('one three quarters bananas');
+    });
   });
 
   describe('weights above the configured ceiling', () => {
@@ -628,6 +638,15 @@ describe('articles and irregular plurals', () => {
     expect(parseSpokenRequest('a three musketeers bar')).toEqual({
       quantity: 1,
       query: 'three musketeers bar',
+    });
+  });
+
+  it('reads "thousand island dressing" as one item, not a refused count of 1000', () => {
+    // Without "thousand island" in NUMBER_LED_BRANDS, the leading "thousand" was read as an
+    // implicit count of 1,000 and the request was refused before catalog search ever ran.
+    expect(parseSpokenRequest('thousand island dressing')).toEqual({
+      quantity: 1,
+      query: 'thousand island dressing',
     });
   });
 

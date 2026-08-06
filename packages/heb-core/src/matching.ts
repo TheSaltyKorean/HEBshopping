@@ -156,6 +156,7 @@ const NUMBER_LED_BRANDS: ReadonlyArray<readonly string[]> = [
   ['five', 'guys'],
   ['three', 'bridges'],
   ['three', 'musketeers'],
+  ['thousand', 'island'],
 ];
 
 export function tokenize(text: string): string[] {
@@ -509,8 +510,14 @@ export function parseSpokenRequest(text: string): SpokenRequest {
   // "one thousand bananas" / "a thousand bananas" — same reasoning as "hundred" above, one
   // scale word up. Without this, "thousand" is left in the query as ordinary text and the
   // request resolves to quantity 1 with a search for "thousand bananas" instead of refusing.
-  const isBareThousand = numeric === undefined && first === 'thousand';
+  //
+  // "thousand island dressing" — a number-led product name, same as "seven up" or "three
+  // musketeers". Without this exception, the leading "thousand" is read as an implicit count
+  // of 1,000 and the request is refused before catalog search ever sees the product.
+  const isThousandIsland = tokens[0] === 'thousand' && tokens[1] === 'island';
+  const isBareThousand = !isThousandIsland && numeric === undefined && first === 'thousand';
   if (
+    !isThousandIsland &&
     ((numeric !== undefined && numeric >= 1) || isBareThousand) &&
     tokens[isBareThousand ? 0 : 1] === 'thousand'
   ) {
@@ -538,10 +545,17 @@ export function parseSpokenRequest(text: string): SpokenRequest {
   // check below already refuses the same way it refuses a digit fraction like "1.5 bananas"
   // — instead of silently reading a plain count of 1 and leaving the fraction behind as query
   // text, which would perform a live one-unit add for an amount nobody asked for.
-  const fraction = tokens[consumed] !== undefined ? readFractionToken(tokens[consumed]!) : undefined;
+  // "one and three quarters bananas" — same as the weight parser's `readAndAHalf`, a leading
+  // ones word before the fraction multiplies it. Without reading it here, "three" is left as
+  // an unmatched fraction lookup, the count resolves to a bare 1, and "three quarters bananas"
+  // is left as query text — performing a live one-unit add for the unsupported 1.75-item
+  // request instead of refusing it.
+  const fractionLeadingOnes = ONES_WORDS[tokens[consumed] ?? ''];
+  const fractionCursor = fractionLeadingOnes !== undefined ? consumed + 1 : consumed;
+  const fraction = tokens[fractionCursor] !== undefined ? readFractionToken(tokens[fractionCursor]!) : undefined;
   if (numeric !== undefined && numeric >= 1 && fraction !== undefined) {
-    numeric += fraction;
-    consumed += 1;
+    numeric += fraction * (fractionLeadingOnes ?? 1);
+    consumed = fractionCursor + 1;
   }
 
   const second = tokens[consumed];

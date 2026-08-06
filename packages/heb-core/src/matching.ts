@@ -611,6 +611,26 @@ export function parseSpokenRequest(text: string): SpokenRequest {
     (/^\d+(?:\.\d+)?$/.test(first) ? Number(first) : undefined) ??
     (isLeadingFractionPhrase ? FRACTION_WORDS[first] : undefined);
 
+  // "two point five bananas" — Alexa speaks a decimal count the same way it speaks a decimal
+  // weight, digit words joined by "point" rather than a numeral. Without reading it here,
+  // "point" is left as an unmatched token ahead of the query, and the leading whole number
+  // alone confirms a count of 2 instead of refusing the unsupported fractional count of 2.5
+  // — or, when a measure word follows ("two point five liter soda"), miscounts two packages
+  // instead of matching the one 2.5-liter product.
+  let pointTokens = 0;
+  if (numeric !== undefined && tokens[1] === 'point') {
+    const digits: number[] = [];
+    let cursor = 2;
+    while (cursor < tokens.length && NUMBER_WORDS[tokens[cursor]!] !== undefined && NUMBER_WORDS[tokens[cursor]!]! <= 9) {
+      digits.push(NUMBER_WORDS[tokens[cursor]!]!);
+      cursor += 1;
+    }
+    if (digits.length > 0) {
+      numeric += Number(`0.${digits.join('')}`);
+      pointTokens = cursor - 1;
+    }
+  }
+
   // "one hundred bananas" — "hundred" multiplies the digit word before it. Without this,
   // only "one" is read here, "hundred" stays in the query as ordinary text, and the request
   // resolves to quantity 1 with a search for "hundred bananas" instead of refusing.
@@ -618,7 +638,7 @@ export function parseSpokenRequest(text: string): SpokenRequest {
   // "a hundred bananas" — the leading article is filtered as FILLER before `tokens` is built,
   // so no digit word precedes "hundred" here either; treat the bare word as an implicit one.
   const isBareHundred = numeric === undefined && first === 'hundred';
-  let consumedHundred = 1;
+  let consumedHundred = 1 + pointTokens;
   if (((numeric !== undefined && numeric >= 1) || isBareHundred) && tokens[isBareHundred ? 0 : 1] === 'hundred') {
     numeric = (numeric ?? 1) * 100;
     consumedHundred = isBareHundred ? 1 : 2;

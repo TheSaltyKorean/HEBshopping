@@ -12,9 +12,9 @@
  */
 
 import type { Page } from 'playwright';
-import { mkdir, readFile, rm, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, rm } from 'node:fs/promises';
 import { dirname, resolve } from 'node:path';
-import { attachCapture, launchBrowser, saveCapture, type Capture } from './lib/browser.js';
+import { attachCapture, launchBrowser, saveCapture, writeSecret, type Capture } from './lib/browser.js';
 
 /** What `add` last put on the list, so the mutating commands can refuse anything else. */
 const THROWAWAY_PATH = resolve('captures/.drive-throwaway.json');
@@ -547,7 +547,7 @@ async function addItem(page: Page, text: string, capture: Capture): Promise<void
   }
 
   await mkdir(dirname(THROWAWAY_PATH), { recursive: true });
-  await writeFile(
+  await writeSecret(
     THROWAWAY_PATH,
     JSON.stringify(
       { label, lineId: createdLine.id, quantity: createdLine.quantity, at: Date.now() },

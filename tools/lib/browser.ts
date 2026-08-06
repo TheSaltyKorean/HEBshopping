@@ -22,7 +22,7 @@ const SECRET_FILE_MODE = 0o600;
  * created before this rule existed, keeps a live H-E-B cookie jar world-readable while the
  * code claims otherwise. The chmod is the part that actually holds the guarantee.
  */
-async function writeSecret(path: string, contents: string): Promise<void> {
+export async function writeSecret(path: string, contents: string): Promise<void> {
   await writeFile(path, contents, { mode: SECRET_FILE_MODE });
   await chmod(path, SECRET_FILE_MODE);
 }

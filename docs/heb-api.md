@@ -224,7 +224,7 @@ From an `addToShoppingListV2` response:
 |---|---|
 | Is quantity a line property or are duplicates separate lines? | **A line property.** Confirms the plan's duplicate rule: increment, don't add a second line. |
 | What identifies a line for removal? | The item `id` (UUID) — maps to `ListItem.lineId`. |
-| Free-text items? | **Not via this path.** Add requires a catalog `productId`. There is a `note` field per line and an "Add note" UI control, but that annotates an existing product rather than creating a text-only item. `ListItem.product` may therefore be non-nullable — pending a check of HEB's mobile "Siri to List" path. |
+| Free-text items? | **Yes, via a different item shape.** A catalog add sends `productId`; a free-text add sends `genericName` instead and comes back as `GenericShoppingListItemV2` — see "Free-text lines" below. `ListItem.product` is therefore nullable: a line can carry a product *or* a bare generic name. |
 
 Also worth honouring: `maximumQuantity` (20 here) is a real server-side bound.
 

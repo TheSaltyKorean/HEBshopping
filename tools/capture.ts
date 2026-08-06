@@ -161,12 +161,17 @@ async function recordGraphqlTraffic(context: BrowserContext): Promise<void> {
         // after logging in. Gating on `isNew` meant the pre-login attempt claimed the
         // operation name and the successful one never refreshed the jar, so closing the
         // browser before the timer saved a pre-login session.
-        void context
-          .storageState()
-          .then((state) => {
-            lastStorageState = state;
-          })
-          .catch(() => undefined);
+        //
+        // Awaited, not fire-and-forget: this call is part of `handled`, which `pending`
+        // tracks. A `void`ed refresh could still be in flight after `handled` resolves and
+        // leaves `pending`, so `flush` could close the context and read `lastStorageState`
+        // before this write ever landed — saving the stale pre-login jar despite having
+        // just observed an authenticated request.
+        try {
+          lastStorageState = await context.storageState();
+        } catch {
+          // ignore
+        }
 
         const marker = isNew ? 'NEW ' : '    ';
         const errorFlag =

@@ -287,6 +287,23 @@ describe('parseSpokenRequest', () => {
       expect(parsed.query).toBe('half banana');
     });
 
+    it('refuses a spoken decimal count ("two point five bananas")', () => {
+      // The count parser recognized numeric "2.5" but not spoken "two point five" — "point"
+      // was left as an unmatched token, `numeric` stayed 2, and this resolved to quantity 2
+      // with query "point five bananas" instead of refusing the unsupported fractional count.
+      const parsed = parseSpokenRequest('two point five bananas');
+      expect(parsed.quantity).toBe(1);
+      expect(parsed.quantityRefused).toBe(2.5);
+      expect(parsed.query).toBe('two point five bananas');
+    });
+
+    it('reads a spoken decimal size, not a count ("two point five liter soda")', () => {
+      // Without consuming "point five" here, this misread as two packages of "point five
+      // liter soda" instead of matching the one 2.5-liter product.
+      expect(parseSpokenRequest('two point five liter soda').quantity).toBe(1);
+      expect(parseSpokenRequest('two point five liter soda').query).toBe('two point five liter soda');
+    });
+
     it('converts kilograms to pounds', () => {
       // "kg"/"kilogram"/"kilograms" were in MEASURE_WORDS but not in the pound-conversion
       // table, so a weight request in kilograms fell through to a plain count-and-query parse

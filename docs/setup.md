@@ -288,8 +288,9 @@ Two things this deliberately does **not** do:
 - **Packaged goods ignore the weight.** "Two pounds of chicken breasts" gets you one package
   of chicken breasts, because that is how they are sold — you cannot buy 2 lb of a 2.85 lb
   package. The spoken confirmation names the package, so you always hear which happened.
-- **Ounces aren't understood.** The ladder has no rung for "six ounces", and rounding your
-  order without saying so would be worse than not trying. Ask in pounds instead.
+- **Ounces and grams are converted, then rounded.** "Six ounces of turkey" is converted to
+  pounds (0.375 lb) and snapped to the same quarter-pound ladder as a pound request — here,
+  0.5 lb. The confirmation always says what actually landed, so you hear the rounding.
 
 A phrase only counts as an amount when it reads like one — "two pounds **of** turkey". The
 word *of* is the whole test, fractions included: "1.5 lb ground beef", "half pound ground

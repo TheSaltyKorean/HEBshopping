@@ -252,7 +252,14 @@ function parseWeightPhrase(raw: readonly string[]): { pounds: number; rest: stri
 
   const first = raw[index]!;
   const fraction = FRACTION_WORDS[first];
-  const numeric = NUMBER_WORDS[first] ?? (/^\d+(?:\.\d+)?$/.test(first) ? Number(first) : undefined);
+  // Tokenize deliberately keeps "1/2" whole (see tokenize's comment), so a numeric fraction
+  // has to be read here rather than falling through to the decimal-only regex, which would
+  // leave "1/2" unparsed and drop the weight from a request like "1/2 pound of turkey".
+  const fractionMatch = /^(\d+)\/(\d+)$/.exec(first);
+  const numeric =
+    NUMBER_WORDS[first] ??
+    (fractionMatch ? Number(fractionMatch[1]) / Number(fractionMatch[2]) : undefined) ??
+    (/^\d+(?:\.\d+)?$/.test(first) ? Number(first) : undefined);
 
   // No leading amount at all means an implicit one: "a pound of ham".
   let pounds = fraction ?? numeric ?? 1;
@@ -336,8 +343,21 @@ export function parseSpokenRequest(text: string): SpokenRequest {
   if (tokens.length === 0) return { quantity: 1, query: '' };
 
   const first = tokens[0]!;
-  const second = tokens[1];
-  const numeric = NUMBER_WORDS[first] ?? (/^\d+$/.test(first) ? Number(first) : undefined);
+  let numeric = NUMBER_WORDS[first] ?? (/^\d+$/.test(first) ? Number(first) : undefined);
+
+  // "twenty one bananas" — NUMBER_WORDS stops at twenty, its own ceiling value, so a
+  // compound above it ("twenty one" through "twenty nine") is two tokens. Reading only the
+  // first leaves quantity at 20, under MAX_QUANTITY, and lets an over-ceiling count through
+  // as if it had never been refused — the same trap `parseWeightPhrase` guards against.
+  let consumed = 1;
+  if (numeric === 20) {
+    const ones = ONES_WORDS[tokens[1] ?? ''];
+    if (ones !== undefined) {
+      numeric += ones;
+      consumed = 2;
+    }
+  }
+  const second = tokens[consumed];
 
   // A number that starts a brand name belongs to the query, not to the count. Alexa
   // transcribes these either way — "7 Up" as often as "seven up" — so the digit form has
@@ -356,14 +376,15 @@ export function parseSpokenRequest(text: string): SpokenRequest {
   // which is what separates "three packs of gum" (three) from "six pack soda" (one). The
   // test is against `raw`, since "of" is filler and has already been dropped from `tokens`.
   //
-  // Located by walking to the second meaningful token rather than `raw.indexOf(second)`,
-  // which would find an earlier copy of the same word and test the wrong neighbour.
+  // Located by walking to the (consumed + 1)th meaningful token rather than
+  // `raw.indexOf(second)`, which would find an earlier copy of the same word and test the
+  // wrong neighbour — and which shifts by one when the count itself was a compound.
   const secondAt = (() => {
     let seen = 0;
     for (const [index, token] of raw.entries()) {
       if (FILLER.has(token)) continue;
       seen += 1;
-      if (seen === 2) return index;
+      if (seen === consumed + 1) return index;
     }
     return -1;
   })();
@@ -385,11 +406,11 @@ export function parseSpokenRequest(text: string): SpokenRequest {
     // act on — and treating it as one issues that many live mutations. It stays in the
     // query instead, so the search sees the words that were actually said.
     numeric <= MAX_QUANTITY &&
-    tokens.length > 1 &&
+    tokens.length > consumed &&
     !(second !== undefined && MEASURE_WORDS.has(second) && !multiplies);
 
   if (isCount) {
-    return { quantity: numeric, query: tokens.slice(1).join(' ') };
+    return { quantity: numeric!, query: tokens.slice(consumed).join(' ') };
   }
   // A count this system will not act on. Reported rather than quietly folded into the
   // query, so the surface can say so instead of adding one of something.
@@ -398,7 +419,7 @@ export function parseSpokenRequest(text: string): SpokenRequest {
     !startsBrand &&
     numeric !== undefined &&
     numeric > MAX_QUANTITY &&
-    tokens.length > 1 &&
+    tokens.length > consumed &&
     !(second !== undefined && MEASURE_WORDS.has(second) && !multiplies)
   ) {
     return { quantity: 1, query: tokens.join(' '), quantityRefused: numeric };

@@ -426,6 +426,13 @@ export class HebListOps implements ListOps {
       productId = match.product.id;
     }
 
+    // Dropped first: `resolveQuery` above already populated `cachedList` while resolving
+    // the product, so serving that snapshot here would decide new-vs-existing from a read
+    // taken before the search even ran — a far wider window than the add call that follows.
+    // A household member's concurrent add of the same product lands inside that window and
+    // is exactly what makes the merged-line case below unrecoverable; this shrinks it to the
+    // one round trip between this read and the add mutation.
+    this.cachedList = undefined;
     const existing = (await this.getList(listId)).items.find(
       (item) => item.product?.id === productId,
     );

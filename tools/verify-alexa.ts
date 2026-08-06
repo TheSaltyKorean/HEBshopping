@@ -139,12 +139,30 @@ function guardedListOps(): HebListOps {
         // proven to be this run's.
         const previous = before.get(result.item.lineId);
         const rawDelta = previous === undefined ? 0 : result.item.quantity - previous;
+        // A line landing exactly on its own ceiling is exactly the case core cannot tell
+        // apart from a household member's concurrent add hitting that same ceiling: either
+        // way `quantityRequested` comes back undefined (the response already equals the
+        // computed target) and `rawDelta` alone cannot prove whose unit made up the gap.
+        // Claiming it anyway risks cleanup restoring the line to a value that discards
+        // somebody else's grocery, so this case is left for manual reconciliation instead.
+        const atCeiling =
+          result.item.maximumQuantity !== undefined &&
+          result.item.quantity >= result.item.maximumQuantity;
         const shortfall =
           result.quantityRequested === undefined
-            ? 0
+            ? atCeiling
+              ? contributed
+              : 0
             : Math.max(0, result.quantityRequested - result.item.quantity);
         const provenContribution = Math.max(0, contributed - shortfall);
         const actualContributed = Math.min(rawDelta, provenContribution);
+        if (atCeiling && result.quantityRequested === undefined) {
+          console.error(
+            `\n⚠ "${result.item.text}" reads ${result.item.quantity}, its own ceiling, and ` +
+              'this run cannot prove which unit is its own. Reconcile by hand.',
+          );
+          process.exitCode = 1;
+        }
         if (previous !== undefined && actualContributed > 0 && !raisedQuantities.has(result.item.lineId)) {
           raisedQuantities.set(result.item.lineId, {
             previous,

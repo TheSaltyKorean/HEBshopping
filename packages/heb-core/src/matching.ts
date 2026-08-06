@@ -131,12 +131,25 @@ const MEASURE_WORDS = new Set([
   // toilet paper" is one product, not two. Same shape as "percent" and "pack" — the number
   // is part of what the product *is*, not how many are wanted.
   'ply',
-  // "cheese" and "layer" name a singular product's composition, not a count of products:
-  // "four cheese pizza" is one pizza made with four cheeses, and "seven layer dip" is one
-  // dip with seven layers — same shape as "two percent milk", where the number describes
-  // the product rather than how many are wanted.
-  'cheese', 'layer',
+  // Composition words — see `COMPOSITION_WORDS` below for why these are singled out.
+  'cheese', 'layer', 'bean', 'meat',
 ]);
+
+/**
+ * `MEASURE_WORDS` entries that name a singular product's *composition* rather than a fixed
+ * unit or package size: "four cheese pizza" is one pizza made with four cheeses, "seven layer
+ * dip" is one dip with seven layers, "three bean salad" is one salad of three beans, "four
+ * meat pizza" is one pizza with four meats — same shape as "two percent milk", where the
+ * number describes the product rather than how many are wanted.
+ *
+ * Unlike the rest of `MEASURE_WORDS` ("percent", "pack", "ply", ...), which describe the
+ * product regardless of what follows, a composition word only reads that way when the head
+ * noun right after it is singular: "two cheese sticks" really is two sticks, and "sticks"
+ * being plural is exactly the tell. Applying that same check to the whole of `MEASURE_WORDS`
+ * would break entries like "count", where the noun that follows ("12 count eggs") is plural
+ * by nature of what the word measures — so the singular-head check is scoped to this set.
+ */
+const COMPOSITION_WORDS = new Set(['cheese', 'layer', 'bean', 'meat']);
 
 /**
  * Brand names that *begin* with a number word, where the number is part of the name.
@@ -645,17 +658,14 @@ export function parseSpokenRequest(text: string): SpokenRequest {
     (second === 'dozen' ||
       (PACKAGE_WORDS.has(second) && secondAt >= 0 && raw[secondAt + 1] === 'of'));
 
-  // "cheese" and "layer" only describe the product, rather than counting it, when the head
-  // noun right after them is singular: "four cheese pizza" is one pizza, "seven layer dip"
-  // is one dip — but "two cheese sticks" really is two sticks, and "sticks" being plural is
-  // exactly the tell. Every other `MEASURE_WORDS` entry ("percent", "pack", "ply", ...)
-  // describes the product regardless of what follows, so this check applies only to the two
-  // composition words that don't.
+  // Composition words only describe the product, rather than counting it, when the head
+  // noun right after them is singular — see `COMPOSITION_WORDS` for why this check is scoped
+  // to that set rather than all of `MEASURE_WORDS`.
   const third = tokens[consumed + 1];
   const isMeasureWord =
     second !== undefined &&
     MEASURE_WORDS.has(second) &&
-    (second !== 'cheese' && second !== 'layer'
+    (!COMPOSITION_WORDS.has(second)
       ? true
       : third === undefined || !(third.length > 3 && third.endsWith('s') && !third.endsWith('ss')));
 

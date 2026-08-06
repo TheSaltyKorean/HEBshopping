@@ -729,11 +729,22 @@ export class HebListOps implements ListOps {
         // product (or free-text) identity instead — whichever line this add actually landed
         // on carries the same one.
         const items = toHebList(data.addShoppingListItemsV2).items;
-        const seen = items.find((item) =>
-          line.product !== undefined ? item.product?.id === line.product.id : item.text === line.text,
-        );
-        // Trust the response where it has one, and fall back to counting our own unit —
-        // never to a number computed from before this call.
+        const matches = (item: ListItem): boolean =>
+          line.product !== undefined ? item.product?.id === line.product.id : item.text === line.text;
+        let seen = items.find(matches);
+        if (seen === undefined) {
+          // The mutation succeeded but the returned page doesn't contain the line — same
+          // long-list truncation the initial add re-reads for. Re-reading here for the same
+          // reason: falling back to `line.quantity + 1` would fabricate a number from before
+          // this call, which is exactly wrong if a household member removed the line between
+          // additive calls and this mutation recreated it — the recreated line holds one unit,
+          // not the old quantity plus one.
+          this.cachedList = undefined;
+          seen = (await this.getList(listId).catch(() => null))?.items.find(matches);
+        }
+        // Trust the response (or the re-read) where it has one, and fall back to counting our
+        // own unit only when neither is available — never to a number computed from before
+        // this call.
         line = seen ?? { ...line, quantity: line.quantity + 1 };
       } catch (error) {
         // A line exists either way, so a blind retry of the whole request would add the

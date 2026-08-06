@@ -156,6 +156,13 @@ export async function saveCapture(
 
   await mkdir(CAPTURE_DIR, { recursive: true });
 
+  // `label` reaches here from a raw CLI argument (see `drive.ts`). Without stripping path
+  // separators, a label like `../debug` writes `debug-operations.json` and
+  // `debug-timeline.json` outside `captures/` — files that hold raw GraphQL variables and
+  // response bodies with shopping data and account identifiers, and are only gitignored
+  // inside `captures/`.
+  label = label.replace(/[\\/]/g, '');
+
   try {
     const storageState = filterHebStorageState(await context.storageState());
     await writeSecret(resolve(CAPTURE_DIR, 'storage-state.json'),

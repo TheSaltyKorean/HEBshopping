@@ -19,7 +19,7 @@
 import { chromium, type BrowserContext } from 'playwright';
 import { chmod, mkdir, writeFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
-import { isGraphqlUrl } from '@heb/core';
+import { filterHebStorageState, isGraphqlUrl, type StorageStateLike } from '@heb/core';
 
 /**
  * Owner-only. These files hold the live H-E-B cookie jar and raw request/response bodies
@@ -216,6 +216,9 @@ async function flush(context: BrowserContext): Promise<void> {
     console.warn('Context already closing; writing the last good storage snapshot.');
     storageState = lastStorageState as typeof storageState;
   }
+  storageState = filterHebStorageState(
+    storageState as unknown as StorageStateLike,
+  ) as unknown as typeof storageState;
   await writeSecret(resolve(CAPTURE_DIR, 'storage-state.json'),
     JSON.stringify(storageState, null, 2));
 

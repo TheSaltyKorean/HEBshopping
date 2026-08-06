@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { isGraphqlUrl } from './capture.js';
+import { filterHebStorageState, isGraphqlUrl } from './capture.js';
 
 describe('isGraphqlUrl', () => {
   it('accepts H-E-B\'s own GraphQL endpoint', () => {
@@ -19,5 +19,33 @@ describe('isGraphqlUrl', () => {
 
   it('rejects a malformed URL instead of throwing', () => {
     expect(isGraphqlUrl('not a url')).toBe(false);
+  });
+});
+
+describe('filterHebStorageState', () => {
+  it('drops cookies and origins from a site visited in the same persistent context', () => {
+    const filtered = filterHebStorageState({
+      cookies: [
+        { domain: '.heb.com', name: 'a' },
+        { domain: 'www.heb.com', name: 'b' },
+        { domain: 'accounts.heb.com', name: 'c' },
+        { domain: 'mail.example.com', name: 'd' },
+      ],
+      origins: [
+        { origin: 'https://www.heb.com', localStorage: [] },
+        { origin: 'https://accounts.heb.com', localStorage: [] },
+        { origin: 'https://mail.example.com', localStorage: [] },
+      ],
+    });
+
+    expect(filtered.cookies.map((c) => c.domain)).toEqual([
+      '.heb.com',
+      'www.heb.com',
+      'accounts.heb.com',
+    ]);
+    expect(filtered.origins.map((o) => o.origin)).toEqual([
+      'https://www.heb.com',
+      'https://accounts.heb.com',
+    ]);
   });
 });

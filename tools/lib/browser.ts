@@ -9,7 +9,7 @@
 import { chromium, type BrowserContext } from 'playwright';
 import { chmod, mkdir, writeFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
-import { isGraphqlUrl, parseGraphqlPost } from '@heb/core';
+import { filterHebStorageState, isGraphqlUrl, parseGraphqlPost } from '@heb/core';
 
 /** Owner-only: these files carry live cookies and raw request bodies. */
 const SECRET_FILE_MODE = 0o600;
@@ -157,7 +157,7 @@ export async function saveCapture(
   await mkdir(CAPTURE_DIR, { recursive: true });
 
   try {
-    const storageState = await context.storageState();
+    const storageState = filterHebStorageState(await context.storageState());
     await writeSecret(resolve(CAPTURE_DIR, 'storage-state.json'),
       JSON.stringify(storageState, null, 2));
     const hosts = [...new Set(storageState.cookies.map((c) => c.domain))].sort();

@@ -82,3 +82,38 @@ export function isGraphqlUrl(url: string): boolean {
   }
   return parsed.origin === 'https://www.heb.com' && parsed.pathname.includes('/graphql');
 }
+
+/** Hosts the storage state a capture is documented to cover: the storefront and its login host. */
+const HEB_HOSTS = ['heb.com', 'www.heb.com', 'accounts.heb.com'];
+
+function isHebHost(host: string): boolean {
+  const bare = host.replace(/^\./, '');
+  return HEB_HOSTS.includes(bare);
+}
+
+export interface StorageStateLike {
+  cookies: Array<{ domain: string; [key: string]: unknown }>;
+  origins: Array<{ origin: string; [key: string]: unknown }>;
+}
+
+/**
+ * Drop cookies and origin storage that don't belong to H-E-B before a capture is written.
+ *
+ * The persistent browser can carry the operator to another site — an email provider, say,
+ * while retrieving an emailed OTP. `context.storageState()` serializes whatever cookies and
+ * origin storage exist at that moment, so without this filter that other site's session
+ * would be written into the capture alongside H-E-B's.
+ */
+export function filterHebStorageState<T extends StorageStateLike>(storageState: T): T {
+  return {
+    ...storageState,
+    cookies: storageState.cookies.filter((c) => isHebHost(c.domain)),
+    origins: storageState.origins.filter((o) => {
+      try {
+        return isHebHost(new URL(o.origin).hostname);
+      } catch {
+        return false;
+      }
+    }),
+  };
+}

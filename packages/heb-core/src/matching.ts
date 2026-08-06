@@ -690,14 +690,16 @@ export function parseSpokenRequest(text: string): SpokenRequest {
 
   // Composition words only describe the product, rather than counting it, when the head
   // noun right after them is singular — see `COMPOSITION_WORDS` for why this check is scoped
-  // to that set rather than all of `MEASURE_WORDS`.
+  // to that set rather than all of `MEASURE_WORDS`. Words ending in "us" (hummus, couscous)
+  // are excluded from the plural heuristic since they are singular despite the trailing s.
   const third = tokens[consumed + 1];
   const isMeasureWord =
     second !== undefined &&
     MEASURE_WORDS.has(second) &&
     (!COMPOSITION_WORDS.has(second)
       ? true
-      : third === undefined || !(third.length > 3 && third.endsWith('s') && !third.endsWith('ss')));
+      : third === undefined ||
+        !(third.length > 3 && third.endsWith('s') && !third.endsWith('ss') && !third.endsWith('us')));
 
   const isCount =
     !singular &&

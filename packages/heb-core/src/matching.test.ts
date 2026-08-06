@@ -105,6 +105,15 @@ describe('parseSpokenRequest', () => {
     });
   });
 
+  it('does NOT read "seven layer hummus" as seven hummuses', () => {
+    // "hummus" ends in "s" but is singular — the plural heuristic must not mistake it for a
+    // count of hummus, or the skill performs seven live additions instead of confirming one.
+    expect(parseSpokenRequest('seven layer hummus')).toEqual({
+      quantity: 1,
+      query: 'seven layer hummus',
+    });
+  });
+
   it('still reads "two cheese sticks" as two, since "sticks" is plural', () => {
     // Unlike "four cheese pizza", the noun after "cheese" is plural — an honest count of
     // string cheese sticks, not a composition description.

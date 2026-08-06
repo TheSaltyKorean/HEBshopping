@@ -314,7 +314,7 @@ function parseWeightPhrase(raw: readonly string[]): { pounds: number; rest: stri
   if (numeric !== undefined) {
     const adjacent = FRACTION_WORDS[raw[index] ?? ''];
     if (adjacent !== undefined) {
-      pounds = numeric * adjacent;
+      pounds = pounds * adjacent;
       index += 1;
     }
   }

@@ -120,6 +120,17 @@ describe('parseSpokenRequest', () => {
     expect(parseSpokenRequest('two cheese sticks')).toEqual({ quantity: 2, query: 'cheese sticks' });
   });
 
+  it('does NOT read "four cheese Texas toast" as four toasts', () => {
+    // "Texas" sits between the composition word and the actual head noun "toast" and ends in
+    // "s" itself — the plural heuristic must check the phrase's head noun, not the token
+    // immediately after "cheese", or this performs four live additions instead of confirming
+    // one "Four Cheese Texas Toast".
+    expect(parseSpokenRequest('four cheese texas toast')).toEqual({
+      quantity: 1,
+      query: 'four cheese texas toast',
+    });
+  });
+
   // A package word after a number can be either reading, and both are common:
   //   "six pack soda"      — the number names the package        → one
   //   "two dozen eggs"     — the number counts packages          → two
@@ -255,6 +266,15 @@ describe('parseSpokenRequest', () => {
       expect(parsed.query).toBe('half banana');
     });
 
+    it('converts kilograms to pounds', () => {
+      // "kg"/"kilogram"/"kilograms" were in MEASURE_WORDS but not in the pound-conversion
+      // table, so a weight request in kilograms fell through to a plain count-and-query parse
+      // and could confirm a counter product at H-E-B's default weight instead of ~4.4 lb.
+      const parsed = parseSpokenRequest('two kilograms of sliced turkey');
+      expect(parsed.weight).toBeCloseTo(4.409, 2);
+      expect(parsed.query).toBe('sliced turkey');
+    });
+
     it('does NOT treat a product that starts with "half" as a fraction', () => {
       // "half and half" is a product name — no "of" follows "half" — and must not be
       // misread as a request for half a unit of something else.
@@ -306,6 +326,18 @@ describe('parseSpokenRequest', () => {
       const count = parseSpokenRequest('ten thousand bananas');
       expect(count.quantity).not.toBe(10000);
       expect(count.quantityRefused).toBe(10000);
+    });
+
+    it('reports the full amount when a compound hundred weight has a tens portion', () => {
+      // "one hundred twenty five pounds" used to only consume the trailing ones word after
+      // "hundred", leaving "twenty" unmatched and reporting a refusal of 100 instead of 125.
+      const weight = parseSpokenRequest('one hundred twenty five pounds of turkey');
+      expect(weight.weight).toBeUndefined();
+      expect(weight.weightRefused).toBe(125);
+      expect(weight.query).toBe('turkey');
+
+      const withAnd = parseSpokenRequest('one hundred and twenty five pounds of turkey');
+      expect(withAnd.weightRefused).toBe(125);
     });
 
     it('refuses a scale amount with a decimal coefficient', () => {
@@ -740,6 +772,21 @@ describe('articles and irregular plurals', () => {
       quantity: 1,
       query: '1000 bananas',
       quantityRefused: 1000,
+    });
+  });
+
+  it('reports the full amount when a compound hundred has a tens portion', () => {
+    // "one hundred twenty five bananas" used to only consume the trailing ones word after
+    // "hundred", leaving "twenty" unmatched and reporting a refusal of 100 instead of 125.
+    expect(parseSpokenRequest('one hundred twenty five bananas')).toEqual({
+      quantity: 1,
+      query: 'one hundred twenty five bananas',
+      quantityRefused: 125,
+    });
+    expect(parseSpokenRequest('one hundred and twenty five bananas')).toEqual({
+      quantity: 1,
+      query: 'one hundred twenty five bananas',
+      quantityRefused: 125,
     });
   });
 

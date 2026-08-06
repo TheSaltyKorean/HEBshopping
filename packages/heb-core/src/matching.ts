@@ -256,20 +256,21 @@ export interface SpokenRequest {
 const POUND_WORDS = new Set(['pound', 'pounds', 'lb', 'lbs']);
 
 /**
- * Units that mean a fraction of a pound, converted on the spot so "six ounces of turkey"
- * lands on the same weight-add path as "half pound of turkey" — see `parseWeightPhrase`.
+ * Units converted to pounds on the spot so "six ounces of turkey" and "two kilograms of
+ * turkey" land on the same weight-add path as "half pound of turkey" — see `parseWeightPhrase`.
  *
  * Leaving these unit words unhandled used to fall through to the count parser, which reads
- * `ounces`/`grams` as a `MEASURE_WORDS` descriptor ("two percent milk" style) rather than an
- * amount: "six ounces of sliced turkey" became a plain search for "six ounces sliced turkey",
- * and confirming a counter-product candidate silently added it at H-E-B's default weight —
- * the six ounces asked for never made it into the mutation. Converting here, so the request
- * reaches `adjustWeight`'s existing quarter-pound snapping the same way a pound request does,
- * is safer than that silent drop.
+ * `ounces`/`grams`/`kilograms` as a `MEASURE_WORDS` descriptor ("two percent milk" style)
+ * rather than an amount: "six ounces of sliced turkey" became a plain search for "six ounces
+ * sliced turkey", and confirming a counter-product candidate silently added it at H-E-B's
+ * default weight — the amount asked for never made it into the mutation. Converting here, so
+ * the request reaches `adjustWeight`'s existing quarter-pound snapping the same way a pound
+ * request does, is safer than that silent drop.
  */
 const SUB_POUND_UNITS: Readonly<Record<string, number>> = {
   ounce: 1 / 16, ounces: 1 / 16, oz: 1 / 16,
   gram: 1 / 453.59237, grams: 1 / 453.59237, g: 1 / 453.59237,
+  kilogram: 1000 / 453.59237, kilograms: 1000 / 453.59237, kg: 1000 / 453.59237,
 };
 
 /**
@@ -374,12 +375,29 @@ function parseWeightPhrase(raw: readonly string[]): { pounds: number; rest: stri
     // trailing ones word extend the hundred. Without this, "hundred" is consumed but the
     // ones word is left unmatched, the unit check below fails, and the whole phrase falls
     // through to a plain count-and-query parse that drops the weight instead of refusing it.
+    //
+    // "one hundred twenty five pounds" / "one hundred and twenty five pounds" — the tens
+    // portion needs the same treatment: a bare tens word can itself be followed by a ones
+    // word, same as the standalone tens-plus-ones read below. Without it, "twenty" is left
+    // unmatched and the refusal reports 100 instead of the 125 actually asked for.
     let cursor = index;
     if (raw[cursor] === 'and') cursor += 1;
-    const hundredOnes = ONES_WORDS[raw[cursor] ?? ''];
-    if (hundredOnes !== undefined) {
-      pounds += hundredOnes;
-      index = cursor + 1;
+    const hundredTens = NUMBER_WORDS[raw[cursor] ?? ''];
+    if (hundredTens !== undefined && hundredTens >= 20 && hundredTens % 10 === 0) {
+      pounds += hundredTens;
+      cursor += 1;
+      const tensOnes = ONES_WORDS[raw[cursor] ?? ''];
+      if (tensOnes !== undefined) {
+        pounds += tensOnes;
+        cursor += 1;
+      }
+      index = cursor;
+    } else {
+      const hundredOnes = ONES_WORDS[raw[cursor] ?? ''];
+      if (hundredOnes !== undefined) {
+        pounds += hundredOnes;
+        index = cursor + 1;
+      }
     }
   }
 
@@ -587,12 +605,29 @@ export function parseSpokenRequest(text: string): SpokenRequest {
     // trailing ones word extend the hundred, same as `parseWeightPhrase` does. Without this,
     // a refusal for exceeding the count ceiling reports 100 instead of the 105 actually asked
     // for.
+    //
+    // "one hundred twenty five bananas" / "one hundred and twenty five bananas" — the tens
+    // portion needs the same treatment as the ones word: a bare tens word here can itself be
+    // followed by a ones word. Without it, "twenty" is left unmatched and the refusal reports
+    // 100 instead of the 125 actually asked for.
     let cursor = consumedHundred;
     if (tokens[cursor] === 'and') cursor += 1;
-    const hundredOnes = ONES_WORDS[tokens[cursor] ?? ''];
-    if (hundredOnes !== undefined) {
-      numeric += hundredOnes;
-      consumedHundred = cursor + 1;
+    const hundredTens = NUMBER_WORDS[tokens[cursor] ?? ''];
+    if (hundredTens !== undefined && hundredTens >= 20 && hundredTens % 10 === 0) {
+      numeric += hundredTens;
+      cursor += 1;
+      const tensOnes = ONES_WORDS[tokens[cursor] ?? ''];
+      if (tensOnes !== undefined) {
+        numeric += tensOnes;
+        cursor += 1;
+      }
+      consumedHundred = cursor;
+    } else {
+      const hundredOnes = ONES_WORDS[tokens[cursor] ?? ''];
+      if (hundredOnes !== undefined) {
+        numeric += hundredOnes;
+        consumedHundred = cursor + 1;
+      }
     }
   }
 
@@ -689,17 +724,23 @@ export function parseSpokenRequest(text: string): SpokenRequest {
       (PACKAGE_WORDS.has(second) && secondAt >= 0 && raw[secondAt + 1] === 'of'));
 
   // Composition words only describe the product, rather than counting it, when the head
-  // noun right after them is singular — see `COMPOSITION_WORDS` for why this check is scoped
+  // noun of the phrase is singular — see `COMPOSITION_WORDS` for why this check is scoped
   // to that set rather than all of `MEASURE_WORDS`. Words ending in "us" (hummus, couscous)
   // are excluded from the plural heuristic since they are singular despite the trailing s.
-  const third = tokens[consumed + 1];
+  //
+  // The head noun is the *last* token, not the one immediately after the composition word —
+  // "four cheese Texas toast" has an adjective ("Texas") between "cheese" and the actual head
+  // noun "toast". Checking only the immediately following token reads "Texas" as the plural
+  // head and refuses/multiplies the request instead of treating "cheese" as a description of
+  // one product.
+  const headNoun = tokens.length > consumed + 1 ? tokens[tokens.length - 1] : undefined;
   const isMeasureWord =
     second !== undefined &&
     MEASURE_WORDS.has(second) &&
     (!COMPOSITION_WORDS.has(second)
       ? true
-      : third === undefined ||
-        !(third.length > 3 && third.endsWith('s') && !third.endsWith('ss') && !third.endsWith('us')));
+      : headNoun === undefined ||
+        !(headNoun.length > 3 && headNoun.endsWith('s') && !headNoun.endsWith('ss') && !headNoun.endsWith('us')));
 
   const isCount =
     !singular &&

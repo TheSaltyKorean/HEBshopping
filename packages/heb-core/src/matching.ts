@@ -453,7 +453,11 @@ export function parseSpokenRequest(text: string): SpokenRequest {
   if (tokens.length === 0) return { quantity: 1, query: '' };
 
   const first = tokens[0]!;
-  let numeric = NUMBER_WORDS[first] ?? (/^\d+$/.test(first) ? Number(first) : undefined);
+  // Decimals, not just bare digits: "1.5 thousand bananas" must read 1.5 here so "thousand"
+  // below can multiply it into a refusal, the same way `parseWeightPhrase` already reads
+  // "1.5 lb" — without this, `numeric` stays undefined, "thousand" is left as query text, and
+  // the request resolves to quantity 1 with a search for "thousand bananas" instead of refusing.
+  let numeric = NUMBER_WORDS[first] ?? (/^\d+(?:\.\d+)?$/.test(first) ? Number(first) : undefined);
 
   // "one hundred bananas" — "hundred" multiplies the digit word before it. Without this,
   // only "one" is read here, "hundred" stays in the query as ordinary text, and the request

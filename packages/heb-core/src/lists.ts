@@ -93,6 +93,8 @@ interface HebListItem {
   note?: string;
   maximumQuantity?: number;
   product?: HebProduct;
+  /** True once the shopper has checked the line off. H-E-B keeps it on the list either way. */
+  checked?: boolean;
 }
 
 interface HebListPayload {
@@ -1283,6 +1285,11 @@ function isTextLine(text: string): (item: ListItem) => boolean {
 }
 
 function toListItem(item: HebListItem): ListItem | null {
+  // H-E-B retains checked-off lines on the list instead of deleting them. Surfacing them as
+  // still needed would let Alexa and MCP report an item already gathered, and would let
+  // removal matching offer a checked line as a candidate to remove again.
+  if (item.checked === true) return null;
+
   const quantity = item.quantity ?? 1;
   const ceiling = item.maximumQuantity === undefined ? {} : { maximumQuantity: item.maximumQuantity };
 

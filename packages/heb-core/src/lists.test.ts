@@ -56,6 +56,51 @@ function opsWithList(...names: string[]): HebListOps {
   });
 }
 
+describe('toHebList — checked lines', () => {
+  it('excludes a checked-off product line from the active list', async () => {
+    // H-E-B keeps checked-off lines on the list instead of deleting them. Without filtering
+    // on `checked`, a gathered item stays indistinguishable from one still needed.
+    const payload = {
+      __typename: 'ShoppingListV2',
+      id: 'list-1',
+      name: 'Shopping',
+      fulfillment: { store: { storeNumber: 1 } },
+      itemPage: {
+        items: [
+          {
+            __typename: 'ProductShoppingListItemV2',
+            id: 'line-0',
+            quantity: 1,
+            checked: true,
+            product: { __typename: 'Product', id: 'p0', fullDisplayName: 'H-E-B Milk, 1 gal' },
+          },
+          {
+            __typename: 'ProductShoppingListItemV2',
+            id: 'line-1',
+            quantity: 1,
+            checked: false,
+            product: { __typename: 'Product', id: 'p1', fullDisplayName: 'H-E-B Eggs, dozen' },
+          },
+        ],
+      },
+    };
+
+    const fetchImpl = (async () =>
+      new Response(JSON.stringify({ data: { getShoppingListV2: payload } }), {
+        status: 200,
+      })) as unknown as typeof fetch;
+
+    const ops = new HebListOps({
+      client: new HebClient({ store: storeWith(), fetchImpl, now: () => NOW, minDelayMs: 0 }),
+      listId: 'list-1',
+    });
+
+    const list = await ops.getList();
+    expect(list.items).toHaveLength(1);
+    expect(list.items[0]?.text).toBe('H-E-B Eggs, dozen');
+  });
+});
+
 describe('rankLines — the sole-line shortcut', () => {
   it('is confident when the request describes the only line', () => {
     // A one-item list is a closed set: asking a confirmation here is pointless.

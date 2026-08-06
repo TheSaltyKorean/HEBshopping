@@ -90,6 +90,10 @@ const LIST_FIELDS = `
         # Pounds, for a line whose product is sold at the deli or seafood counter.
         # Null on everything else — an ordinary packaged good has a quantity, not a weight.
         weight
+        # H-E-B keeps checked-off lines on the list rather than deleting them. Without this,
+        # a completed product line is indistinguishable from an active one, so it keeps
+        # showing up as still needed.
+        checked
         product { id fullDisplayName brand { name } ${WEIGHT_FIELDS} }
       }
       # Free-text lines. HEB's mobile app offers 'Add "<what you typed>" to your list'

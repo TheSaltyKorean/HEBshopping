@@ -64,7 +64,21 @@ export function parseGraphqlPost(postData: string): ParsedOperation[] {
   return operations;
 }
 
-/** True when a URL is a GraphQL endpoint we care about. */
+/**
+ * True when a URL is H-E-B's GraphQL endpoint.
+ *
+ * The persistent browser used for capture can carry the operator to other sites — an email
+ * provider, say, while retrieving an emailed OTP. A bare substring test on `/graphql` would
+ * accept that site's traffic too, and the capture would persist its request variables and
+ * response bodies alongside H-E-B's. Requiring the exact origin keeps the capture to the one
+ * site it is documented to cover.
+ */
 export function isGraphqlUrl(url: string): boolean {
-  return url.includes('/graphql');
+  let parsed: URL;
+  try {
+    parsed = new URL(url);
+  } catch {
+    return false;
+  }
+  return parsed.origin === 'https://www.heb.com' && parsed.pathname.includes('/graphql');
 }

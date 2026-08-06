@@ -19,6 +19,7 @@
 import { chromium, type BrowserContext } from 'playwright';
 import { chmod, mkdir, writeFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
+import { isGraphqlUrl } from '@heb/core';
 
 /**
  * Owner-only. These files hold the live H-E-B cookie jar and raw request/response bodies
@@ -99,7 +100,7 @@ async function recordGraphqlTraffic(context: BrowserContext): Promise<void> {
   context.on('response', (response) => {
     const handled = (async () => {
       const request = response.request();
-      if (!request.url().includes('/graphql')) return;
+      if (!isGraphqlUrl(request.url())) return;
 
       const postData = request.postData();
       if (!postData) return;

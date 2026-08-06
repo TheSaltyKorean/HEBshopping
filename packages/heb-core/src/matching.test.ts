@@ -189,6 +189,15 @@ describe('parseSpokenRequest', () => {
       expect(count.quantity).not.toBe(10000);
       expect(count.quantityRefused).toBe(10000);
     });
+
+    it('refuses a scale amount with a decimal coefficient', () => {
+      // "1.5 thousand" — the count-and-query parser only read bare-digit coefficients, so
+      // `numeric` stayed undefined, "thousand" never multiplied it, and this resolved to
+      // quantity 1 with "thousand bananas" left in the search query instead of a refusal.
+      const count = parseSpokenRequest('1.5 thousand bananas');
+      expect(count.quantity).not.toBe(1500);
+      expect(count.quantityRefused).toBe(1500);
+    });
   });
 
   it('does not read a trailing-only number as a count', () => {

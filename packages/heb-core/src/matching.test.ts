@@ -172,6 +172,23 @@ describe('parseSpokenRequest', () => {
       expect(parsed.quantityRefused).toBe(0.5);
       expect(parsed.query).toBe('1/2 bananas');
     });
+
+    // "one and 1/2 bananas" leaves the numeric fraction after the leading "one" once filler
+    // removal strips "and". Without folding it the same way the spelled fraction is folded,
+    // this resolves to a plain count of 1 and performs a live one-unit add instead of refusing.
+    it('refuses a spoken-leading digit-slash fractional count ("one and 1/2 bananas")', () => {
+      const parsed = parseSpokenRequest('one and 1/2 bananas');
+      expect(parsed.quantity).toBe(1);
+      expect(parsed.quantityRefused).toBe(1.5);
+      expect(parsed.query).toBe('one 1/2 bananas');
+    });
+
+    it('refuses a spoken-leading decimal fractional count ("one and 0.5 bananas")', () => {
+      const parsed = parseSpokenRequest('one and 0.5 bananas');
+      expect(parsed.quantity).toBe(1);
+      expect(parsed.quantityRefused).toBe(1.5);
+      expect(parsed.query).toBe('one 0.5 bananas');
+    });
   });
 
   describe('weights above the configured ceiling', () => {

@@ -235,6 +235,19 @@ const FRACTION_WORDS: Readonly<Record<string, number>> = {
 const ARTICLES = new Set(['a', 'an', 'the']);
 
 /**
+ * A fraction token, spelled ("half") or numeric ("1/2", "0.5") — shared by the leading-amount
+ * reads in both `parseWeightPhrase` and the plain count parser below, so "one and 1/2 pounds"
+ * and "one and 1/2 bananas" fold a trailing numeric fraction the same way "one and a half" does.
+ */
+function readFractionToken(token: string): number | undefined {
+  if (FRACTION_WORDS[token] !== undefined) return FRACTION_WORDS[token];
+  const match = /^(\d+)\/(\d+)$/.exec(token);
+  if (match) return Number(match[1]) / Number(match[2]);
+  if (/^0?\.\d+$/.test(token)) return Number(token);
+  return undefined;
+}
+
+/**
  * Read a leading "two pounds of …" phrase, if that is what this is.
  *
  * ── Why the "of" is required ────────────────────────────────────────────────────────
@@ -273,17 +286,6 @@ function parseWeightPhrase(raw: readonly string[]): { pounds: number; rest: stri
     NUMBER_WORDS[first] ??
     (fractionMatch ? Number(fractionMatch[1]) / Number(fractionMatch[2]) : undefined) ??
     (/^\d+(?:\.\d+)?$/.test(first) ? Number(first) : undefined);
-
-  // A fraction token, spelled ("half") or numeric ("1/2", "0.5") — shared by the leading
-  // read above and by `readAndAHalf` below, so "one and 1/2 pounds" and "one and 0.5 pounds"
-  // are parsed the same way "one and a half pounds" already is.
-  const readFractionToken = (token: string): number | undefined => {
-    if (FRACTION_WORDS[token] !== undefined) return FRACTION_WORDS[token];
-    const match = /^(\d+)\/(\d+)$/.exec(token);
-    if (match) return Number(match[1]) / Number(match[2]);
-    if (/^0?\.\d+$/.test(token)) return Number(token);
-    return undefined;
-  };
 
   // No leading amount at all means an implicit one: "a pound of ham".
   let pounds = fraction ?? numeric ?? 1;
@@ -525,13 +527,14 @@ export function parseSpokenRequest(text: string): SpokenRequest {
       consumed += 1;
     }
   }
-  // "one and a half bananas" — Alexa's spoken fraction, with "and" and the article already
-  // dropped as filler by the time `tokens` is built, so "half" would otherwise sit right
-  // where a measure word goes. Folding it into `numeric` here turns the count into 1.5,
-  // which the existing `Number.isInteger` check below already refuses the same way it
-  // refuses a digit fraction like "1.5 bananas" — instead of silently reading a plain count
-  // of 1 and leaving "half" behind as query text.
-  const fraction = tokens[consumed] !== undefined ? FRACTION_WORDS[tokens[consumed]!] : undefined;
+  // "one and a half bananas" / "one and 1/2 bananas" / "one and 0.5 bananas" — Alexa's spoken
+  // fraction, with "and" and the article already dropped as filler by the time `tokens` is
+  // built, so the fraction token would otherwise sit right where a measure word goes. Folding
+  // it into `numeric` here turns the count into 1.5, which the existing `Number.isInteger`
+  // check below already refuses the same way it refuses a digit fraction like "1.5 bananas"
+  // — instead of silently reading a plain count of 1 and leaving the fraction behind as query
+  // text, which would perform a live one-unit add for an amount nobody asked for.
+  const fraction = tokens[consumed] !== undefined ? readFractionToken(tokens[consumed]!) : undefined;
   if (numeric !== undefined && numeric >= 1 && fraction !== undefined) {
     numeric += fraction;
     consumed += 1;

@@ -14,7 +14,7 @@
  */
 
 import { execFileSync } from 'node:child_process';
-import { readFileSync, statSync } from 'node:fs';
+import { lstatSync, readFileSync, readlinkSync } from 'node:fs';
 
 interface Rule {
   name: string;
@@ -55,7 +55,7 @@ const RULES: Rule[] = [
   },
   {
     name: 'bearer token',
-    pattern: /\b[Bb]earer\s+[A-Za-z0-9._-]{20,}/g,
+    pattern: /\bbearer\s+[A-Za-z0-9._-]{20,}/gi,
     note: 'live credential',
   },
   {
@@ -77,6 +77,14 @@ const RULES: Rule[] = [
     name: 'absolute home path',
     pattern: /\/(?:home|Users)\/[A-Za-z0-9._-]+/g,
     note: 'leaks a local username in a public repo — use /path/to/HEBshopping',
+  },
+  {
+    // H-E-B store numbers pin a household to an approximate location, same category of
+    // finding as the account UUID rule above. Keyed off the field name — a bare three-digit
+    // number matches too much generic content otherwise.
+    name: 'store number',
+    pattern: /["']?store(?:Number|Id)["']?\s*:\s*["']?\d{2,5}["']?/gi,
+    note: 'store number/id identifies the account’s location — use <storeNumber> placeholder',
   },
 ];
 
@@ -144,7 +152,12 @@ function contentToScan(path: string, staged: ReadonlySet<string>): string | null
   }
 
   try {
-    if (statSync(path).size > MAX_SCAN_BYTES) return null;
+    // A symlink's committed content is the link-target string, not the file it points to —
+    // `statSync`/`readFileSync` follow the link and would scan the target's contents instead,
+    // missing a target path like "/home/alice/session.json" baked into the committed blob.
+    const stat = lstatSync(path);
+    if (stat.isSymbolicLink()) return readlinkSync(path);
+    if (stat.size > MAX_SCAN_BYTES) return null;
     return readFileSync(path, 'utf8');
   } catch {
     return null;

@@ -307,6 +307,13 @@ export function createHebMcpServer({ createListOps }: CreateServerOptions): McpS
         // by the pound. Silently dropping the weight would misreport what landed.
         return text('`weight` needs a catalog product; use `query` or `productId`.', true);
       }
+      if (quantity !== undefined && weight !== undefined) {
+        // The two have no consistent combined meaning: a weighed product ignores `quantity`
+        // entirely, while a packaged product would add `quantity` packages while the reply's
+        // weight-ignored notice still talks about "one package". Reject the combination
+        // rather than defining behaviour nobody asked for.
+        return text('Provide `quantity` or `weight`, not both.', true);
+      }
       try {
         const result = await createListOps().addItem({
           ...(query === undefined ? {} : { query }),

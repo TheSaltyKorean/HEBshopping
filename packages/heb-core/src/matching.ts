@@ -173,6 +173,10 @@ export function tokenize(text: string): string[] {
       // the most common one in this catalog — permanently unmatchable.
       // Multi-letter hyphenates like "select-a-size" are deliberately left alone.
       .replace(/\b[a-z](?:-[a-z])+\b/g, (match) => match.replaceAll('-', ''))
+      // A leading decimal like ".5 pounds" has no digit before the dot, so it would
+      // otherwise fail the "between digits" test below and get stripped to "5 pounds" —
+      // ten times the requested weight. Spell out the implied zero first.
+      .replace(/(^|\s)\.(?=\d)/g, '$10.')
       // Keep decimals and fractions whole. Stripping the separator turns "1.5 lb ground
       // beef" into the tokens 1, 5, lb — and the parser then reads 1 as a count and
       // searches for "5 lb ground beef", which is a materially different package.

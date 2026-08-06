@@ -591,6 +591,13 @@ describe('package sizes survive tokenisation', () => {
   it('does not keep punctuation that is not part of a number', () => {
     expect(tokenize('Oatly, 1/2 gal.')).toEqual(['oatly', '1/2', 'gal']);
   });
+
+  it('keeps a leading decimal point instead of stripping it to a whole number', () => {
+    // Without the leading zero, ".5 pounds" tokenized to "5 pounds" — ten times the
+    // requested weight, and the parser's own fraction support never got a chance to see it.
+    expect(tokenize('.5 pounds of turkey')).toEqual(['0.5', 'pounds', 'of', 'turkey']);
+    expect(parseSpokenRequest('.5 pounds of turkey')).toEqual({ quantity: 1, weight: 0.5, query: 'turkey' });
+  });
 });
 
 describe('abbreviated units are sizes, not counts', () => {

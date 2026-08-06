@@ -454,7 +454,15 @@ export class HebListOps implements ListOps {
         // "Add sliced turkey" when a counter line already exists. There is no honest
         // amount to add, and a quantity update on a line measured in pounds either gets
         // refused or changes a number nobody buys by.
-        return { status: 'already_present', item: existing };
+        //
+        // A caller that also asked for `quantity > 1` (an MCP client resending a
+        // productId, or a count-led spoken phrase resolving to a counter item) gets the
+        // same silent-refusal treatment `quantityRequested` exists to prevent elsewhere:
+        // reporting bare `already_present` reads identically to a request that never
+        // asked for more, so surface the ignored count instead of dropping it quietly.
+        return quantity > 1
+          ? { status: 'already_present', item: existing, quantityRequested: quantity }
+          : { status: 'already_present', item: existing };
       }
       // Re-read immediately before computing the target. The absolute write cannot be made
       // atomic, so the best available is to shrink the window between observing the weight

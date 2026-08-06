@@ -196,6 +196,23 @@ describe('counter lines are never driven by quantity', () => {
     expect(weightUpdates(sent)).toHaveLength(0);
   });
 
+  it('reports the ignored count when a quantity is requested for an existing counter line', async () => {
+    // A client resending a selected productId with a quantity, or a count-led spoken
+    // phrase resolving to a counter item, must not have that quantity silently dropped —
+    // bare `already_present` reads identically to a request that never asked for more.
+    const { ops, sent } = scripted([
+      { id: 'line-0', quantity: 1, weight: 2, productId: 'p-turkey' },
+    ]);
+
+    const result = await ops.addItem({ productId: 'p-turkey', quantity: 3 });
+
+    expect(result.status).toBe('already_present');
+    expect(result.status === 'already_present' && result.item.weight).toBe(2);
+    expect(result.status === 'already_present' && result.quantityRequested).toBe(3);
+    expect(quantityUpdates(sent)).toHaveLength(0);
+    expect(weightUpdates(sent)).toHaveLength(0);
+  });
+
   it('does not issue a quantity update for a newly created counter line', async () => {
     // "Add three sliced turkeys" is not expressible: counter goods have no unit to
     // multiply. The line is created and confirmed at the weight HEB gave it.

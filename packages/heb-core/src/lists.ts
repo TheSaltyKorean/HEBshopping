@@ -481,7 +481,11 @@ export class HebListOps implements ListOps {
     // only invites a refusal. Report what is there.
     const ceiling = existing?.maximumQuantity ?? Number.POSITIVE_INFINITY;
     if (existing !== undefined && existing.quantity >= ceiling) {
-      return { status: 'already_present', item: existing };
+      // Blocked outright — none of `quantity` can land. Reporting only `already_present`
+      // reads identically to a request that never asked for more, so both surfaces would
+      // confirm the unchanged line as if it were the full ask instead of flagging the
+      // shortfall, the same gap `addRemainingUnits` closes for a partially fulfilled add.
+      return { status: 'already_present', item: existing, quantityRequested: existing.quantity + quantity };
     }
 
     // ── The add itself ───────────────────────────────────────────────────────────────

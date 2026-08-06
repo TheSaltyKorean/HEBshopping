@@ -219,8 +219,16 @@ export interface SpokenRequest {
 /** Units that mean pounds. Ounces are deliberately absent — see `parseWeightPhrase`. */
 const POUND_WORDS = new Set(['pound', 'pounds', 'lb', 'lbs']);
 
-/** Spoken fractions of a pound. A quarter is H-E-B's own smallest deli increment. */
-const FRACTION_WORDS: Readonly<Record<string, number>> = { half: 0.5, quarter: 0.25 };
+/**
+ * Spoken fractions of a pound. A quarter is H-E-B's own smallest deli increment. Plural forms
+ * ("three quarters", never "two halves" of one pound) are included because a leading count
+ * above one pluralizes the fraction word, same as the "hundred and one pound**s**" unit itself.
+ */
+const FRACTION_WORDS: Readonly<Record<string, number>> = {
+  half: 0.5,
+  quarter: 0.25,
+  quarters: 0.25,
+};
 
 /** Articles skipped while reading a weight phrase; everything else is significant. */
 const ARTICLES = new Set(['a', 'an', 'the']);
@@ -316,6 +324,16 @@ function parseWeightPhrase(raw: readonly string[]): { pounds: number; rest: stri
     if (adjacent !== undefined) {
       pounds = pounds * adjacent;
       index += 1;
+
+      // "three quarters of a pound of turkey" — unlike the bare "one half pound" form, the
+      // plural fraction is itself followed by an explicit "of a pound" before the request's
+      // own "of". Without skipping it here, "of" is read as the request's `of` one token
+      // early, "a pound of turkey" is left as the description, and the whole phrase falls
+      // through to a plain count-and-query parse that drops the weight entirely.
+      if (raw[index] === 'of') {
+        index += 1;
+        skipArticles();
+      }
     }
   }
 

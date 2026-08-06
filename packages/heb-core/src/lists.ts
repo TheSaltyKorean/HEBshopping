@@ -622,6 +622,7 @@ export class HebListOps implements ListOps {
   ): Promise<AddResult> {
     let line = added;
     const cap = added.maximumQuantity ?? Number.POSITIVE_INFINITY;
+    const totalRequested = added.quantity + remaining;
 
     for (let unit = 0; unit < remaining; unit += 1) {
       // The server's own ceiling. Adding past it is refused, and asking is pointless.
@@ -668,7 +669,12 @@ export class HebListOps implements ListOps {
       }
     }
 
-    return { status, item: line };
+    // The server's cap can stop this short of what was asked. Reporting it here — rather
+    // than letting the caller confirm `line.quantity` as if it were the full amount — is
+    // what tells a household member their five-unit request only picked up two.
+    return line.quantity < totalRequested
+      ? { status, item: line, quantityRequested: totalRequested }
+      : { status, item: line };
   }
 
   /**

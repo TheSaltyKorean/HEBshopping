@@ -102,14 +102,27 @@ function toErrorText(error: unknown): TextResult {
 }
 
 function describeAddResult(result: AddResult): TextResult {
+  // The server's per-item cap can stop a multi-unit add short of what was requested. Say so
+  // rather than reporting the capped quantity as if it were the full amount — an agent
+  // relaying "added" back to the user would otherwise claim a bigger add than actually
+  // happened.
+  const cappedNotice =
+    (result.status === 'added' || result.status === 'already_present') &&
+    result.quantityRequested !== undefined &&
+    result.quantityRequested > result.item.quantity
+      ? ` (HEB only allows ${result.item.quantity} of this item — the remainder of the ` +
+        `requested ${result.quantityRequested} could not be added)`
+      : '';
+
   switch (result.status) {
     case 'added':
-      return text(`Added to the HEB list: ${describeItem(result.item)}`);
+      return text(`Added to the HEB list: ${describeItem(result.item)}${cappedNotice}`);
     case 'already_present':
       return text(
-        result.item.weight === undefined
+        (result.item.weight === undefined
           ? `Already on the list — quantity is now ${result.item.quantity}: ${result.item.text}`
-          : `Already on the list — now ${result.item.weight} lb of ${result.item.text}`,
+          : `Already on the list — now ${result.item.weight} lb of ${result.item.text}`) +
+          cappedNotice,
       );
     case 'needs_confirmation': {
       // Candidates are returned inline precisely so the model does not need a separate

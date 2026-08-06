@@ -163,12 +163,18 @@ export interface AddItemInput {
   weight?: number;
 }
 
+/**
+ * `quantityRequested`, present on `added`/`already_present`, is the total the line should
+ * hold had every unit landed. It differs from `item.quantity` when HEB's own
+ * `maximumQuantity` stopped the adds short, so the caller can report the shortfall instead
+ * of confirming the full amount as if it had all gone through.
+ */
 export type AddResult =
-  | { status: 'added'; item: ListItem }
+  | { status: 'added'; item: ListItem; quantityRequested?: number }
   /** Confidence below threshold. Nothing was written. */
   | { status: 'needs_confirmation'; match: MatchResult }
   /** Already on the list; quantity was incremented instead of adding a line. */
-  | { status: 'already_present'; item: ListItem };
+  | { status: 'already_present'; item: ListItem; quantityRequested?: number };
 
 export interface RemoveItemInput {
   listId?: string;

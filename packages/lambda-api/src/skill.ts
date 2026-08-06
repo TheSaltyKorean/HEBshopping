@@ -142,7 +142,12 @@ function confirmWritten(input: HandlerInput, item: ListItem, wasPresent: boolean
   return input.responseBuilder.speak(`${speech} Anything else?`).reprompt(REPROMPT).getResponse();
 }
 
-function confirmAdded(input: HandlerInput, item: ListItem, wasPresent: boolean): Response {
+function confirmAdded(
+  input: HandlerInput,
+  item: ListItem,
+  wasPresent: boolean,
+  quantityRequested?: number,
+): Response {
   // Confirm with the *resolved* product name, never the spoken text: the whole point of
   // the dialog is that those two can differ, and echoing the request back would hide it.
   const name = escapeSsml(speakableItem(item));
@@ -156,8 +161,15 @@ function confirmAdded(input: HandlerInput, item: ListItem, wasPresent: boolean):
       ? `Added ${item.quantity > 1 ? `${item.quantity} ` : ''}${name}.`
       : `Added ${speakablePounds(item.weight)} of ${name}.`;
 
+  // The server's per-item cap can stop a multi-unit add short of what was asked. Saying so
+  // is what tells the shopper the line reads 10, not the 15 they actually asked for.
+  const cappedNotice =
+    quantityRequested !== undefined && quantityRequested > item.quantity
+      ? ` H-E-B only allows ${item.quantity} of ${name}, so I could not add all ${quantityRequested}.`
+      : '';
+
   return input.responseBuilder
-    .speak(`${speech} Anything else?`)
+    .speak(`${speech}${cappedNotice} Anything else?`)
     .reprompt(REPROMPT)
     .getResponse();
 }
@@ -271,8 +283,12 @@ function addItemHandler(options: CreateSkillOptions): RequestHandler {
         return confirmWritten(input, written.item, written.status === 'already_present');
       }
 
-      if (result.status === 'added') return confirmAdded(input, result.item, false);
-      if (result.status === 'already_present') return confirmAdded(input, result.item, true);
+      if (result.status === 'added') {
+        return confirmAdded(input, result.item, false, result.quantityRequested);
+      }
+      if (result.status === 'already_present') {
+        return confirmAdded(input, result.item, true, result.quantityRequested);
+      }
 
       const pending: PendingChoice = {
         kind: 'add',
@@ -391,7 +407,12 @@ function yesHandler(options: CreateSkillOptions): RequestHandler {
       if (result.status === 'needs_confirmation') {
         return giveUp(input, pending); // unreachable via productId, but never guess
       }
-      return confirmAdded(input, result.item, result.status === 'already_present');
+      return confirmAdded(
+        input,
+        result.item,
+        result.status === 'already_present',
+        result.quantityRequested,
+      );
     },
   };
 }

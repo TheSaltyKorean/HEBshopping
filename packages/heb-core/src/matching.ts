@@ -81,6 +81,7 @@ export function canonical(token: string): string {
  * single item — a silent undercount, since the confirmation still names the right product.
  */
 const NUMBER_WORDS: Readonly<Record<string, number>> = {
+  zero: 0,
   one: 1, two: 2, three: 3, four: 4, five: 5, six: 6, seven: 7, eight: 8,
   nine: 9, ten: 10, eleven: 11, twelve: 12, thirteen: 13, fourteen: 14,
   fifteen: 15, sixteen: 16, seventeen: 17, eighteen: 18, nineteen: 19, twenty: 20,
@@ -275,6 +276,18 @@ function parseWeightPhrase(raw: readonly string[]): { pounds: number; rest: stri
   if (numeric !== undefined && numeric >= 1 && numeric <= 9 && raw[index] === 'hundred') {
     pounds = numeric * 100;
     index += 1;
+
+    // "one hundred and five pounds" / "one hundred five pounds" — an optional "and" and a
+    // trailing ones word extend the hundred. Without this, "hundred" is consumed but the
+    // ones word is left unmatched, the unit check below fails, and the whole phrase falls
+    // through to a plain count-and-query parse that drops the weight instead of refusing it.
+    let cursor = index;
+    if (raw[cursor] === 'and') cursor += 1;
+    const hundredOnes = ONES_WORDS[raw[cursor] ?? ''];
+    if (hundredOnes !== undefined) {
+      pounds += hundredOnes;
+      index = cursor + 1;
+    }
   }
 
   // "twenty one pounds" / "thirty five pounds" — every tens word from twenty through ninety
@@ -289,19 +302,19 @@ function parseWeightPhrase(raw: readonly string[]): { pounds: number; rest: stri
     }
   }
 
-  // "one half pound of turkey" — Alexa tokenizes "one-half" the same way it would speak
+  // "one half pound of turkey" / "three quarter pound of turkey" — Alexa tokenizes a
+  // hyphenated amount like "one-half" or "three-quarter" the same way it would speak
   // "one and a half", but without the "and". Reading only a bare number here would leave
-  // "half" behind as an unmatched unit word and fail the whole phrase, silently falling
-  // through to a plain count-and-query parse that drops the weight entirely.
+  // the fraction word behind as an unmatched unit word and fail the whole phrase, silently
+  // falling through to a plain count-and-query parse that drops the weight entirely.
   //
-  // Without the "and", "one" is the fraction's numerator, not a whole number to add to it:
-  // "one half" is 0.5, not 1.5. That only applies when the leading number is exactly one —
-  // "two half" is not a phrase anyone says — so every other number keeps adding, the way
-  // "two and a half" does once the "and" form matches below.
+  // Without the "and", the fraction word names the denominator of the leading number, not
+  // an amount to add to it: "one half" is 1/2 = 0.5, and "three quarter" is 3/4 = 0.75 —
+  // not 3 + 0.25 = 3.25. Addition only applies once the "and" form matches below.
   if (numeric !== undefined) {
     const adjacent = FRACTION_WORDS[raw[index] ?? ''];
     if (adjacent !== undefined) {
-      pounds = numeric === 1 ? adjacent : pounds + adjacent;
+      pounds = numeric * adjacent;
       index += 1;
     }
   }
@@ -334,7 +347,11 @@ function parseWeightPhrase(raw: readonly string[]): { pounds: number; rest: stri
   index += 1;
 
   const rest = raw.slice(index).filter((token) => !FILLER.has(token));
-  if (rest.length === 0 || !(pounds > 0)) return null;
+  // A non-positive amount ("zero pounds of turkey") is still a genuine weight phrase — the
+  // unit and "of" both matched — so it must come back as a refusal, not `null`. Returning
+  // `null` here would fall through to the count-and-query parser, which treats "pounds" as
+  // a measure word and adds the counter product at its default weight instead of refusing.
+  if (rest.length === 0) return null;
 
   return { pounds, rest };
 }
@@ -352,7 +369,7 @@ export function parseSpokenRequest(text: string): SpokenRequest {
   // turkeys, and the count parse below would otherwise read the two as a quantity.
   const weighed = parseWeightPhrase(raw);
   if (weighed !== null) {
-    if (weighed.pounds > MAX_WEIGHT_LB) {
+    if (weighed.pounds > MAX_WEIGHT_LB || weighed.pounds <= 0) {
       return { quantity: 1, query: weighed.rest.join(' '), weightRefused: weighed.pounds };
     }
     return { quantity: 1, query: weighed.rest.join(' '), weight: weighed.pounds };

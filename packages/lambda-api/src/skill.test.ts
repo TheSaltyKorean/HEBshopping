@@ -478,6 +478,26 @@ describe('indeterminate writes must not invite a retry', () => {
   });
 });
 
+describe('a definitive weight refusal must not invite a retry', () => {
+  it('tells the user to check the amount rather than repeat the command', async () => {
+    // `adjustWeight` rethrows H-E-B's own refusal with `details.rejected` intact — repeating
+    // the same request will refuse the same way again, so the generic UPSTREAM_ERROR copy
+    // ("please try again") is the one answer guaranteed not to help.
+    const ops = fakeOps({
+      addItem: vi.fn(async () => {
+        throw new HebError('UPSTREAM_ERROR', 'HEB refused the requested weight.', {
+          retryable: false,
+          details: { rejected: true },
+        });
+      }),
+    });
+    const turn = await conversation(ops)(intent('AddItemIntent', { item: 'two pounds of ham' }));
+
+    expect(turn.speech).toMatch(/would not set that amount/i);
+    expect(turn.speech).not.toMatch(/try again/i);
+  });
+});
+
 // ---------------------------------------------------------------------------
 
 describe('adding — the free-text fallback', () => {

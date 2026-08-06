@@ -404,14 +404,12 @@ export class HebListOps implements ListOps {
           { details: { query: input.query } },
         );
       }
-      // Below the threshold we write nothing and hand the decision back. Silently adding
-      // the wrong product is the failure users actually notice.
-      if (!isConfident(match)) return { status: 'needs_confirmation', match };
-
-      // "Zero bananas" is a refusal, not a count of bananas — but a confident match here is
-      // matching on "bananas", the word the request actually named a quantity of zero. A
-      // real product can legitimately start with the word ("zero sugar dr pepper"), and its
-      // own name says so; only a match whose name does *not* mention it is the spurious one.
+      // "Zero bananas" is a refusal, not a count of bananas — but a match here is matching
+      // on "bananas", the word the request actually named a quantity of zero. A real product
+      // can legitimately start with the word ("zero sugar dr pepper"), and its own name says
+      // so; only a match whose name does *not* mention it is the spurious one. This has to run
+      // before the confidence check below: a below-threshold "zero bananas" match still hands
+      // back a `needs_confirmation` whose pending add bypasses this guard entirely on "yes".
       if (
         /^(?:zero|0)\b/i.test(input.query!.trim()) &&
         !/\b(?:zero|0)\b/i.test(match.product.name)
@@ -420,6 +418,11 @@ export class HebListOps implements ListOps {
           details: { query: input.query },
         });
       }
+
+      // Below the threshold we write nothing and hand the decision back. Silently adding
+      // the wrong product is the failure users actually notice.
+      if (!isConfident(match)) return { status: 'needs_confirmation', match };
+
       productId = match.product.id;
     }
 

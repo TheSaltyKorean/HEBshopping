@@ -90,6 +90,16 @@ const NUMBER_WORDS: Readonly<Record<string, number>> = {
 };
 
 /**
+ * The digits that follow "twenty" in a compound weight ("twenty one pounds"). Only
+ * "twenty" needs a compound at all — it is `NUMBER_WORDS`' own ceiling value, so it is the
+ * only tens word a spoken weight can be built on top of and still be worth reading; see
+ * `parseWeightPhrase`.
+ */
+const ONES_WORDS: Readonly<Record<string, number>> = {
+  one: 1, two: 2, three: 3, four: 4, five: 5, six: 6, seven: 7, eight: 8, nine: 9,
+};
+
+/**
  * Words that turn a preceding number into a *description* rather than a count.
  *
  * "two percent milk" means 2% milk — one carton — not two milks. Getting this wrong is
@@ -247,6 +257,18 @@ function parseWeightPhrase(raw: readonly string[]): { pounds: number; rest: stri
   // No leading amount at all means an implicit one: "a pound of ham".
   let pounds = fraction ?? numeric ?? 1;
   if (fraction !== undefined || numeric !== undefined) index += 1;
+
+  // "twenty one pounds" — NUMBER_WORDS stops at twenty, its own ceiling value, so a
+  // compound above it ("twenty one" through "twenty nine") is two tokens. Reading only the
+  // first leaves it at 20, under MAX_WEIGHT_LB, and lets an over-ceiling weight through as
+  // if it had never been refused.
+  if (numeric === 20) {
+    const ones = ONES_WORDS[raw[index] ?? ''];
+    if (ones !== undefined) {
+      pounds += ones;
+      index += 1;
+    }
+  }
 
   // "two and a half pounds" — the fraction can precede the unit as well as follow it.
   const readAndAHalf = (): void => {

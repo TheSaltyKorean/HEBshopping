@@ -155,6 +155,15 @@ describe('parseSpokenRequest', () => {
       expect(parsed.query).toBe('turkey');
     });
 
+    it('refuses a spoken compound weight over the ceiling', () => {
+      // "twenty one" is two tokens — NUMBER_WORDS stops at twenty, its own ceiling — so
+      // reading only the first left this at 20 and let it through unrefused.
+      const compound = parseSpokenRequest('twenty one pounds of turkey');
+      expect(compound.weight).toBeUndefined();
+      expect(compound.weightRefused).toBe(21);
+      expect(compound.query).toBe('turkey');
+    });
+
     it('still accepts the ceiling itself', () => {
       expect(parseSpokenRequest('20 pounds of turkey')).toEqual({
         quantity: 1,

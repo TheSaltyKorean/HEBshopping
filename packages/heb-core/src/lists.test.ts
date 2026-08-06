@@ -451,6 +451,54 @@ describe('a confident zero-count match must not write', () => {
 
     expect(result.status).toBe('added');
   });
+
+  it('refuses "zero bananas" even on a below-threshold match', async () => {
+    // A sole search result never crosses the confidence threshold (it scores zero
+    // separation), so this reaches `needs_confirmation` rather than a confident match — the
+    // zero guard has to run before that branch, or the pending add it hands back skips the
+    // guard entirely when the surface confirms it.
+    const fetchImpl = (async (_url: unknown, init: { body?: string }) => {
+      const body = String(init.body ?? '');
+      if (body.includes('productSearchItems')) {
+        return new Response(
+          JSON.stringify({
+            data: {
+              productSearchItems: {
+                __typename: 'ProductSearchItemsResult',
+                searchGrid: {
+                  items: [{ __typename: 'Product', id: 'p1', fullDisplayName: 'Bananas' }],
+                },
+              },
+            },
+          }),
+          { status: 200 },
+        );
+      }
+      return new Response(
+        JSON.stringify({
+          data: {
+            getShoppingListV2: {
+              __typename: 'ShoppingListV2',
+              id: 'list-1',
+              name: 'Shopping',
+              fulfillment: { store: { storeNumber: 1 } },
+              itemPage: { items: [] },
+            },
+          },
+        }),
+        { status: 200 },
+      );
+    }) as unknown as typeof fetch;
+
+    const ops = new HebListOps({
+      client: new HebClient({ store: storeWith(), fetchImpl, now: () => NOW, minDelayMs: 0 }),
+      listId: 'list-1',
+    });
+
+    await expect(ops.addItem({ query: 'zero bananas' })).rejects.toSatisfy((error: unknown) =>
+      hasCode(error, 'PRODUCT_NOT_FOUND'),
+    );
+  });
 });
 
 describe('a multi-unit add never reduces a concurrent quantity', () => {

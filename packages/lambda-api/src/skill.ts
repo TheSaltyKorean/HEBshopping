@@ -581,6 +581,16 @@ function errorHandler(): ErrorHandler {
             .getResponse();
         }
 
+        // A definitive refusal, not a transient failure: H-E-B looked at this exact request
+        // and said no. The generic UPSTREAM_ERROR copy invites a retry that will refuse the
+        // same way again.
+        if (error.details?.['rejected'] === true) {
+          return input.responseBuilder
+            .speak('H-E-B would not set that amount. Please check the quantity in the H-E-B app.')
+            .withShouldEndSession(true)
+            .getResponse();
+        }
+
         return input.responseBuilder
           .speak(SPEECH_BY_CODE[error.code])
           .withShouldEndSession(true)

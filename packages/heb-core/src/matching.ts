@@ -513,13 +513,17 @@ export function parseSpokenRequest(text: string): SpokenRequest {
   //
   // "thousand island dressing" — a number-led product name, same as "seven up" or "three
   // musketeers". Without this exception, the leading "thousand" is read as an implicit count
-  // of 1,000 and the request is refused before catalog search ever sees the product.
-  const isThousandIsland = tokens[0] === 'thousand' && tokens[1] === 'island';
-  const isBareThousand = !isThousandIsland && numeric === undefined && first === 'thousand';
+  // of 1,000 and the request is refused before catalog search ever sees the product. This
+  // applies whether "thousand" opens the phrase ("thousand island dressing") or is itself
+  // preceded by a count ("one thousand island dressing", "two thousand islands dressings") —
+  // in both cases "island" right after "thousand" means the product name, not a multiplier.
+  const isBareThousand = numeric === undefined && first === 'thousand';
+  const thousandIndex = isBareThousand ? 0 : 1;
+  const isThousandIsland = tokens[thousandIndex] === 'thousand' && tokens[thousandIndex + 1] === 'island';
   if (
     !isThousandIsland &&
     ((numeric !== undefined && numeric >= 1) || isBareThousand) &&
-    tokens[isBareThousand ? 0 : 1] === 'thousand'
+    tokens[thousandIndex] === 'thousand'
   ) {
     numeric = (numeric ?? 1) * 1000;
     consumedHundred = isBareThousand ? 1 : 2;

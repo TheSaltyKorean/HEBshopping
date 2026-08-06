@@ -650,6 +650,22 @@ describe('articles and irregular plurals', () => {
     });
   });
 
+  it('reads "one thousand island dressing" as one item, not a refused count of 1000', () => {
+    // The brand check only looked at tokens 0-1, so a leading count before "thousand island"
+    // still hit the scale-word multiplier and refused the request.
+    expect(parseSpokenRequest('one thousand island dressing')).toEqual({
+      quantity: 1,
+      query: 'thousand island dressing',
+    });
+  });
+
+  it('reads "two thousand island dressings" as two items, not a refused count of 2000', () => {
+    expect(parseSpokenRequest('two thousand island dressings')).toEqual({
+      quantity: 2,
+      query: 'thousand island dressings',
+    });
+  });
+
   it('still reads "a couple of lemons" as two', () => {
     // "couple" and "few" are quantity words in their own right and must stay counts even
     // though they are also article-adjacent number words.

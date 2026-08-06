@@ -131,29 +131,27 @@ const MEASURE_WORDS = new Set([
   // toilet paper" is one product, not two. Same shape as "percent" and "pack" — the number
   // is part of what the product *is*, not how many are wanted.
   'ply',
-  // "wick" and "blade" describe a candle's or razor's style, not how many are wanted: "three
-  // wick candle" is one candle with three wicks, "five blade razor" is one razor with five
-  // blades — same shape as "ply".
-  'wick', 'blade',
   // Composition words — see `COMPOSITION_WORDS` below for why these are singled out.
-  'cheese', 'layer', 'bean', 'meat',
+  'cheese', 'layer', 'bean', 'meat', 'wick', 'blade',
 ]);
 
 /**
- * `MEASURE_WORDS` entries that name a singular product's *composition* rather than a fixed
- * unit or package size: "four cheese pizza" is one pizza made with four cheeses, "seven layer
- * dip" is one dip with seven layers, "three bean salad" is one salad of three beans, "four
- * meat pizza" is one pizza with four meats — same shape as "two percent milk", where the
- * number describes the product rather than how many are wanted.
+ * `MEASURE_WORDS` entries that name a singular product's *composition or style* rather than a
+ * fixed unit or package size: "four cheese pizza" is one pizza made with four cheeses, "seven
+ * layer dip" is one dip with seven layers, "three bean salad" is one salad of three beans,
+ * "four meat pizza" is one pizza with four meats, "three wick candle" is one candle with three
+ * wicks, "five blade razor" is one razor with five blades — same shape as "two percent milk",
+ * where the number describes the product rather than how many are wanted.
  *
  * Unlike the rest of `MEASURE_WORDS` ("percent", "pack", "ply", ...), which describe the
- * product regardless of what follows, a composition word only reads that way when the head
- * noun right after it is singular: "two cheese sticks" really is two sticks, and "sticks"
- * being plural is exactly the tell. Applying that same check to the whole of `MEASURE_WORDS`
- * would break entries like "count", where the noun that follows ("12 count eggs") is plural
- * by nature of what the word measures — so the singular-head check is scoped to this set.
+ * product regardless of what follows, these words only read that way when the head noun right
+ * after them is singular: "two cheese sticks" really is two sticks, "three wick candles"
+ * really is three candles, and the plural head noun is exactly the tell. Applying that same
+ * check to the whole of `MEASURE_WORDS` would break entries like "count", where the noun that
+ * follows ("12 count eggs") is plural by nature of what the word measures — so the
+ * singular-head check is scoped to this set.
  */
-const COMPOSITION_WORDS = new Set(['cheese', 'layer', 'bean', 'meat']);
+const COMPOSITION_WORDS = new Set(['cheese', 'layer', 'bean', 'meat', 'wick', 'blade']);
 
 /**
  * Brand names that *begin* with a number word, where the number is part of the name.
@@ -435,7 +433,13 @@ function parseWeightPhrase(raw: readonly string[]): { pounds: number; rest: stri
   }
 
   // "two and a half pounds" — the fraction can precede the unit as well as follow it.
-  const readAndAHalf = (): void => {
+  //
+  // `scale` converts the fraction's own unit into pounds. Before the unit token is read, the
+  // fraction is already in pounds (scale 1). After it — "an ounce and a half of turkey" — the
+  // fraction is in the *sub-pound unit just matched* ("a half" more ounces, not more pounds),
+  // so it must go through the same `poundsPerUnit` conversion as the leading amount, or "an
+  // ounce and a half" comes out as 1.5 lb instead of 0.09375 lb.
+  const readAndAHalf = (scale: number): void => {
     let cursor = index;
     if (raw[cursor] !== 'and') return;
     cursor += 1;
@@ -450,10 +454,10 @@ function parseWeightPhrase(raw: readonly string[]): { pounds: number; rest: stri
     const fractionCursor = leadingOnes !== undefined ? cursor + 1 : cursor;
     const extra = readFractionToken(raw[fractionCursor] ?? '');
     if (extra === undefined) return;
-    pounds += extra * (leadingOnes ?? 1);
+    pounds += extra * (leadingOnes ?? 1) * scale;
     index = fractionCursor + 1;
   };
-  readAndAHalf();
+  readAndAHalf(1);
 
   skipArticles();
   const unit = raw[index];
@@ -463,7 +467,7 @@ function parseWeightPhrase(raw: readonly string[]): { pounds: number; rest: stri
   index += 1;
 
   // "a pound and a half of turkey" — same fraction, on the other side of the unit.
-  readAndAHalf();
+  readAndAHalf(poundsPerUnit);
 
   skipArticles();
   // The `of` is the whole test. No exception for fractions: "half pound beef patties" is a

@@ -190,6 +190,18 @@ function confirmAdded(
       ? ` Someone else added it too, so the list now has ${item.quantity}.`
       : '';
 
+  // A brand-new line that lands exactly on its own ceiling is indistinguishable from a
+  // household member's concurrent add filling that same product to its maximum before this
+  // request's own mutation landed — HEB returns the unchanged ceiling line under `added`
+  // either way (see `tools/verify-alexa.ts`, which faces the same ambiguity). Neither
+  // `cappedNotice` nor `mergedNotice` fires here since `item.quantity === quantityRequested`,
+  // so without this the confirmation would claim a clean full add that may not be this
+  // request's doing at all.
+  const unprovenNotice =
+    !wasPresent && quantityRequested === undefined && item.maximumQuantity !== undefined && item.quantity >= item.maximumQuantity
+      ? ` H-E-B's own limit for ${name} is ${item.quantity}, so I can't confirm this request's own share of it.`
+      : '';
+
   // Same idea for a counter product whose own weight ladder tops out below the ask: the
   // line was written at the last rung, not the pounds actually requested. A packaged
   // product has no ladder at all — `item.weight` stays undefined and the pounds asked for
@@ -200,11 +212,11 @@ function confirmAdded(
       : item.weight === undefined
         ? ` ${name} is sold by the package, not the pound, so I added one instead of ${speakablePounds(weightRequested)}.`
         : weightRequested > item.weight
-          ? ` H-E-B only sells ${name} up to ${speakablePounds(item.weight)}, so I could not add the full ${speakablePounds(weightRequested)}.`
+          ? ` H-E-B only sells ${name} up to ${speakablePounds(item.weight)}, so I could not bring it up to ${speakablePounds(weightRequested)}.`
           : '';
 
   return input.responseBuilder
-    .speak(`${speech}${cappedNotice}${mergedNotice}${weightCappedNotice} Anything else?`)
+    .speak(`${speech}${cappedNotice}${mergedNotice}${unprovenNotice}${weightCappedNotice} Anything else?`)
     .reprompt(REPROMPT)
     .getResponse();
 }

@@ -129,6 +129,21 @@ function describeAddResult(result: AddResult, requested: { quantity?: number; we
       ? ` (another request added this item too — asked for ${result.quantityRequested}, list now has ${result.item.quantity})`
       : '';
 
+  // A brand-new line that lands exactly on its own ceiling is indistinguishable from a
+  // household member's concurrent add filling that same product to its maximum before this
+  // request's own mutation landed — HEB returns the unchanged ceiling line under `added`
+  // either way (see `tools/verify-alexa.ts`, which faces the same ambiguity). Neither
+  // `cappedNotice` nor `mergedNotice` fires here since `quantityRequested` is undefined and
+  // `item.quantity` already equals what was asked for, so without this the response would
+  // claim a clean full add that may not be this request's doing at all.
+  const unprovenNotice =
+    result.status === 'added' &&
+    result.quantityRequested === undefined &&
+    result.item.maximumQuantity !== undefined &&
+    result.item.quantity >= result.item.maximumQuantity
+      ? ` (HEB's own limit for this item is ${result.item.quantity} — could not confirm this request's own share of it)`
+      : '';
+
   // Same idea for a counter product whose weight ladder tops out below the ask — the item
   // was written at its last rung, not the pounds actually requested. A packaged product has
   // no ladder at all — `item.weight` stays undefined and the requested pounds were dropped
@@ -139,15 +154,15 @@ function describeAddResult(result: AddResult, requested: { quantity?: number; we
         ? ` (this item is sold by the package, not the pound — added one package instead of ` +
           `the requested ${result.weightRequested} lb)`
         : result.weightRequested > result.item.weight
-          ? ` (HEB only sells this item up to ${result.item.weight} lb — the remainder of the ` +
-            `requested ${result.weightRequested} lb could not be added)`
+          ? ` (HEB only sells this item up to ${result.item.weight} lb — could not bring it up to ` +
+            `the requested total of ${result.weightRequested} lb)`
           : ''
       : '';
 
   switch (result.status) {
     case 'added':
       return text(
-        `Added to the HEB list: ${describeItem(result.item)}${cappedNotice}${mergedNotice}${weightCappedNotice}`,
+        `Added to the HEB list: ${describeItem(result.item)}${cappedNotice}${mergedNotice}${unprovenNotice}${weightCappedNotice}`,
       );
     case 'already_present':
       return text(
@@ -240,14 +255,14 @@ export function createHebMcpServer({ createListOps }: CreateServerOptions): McpS
     },
     async ({ query, limit }): Promise<TextResult> => {
       try {
-        const products = await createListOps().searchProducts(query);
+        const { items: products, total } = await createListOps().searchProductsPage(query);
         if (products.length === 0) return text(`No HEB products matched "${query}".`);
         const shown = products.slice(0, limit ?? 10);
         const lines = shown
           .map((product) => `• ${product.name}  [productId: ${product.id}]`)
           .join('\n');
         return text(
-          `${products.length} match(es) for "${query}" (showing ${shown.length}):\n${lines}`,
+          `${total} match(es) for "${query}" (showing ${shown.length}):\n${lines}`,
         );
       } catch (error) {
         return toErrorText(error);

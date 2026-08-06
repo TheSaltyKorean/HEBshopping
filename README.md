@@ -166,10 +166,10 @@ to whichever H-E-B account ran `npm run login`, and switching accounts means re-
 with `--switch`. Multi-profile support is a possible future update, not a current feature —
 see "Why there's no password field" above for why it is not simply a login form.
 
-**Ounces aren't understood.** H-E-B's counter ladder is in quarter-pound steps, so "six
-ounces of ham" cannot be honoured exactly. Rather than silently rounding someone's order,
-the phrase is left in the search query. Ask in pounds — "half a pound", "a pound and a
-half" — and the whole ladder is available.
+**Ounces and grams are converted, then rounded to the nearest quarter pound.** H-E-B's
+counter ladder is in quarter-pound steps, so "six ounces of ham" (0.375 lb) is snapped to
+0.5 lb and ordered at that weight rather than refused. Ask in pounds — "half a pound", "a
+pound and a half" — if you want to be sure of the exact amount written.
 
 
 **Adding more than one unit at a time is safe against a concurrent change.** Asking for

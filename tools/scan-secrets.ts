@@ -70,7 +70,7 @@ const RULES: Rule[] = [
   },
   {
     name: 'account UUID',
-    pattern: /\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b/g,
+    pattern: /\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b/gi,
     note: 'list/item ids identify the account — use <listId> / <lineId> placeholders',
   },
   {

@@ -58,7 +58,13 @@ const HEAD_WORDS = 3;
  */
 export function speakableProduct(product: Product): string {
   const withoutSize = product.name
-    .replace(/,[^,]*$/, '') // trailing ", 15 oz" / ", 12 ct"
+    // Trailing ", 15 oz" / ", 12 ct" / ", 6 rolls" / ", 1/2 gal" — but not an arbitrary
+    // trailing clause. "Acme Macaroni, Beef, and Tomato" has no size to drop, and stripping
+    // "Beef" would confirm a shortened name the listener was never fully told.
+    .replace(
+      /,\s*\d+(\.\d+)?(\/\d+)?\s*(oz|lb|lbs|ct|count|gal|qt|l|ml|g|kg|pk|pack|packs|roll|rolls|dozen)\.?\s*$/i,
+      '',
+    )
     .replace(/\b\d+(\.\d+)?\s*(oz|lb|lbs|ct|gal|qt|l|ml|g|kg|pk)\b/gi, '')
     .replace(/\b\d+\/\d+\s*(gal|lb)\b/gi, '');
 

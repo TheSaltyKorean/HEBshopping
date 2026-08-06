@@ -272,10 +272,24 @@ export class HebListOps implements ListOps {
    * actually buy where they shop.
    */
   async searchProducts(query: string, listId?: string): Promise<Product[]> {
+    return (await this.searchProductsPage(query, listId)).items;
+  }
+
+  /**
+   * Same search, but also surfaces the catalog's own count of matches — not just how many
+   * came back on this page. `searchProducts` above drops it because its callers only ever
+   * consume the resolved candidates, never the total; MCP's `heb_search_product`, and
+   * `tools/verify-mcp.ts`'s ambiguity probe, need the real number rather than the page length,
+   * which under-reports whenever more than one page of results exists.
+   */
+  async searchProductsPage(query: string, listId?: string): Promise<{ items: Product[]; total: number }> {
     const storeId = await this.resolveStoreId(listId);
 
     const data = await this.client.execute<{
-      productSearchItems: { __typename?: string; searchGrid?: { items?: HebProduct[] } };
+      productSearchItems: {
+        __typename?: string;
+        searchGrid?: { items?: HebProduct[]; total?: number };
+      };
     }>(searchProductsDocument(query, storeId));
 
     // The *outer* union, distinct from the item union filtered below. A refused search
@@ -287,9 +301,10 @@ export class HebListOps implements ListOps {
     // products. Those come back as a bare `__typename`, and mapping one produces a
     // "Unknown product" with an undefined id: MCP would hand that id back as a real
     // productId, and Alexa would offer it in a confirmation whose "yes" cannot succeed.
-    return (data.productSearchItems.searchGrid?.items ?? [])
+    const items = (data.productSearchItems.searchGrid?.items ?? [])
       .filter((item) => item.__typename === 'Product' && typeof item.id === 'string')
       .map(toProduct);
+    return { items, total: data.productSearchItems.searchGrid?.total ?? items.length };
   }
 
   /**

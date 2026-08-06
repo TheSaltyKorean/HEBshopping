@@ -11,7 +11,7 @@
  * that HEB's ranking does not give us and cannot be tested offline.
  */
 
-import { CONFIRMATION_THRESHOLD, MAX_QUANTITY } from './constants.js';
+import { CONFIRMATION_THRESHOLD, MAX_QUANTITY, MAX_WEIGHT_LB } from './constants.js';
 import type { MatchResult, Product } from './types.js';
 
 // ---------------------------------------------------------------------------
@@ -190,6 +190,16 @@ export interface SpokenRequest {
    * made suppressing "two dozen eggs" wrong. Surfaces must refuse out loud instead.
    */
   quantityRefused?: number;
+  /**
+   * The weight that was asked for and could not be honoured, when it exceeds `MAX_WEIGHT_LB`.
+   *
+   * Present *instead of* acting on the number, for the same reason as `quantityRefused`: a
+   * confident match on "twenty-one pounds of turkey" would otherwise perform a live mutation
+   * with the oversized weight, and the MCP schema and pending-state validator both cap at
+   * `MAX_WEIGHT_LB` anyway — silently snapping it to the ceiling writes an amount nobody asked
+   * for. Surfaces must refuse out loud instead.
+   */
+  weightRefused?: number;
 }
 
 /** Units that mean pounds. Ounces are deliberately absent — see `parseWeightPhrase`. */
@@ -284,6 +294,9 @@ export function parseSpokenRequest(text: string): SpokenRequest {
   // turkeys, and the count parse below would otherwise read the two as a quantity.
   const weighed = parseWeightPhrase(raw);
   if (weighed !== null) {
+    if (weighed.pounds > MAX_WEIGHT_LB) {
+      return { quantity: 1, query: weighed.rest.join(' '), weightRefused: weighed.pounds };
+    }
     return { quantity: 1, query: weighed.rest.join(' '), weight: weighed.pounds };
   }
 

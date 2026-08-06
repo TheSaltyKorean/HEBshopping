@@ -639,6 +639,20 @@ describe('the free-text fallback and merged lines', () => {
     expect(turn.speech).not.toContain('could not find that at your H-E-B.  Anything');
   });
 
+  it('refuses an oversized spoken weight before it can reach a mutation', async () => {
+    // A confident match on "twenty-one pounds of turkey" must never reach `addItem` — the
+    // same ceiling the MCP schema and pending-state validator both enforce.
+    const ops = fakeOps({
+      addItem: vi.fn() as unknown as FakeOps['addItem'],
+    });
+    const say = conversation(ops);
+
+    const turn = await say(intent('AddItemIntent', { item: '21 pounds of turkey' }));
+
+    expect(turn.speech).toContain('20 pounds');
+    expect(ops.addItem).not.toHaveBeenCalled();
+  });
+
   it('refuses to write down a zero-count request', async () => {
     // "Add zero bananas" is a refusal. The catalog search still runs — "zero sugar dr
     // pepper" is a real product — but a miss must not become a written line.

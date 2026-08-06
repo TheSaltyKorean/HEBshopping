@@ -144,6 +144,30 @@ describe('parseSpokenRequest', () => {
     });
   });
 
+  describe('weights above the configured ceiling', () => {
+    // Same rule as the count ceiling, by weight: a confident match on "twenty-one pounds of
+    // turkey" would otherwise reach a live mutation with the oversized weight, which the MCP
+    // schema and the pending-state validator both cap at MAX_WEIGHT_LB.
+    it('refuses a weight over the ceiling rather than acting on it', () => {
+      const parsed = parseSpokenRequest('21 pounds of turkey');
+      expect(parsed.weight).toBeUndefined();
+      expect(parsed.weightRefused).toBe(21);
+      expect(parsed.query).toBe('turkey');
+    });
+
+    it('still accepts the ceiling itself', () => {
+      expect(parseSpokenRequest('20 pounds of turkey')).toEqual({
+        quantity: 1,
+        query: 'turkey',
+        weight: 20,
+      });
+    });
+
+    it('does not refuse weights below the ceiling', () => {
+      expect(parseSpokenRequest('two pounds of sliced turkey').weightRefused).toBeUndefined();
+    });
+  });
+
   it('does not read a trailing-only number as a count', () => {
     expect(parseSpokenRequest('milk')).toEqual({ quantity: 1, query: 'milk' });
   });

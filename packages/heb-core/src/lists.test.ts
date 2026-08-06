@@ -365,6 +365,94 @@ describe('search refusals name the real problem', () => {
   });
 });
 
+describe('a confident zero-count match must not write', () => {
+  // A second, unrelated candidate is required to earn any separation at all — a sole
+  // candidate always scores zero separation (see `separation` in matching.ts), so it can
+  // never cross the confidence threshold no matter how well it covers the query.
+  function opsWithSearchResult(name: string): HebListOps {
+    const addedItem = {
+      __typename: 'ProductShoppingListItemV2',
+      id: 'line-0',
+      quantity: 1,
+      product: { __typename: 'Product', id: 'p1', fullDisplayName: name },
+    };
+    const fetchImpl = (async (_url: unknown, init: { body?: string }) => {
+      const body = String(init.body ?? '');
+      if (body.includes('productSearchItems')) {
+        return new Response(
+          JSON.stringify({
+            data: {
+              productSearchItems: {
+                __typename: 'ProductSearchItemsResult',
+                searchGrid: {
+                  items: [
+                    { __typename: 'Product', id: 'p1', fullDisplayName: name },
+                    { __typename: 'Product', id: 'p2', fullDisplayName: 'Whole Milk' },
+                  ],
+                },
+              },
+            },
+          }),
+          { status: 200 },
+        );
+      }
+      if (body.includes('addShoppingListItemsV2')) {
+        return new Response(
+          JSON.stringify({
+            data: {
+              addShoppingListItemsV2: {
+                __typename: 'ShoppingListV2',
+                id: 'list-1',
+                name: 'Shopping',
+                fulfillment: { store: { storeNumber: 1 } },
+                itemPage: { items: [addedItem] },
+              },
+            },
+          }),
+          { status: 200 },
+        );
+      }
+      return new Response(
+        JSON.stringify({
+          data: {
+            getShoppingListV2: {
+              __typename: 'ShoppingListV2',
+              id: 'list-1',
+              name: 'Shopping',
+              fulfillment: { store: { storeNumber: 1 } },
+              itemPage: { items: [] },
+            },
+          },
+        }),
+        { status: 200 },
+      );
+    }) as unknown as typeof fetch;
+
+    return new HebListOps({
+      client: new HebClient({ store: storeWith(), fetchImpl, now: () => NOW, minDelayMs: 0 }),
+      listId: 'list-1',
+    });
+  }
+
+  it('refuses "zero organic gala apples" even on a confident catalog match', async () => {
+    // The confident match is on "organic gala apples" — "zero" contributed nothing to it —
+    // so the number that was actually said is a refusal, not a count of one.
+    const ops = opsWithSearchResult('Organic Gala Apples');
+
+    await expect(ops.addItem({ query: 'zero organic gala apples' })).rejects.toSatisfy(
+      (error: unknown) => hasCode(error, 'PRODUCT_NOT_FOUND'),
+    );
+  });
+
+  it('still writes a real product whose own name says zero', async () => {
+    const ops = opsWithSearchResult('Dr Pepper Zero Sugar');
+
+    const result = await ops.addItem({ query: 'zero sugar dr pepper' });
+
+    expect(result.status).toBe('added');
+  });
+});
+
 describe('a multi-unit add never reduces a concurrent quantity', () => {
   it('floors the follow-up target at what the add returned', async () => {
     // The opening read found no line, but a household member created the same product in

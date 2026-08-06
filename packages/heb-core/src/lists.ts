@@ -407,6 +407,19 @@ export class HebListOps implements ListOps {
       // Below the threshold we write nothing and hand the decision back. Silently adding
       // the wrong product is the failure users actually notice.
       if (!isConfident(match)) return { status: 'needs_confirmation', match };
+
+      // "Zero bananas" is a refusal, not a count of bananas — but a confident match here is
+      // matching on "bananas", the word the request actually named a quantity of zero. A
+      // real product can legitimately start with the word ("zero sugar dr pepper"), and its
+      // own name says so; only a match whose name does *not* mention it is the spurious one.
+      if (
+        /^(?:zero|0)\b/i.test(input.query!.trim()) &&
+        !/\b(?:zero|0)\b/i.test(match.product.name)
+      ) {
+        throw new HebError('PRODUCT_NOT_FOUND', `"${input.query}" asks for zero.`, {
+          details: { query: input.query },
+        });
+      }
       productId = match.product.id;
     }
 
@@ -619,8 +632,15 @@ export class HebListOps implements ListOps {
         line = seen ?? { ...line, quantity: line.quantity + 1 };
       } catch (error) {
         // A line exists either way, so a blind retry of the whole request would add the
-        // full amount again. Say what landed. This holds even for an expired session,
-        // whose remedy alone would send someone back to repeat everything.
+        // full amount again. This holds even for an expired session, whose remedy alone
+        // would send someone back to repeat everything.
+        //
+        // `line.quantity` is only the last *confirmed* reading — this mutation's own response
+        // is what's missing. A lost response is not proof the write never landed: the same
+        // ambiguity that makes the very first add's failure "indeterminate" (see the
+        // `added === undefined` branch above) applies to every later unit too. Asserting the
+        // amount as exact would tell an MCP client to over-correct or misreport on a total
+        // that might already be one higher.
         const done = line.quantity;
         if (isHebError(error) && error.code === 'SESSION_EXPIRED') {
           throw new HebError('SESSION_EXPIRED', error.message, {
@@ -631,8 +651,9 @@ export class HebListOps implements ListOps {
         }
         throw new HebError(
           'UPSTREAM_ERROR',
-          `Added ${line.text}, but the amount is ${done}, not ${added.quantity + remaining}.`,
-          { cause: error, retryable: false, details: { partialAdd: true } },
+          `Added ${line.text}, but the amount is at least ${done}, not confirmed at ` +
+            `${added.quantity + remaining}.`,
+          { cause: error, retryable: false, details: { partialAdd: true, indeterminate: true } },
         );
       }
     }
@@ -794,6 +815,19 @@ export class HebListOps implements ListOps {
         if (!justCreated) throw error;
         throw new HebError('SESSION_EXPIRED', error.message, {
           cause: error,
+          retryable: false,
+          details: { ...error.details, partialAdd: true },
+        });
+      }
+
+      // A definitive refusal likewise has nothing to reconcile — the reconciliation read
+      // below would re-read the unchanged line and repackage this as a generic
+      // UPSTREAM_ERROR, losing the `rejected` marker and sending the caller back to retry a
+      // request HEB has already, definitively, said no to.
+      if (isHebError(error) && error.details?.['rejected'] === true) {
+        if (!justCreated) throw error;
+        throw new HebError(error.code, error.message, {
+          cause: error.cause,
           retryable: false,
           details: { ...error.details, partialAdd: true },
         });

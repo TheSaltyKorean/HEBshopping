@@ -25,6 +25,7 @@ import {
   isHebError,
   parseSpokenRequest,
   MAX_QUANTITY,
+  MAX_WEIGHT_LB,
   type AddResult,
   type HebErrorCode,
   type ListItem,
@@ -197,7 +198,7 @@ function addItemHandler(options: CreateSkillOptions): RequestHandler {
       // Quantity is parsed from the spoken phrase rather than a separate slot: "two
       // avocados" arrives as one AMAZON.SearchQuery, and heb-core already knows that
       // "two percent milk" is one carton rather than two.
-      const { quantity, query, weight, quantityRefused } = parseSpokenRequest(spoken);
+      const { quantity, query, weight, quantityRefused, weightRefused } = parseSpokenRequest(spoken);
 
       // A count above the ceiling every surface enforces. Say so rather than acting on some
       // other number: adding `MAX_QUANTITY` writes an amount nobody asked for, and dropping
@@ -207,6 +208,16 @@ function addItemHandler(options: CreateSkillOptions): RequestHandler {
         const message =
           `I can add up to ${MAX_QUANTITY} at a time, and you asked for ${quantityRefused}. ` +
           'Try again with a smaller number.';
+        return input.responseBuilder.speak(message).reprompt(message).getResponse();
+      }
+
+      // Same rule, by weight: a confident match on "twenty-one pounds of turkey" would
+      // otherwise perform a live mutation with the oversized weight before this handler ever
+      // gets a say.
+      if (weightRefused !== undefined) {
+        const message =
+          `I can add up to ${MAX_WEIGHT_LB} pounds at a time, and you asked for ${weightRefused}. ` +
+          'Try again with a smaller amount.';
         return input.responseBuilder.speak(message).reprompt(message).getResponse();
       }
 

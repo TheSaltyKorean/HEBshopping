@@ -250,6 +250,32 @@ describe('weight on a counter line', () => {
 
     expect(weightUpdates(sent)[0]).toContain('weight: 1.25');
   });
+
+  it('preserves a definitive refusal instead of reconciling it into a generic error', async () => {
+    // A rejected union member means HEB explicitly refused the weight update, not that the
+    // response was lost. Reconciling would re-read the (unchanged) line and repackage this
+    // as an indistinguishable-from-transient UPSTREAM_ERROR, losing the `rejected` marker and
+    // sending the caller back to retry a write that cannot succeed.
+    const { ops } = scripted([{ id: 'line-0', quantity: 1, weight: 0.5, productId: 'p-turkey' }]);
+    const client = (ops as unknown as { client: { execute: (d: unknown) => Promise<unknown> } })
+      .client;
+    const real = client.execute.bind(client);
+    client.execute = async (document: unknown) => {
+      if (
+        (document as { operationName: string }).operationName === 'HebUpdateShoppingListItemWeight'
+      ) {
+        throw new HebError('UPSTREAM_ERROR', 'HEB refused the weight update.', {
+          details: { rejected: true },
+        });
+      }
+      return real(document);
+    };
+
+    await expect(ops.addItem({ productId: 'p-turkey', weight: 1 })).rejects.toSatisfy(
+      (error: unknown) =>
+        (error as { details?: Record<string, unknown> }).details?.['rejected'] === true,
+    );
+  });
 });
 
 describe('written lines', () => {
@@ -618,6 +644,30 @@ describe('the product path matches the written-line path', () => {
       (error: unknown) =>
         hasCode(error, 'SESSION_EXPIRED') &&
         (error as { details?: Record<string, unknown> }).details?.['partialAdd'] === undefined,
+    );
+  });
+
+  it('reports a lost response for a later unit as indeterminate, not exact', async () => {
+    // The first unit committed (the line now reads 1). The second unit's mutation is sent
+    // but its response is lost — the write may have landed at HEB regardless. Asserting the
+    // amount as exactly 1 would tell a caller to over-correct or misreport a total that
+    // might already be 2.
+    const { ops } = scripted([{ id: 'line-0', quantity: 0, productId: 'p-milk' }]);
+    const client = (ops as unknown as { client: { execute: (d: unknown) => Promise<unknown> } })
+      .client;
+    const real = client.execute.bind(client);
+    let calls = 0;
+    client.execute = async (document: unknown) => {
+      if ((document as { operationName: string }).operationName === 'HebAddShoppingListItems') {
+        calls += 1;
+        if (calls === 2) throw new HebError('UPSTREAM_ERROR', 'response lost');
+      }
+      return real(document);
+    };
+
+    await expect(ops.addItem({ productId: 'p-milk', quantity: 2 })).rejects.toSatisfy(
+      (error: unknown) =>
+        (error as { details?: Record<string, unknown> }).details?.['indeterminate'] === true,
     );
   });
 

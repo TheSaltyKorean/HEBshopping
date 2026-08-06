@@ -606,16 +606,22 @@ function errorHandler(): ErrorHandler {
         // would retain a household's shopping in CloudWatch indefinitely.
         console.error(`HebError ${error.code}`);
 
-        // Schema drift is permanent until someone changes the code, and takes priority over
-        // `partialAdd` when both are set: suggesting a retry or "check the quantity" makes a
-        // broken integration look transient, and the log line — a bare code — gives no hint
-        // either, so an Alexa-only deployment could stay broken for weeks.
+        // Schema drift is permanent until someone changes the code, so it always leads the
+        // speech — but when `partialAdd` is also set, a line really was written at H-E-B's
+        // default weight, and dropping that fact means the fix-and-retry after the deploy
+        // repeats the original request, taking the existing-line path and adding the
+        // requested weight on top of the default that is already there.
         if (error.details?.['schemaDrift'] === true) {
           console.error('HebError UPSTREAM_ERROR (schema drift — operations.ts needs updating)');
+          const partialAddNote =
+            error.details?.['partialAdd'] === true
+              ? ' The item is already on your list at H-E-B’s default amount — once it is ' +
+                'fixed, adjust that instead of asking again, or the amount will be added twice.'
+              : '';
           return input.responseBuilder
             .speak(
               'H-E-B has changed something on their side, and I cannot reach your list ' +
-                'until this skill is updated. Retrying will not help.',
+                `until this skill is updated. Retrying will not help.${partialAddNote}`,
             )
             .withShouldEndSession(true)
             .getResponse();

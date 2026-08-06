@@ -141,6 +141,17 @@ describe('parseSpokenRequest', () => {
     });
   });
 
+  it('reads "two cheese and pepperoni pizzas" as two, since "and" joins toppings within the phrase', () => {
+    // The boundary scan used to stop at every filler token including "and", even when it
+    // joins two toppings inside the noun phrase rather than introducing a trailing modifier
+    // like "for dinner" does. That read "cheese" as the (singular) head noun and returned
+    // quantity 1 instead of 2.
+    expect(parseSpokenRequest('two cheese and pepperoni pizzas')).toEqual({
+      quantity: 2,
+      query: 'cheese pepperoni pizzas',
+    });
+  });
+
   // A package word after a number can be either reading, and both are common:
   //   "six pack soda"      — the number names the package        → one
   //   "two dozen eggs"     — the number counts packages          → two
@@ -292,6 +303,16 @@ describe('parseSpokenRequest', () => {
       // counter product at H-E-B's default weight instead of the 1.5 lb actually requested.
       const parsed = parseSpokenRequest('one point five pounds of turkey');
       expect(parsed.weight).toBe(1.5);
+      expect(parsed.query).toBe('turkey');
+    });
+
+    it('reads a spoken decimal weight with no leading whole number ("point five pounds")', () => {
+      // "point five pounds" has no digit word before "point" — the leading-number check
+      // required `numeric !== undefined`, so this fell through to the count parser as
+      // "point five pounds of turkey" and could confirm a counter product at H-E-B's
+      // default weight instead of the 0.5 lb actually requested.
+      const parsed = parseSpokenRequest('point five pounds of turkey');
+      expect(parsed.weight).toBe(0.5);
       expect(parsed.query).toBe('turkey');
     });
 

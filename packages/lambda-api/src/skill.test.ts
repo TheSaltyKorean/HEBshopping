@@ -478,6 +478,28 @@ describe('indeterminate writes must not invite a retry', () => {
   });
 });
 
+describe('schema drift alongside a partial write', () => {
+  it('mentions the existing line, not just the deployment fix', async () => {
+    // `adjustWeight` can propagate both `schemaDrift` and `partialAdd` when the initial add
+    // landed but the weight update was rejected. The schema-drift branch used to speak only
+    // the "this skill needs updating" copy, dropping the partial-write warning — so once the
+    // deployment is fixed, repeating the original request finds the existing line and adds
+    // the requested weight on top of H-E-B's default instead of just setting it.
+    const ops = fakeOps({
+      addItem: vi.fn(async () => {
+        throw new HebError('UPSTREAM_ERROR', 'HEB rejected the weight update.', {
+          retryable: false,
+          details: { schemaDrift: true, partialAdd: true },
+        });
+      }),
+    });
+    const turn = await conversation(ops)(intent('AddItemIntent', { item: 'two pounds of ham' }));
+
+    expect(turn.speech).toMatch(/skill is updated/i);
+    expect(turn.speech).toMatch(/already on your list/i);
+  });
+});
+
 describe('a definitive weight refusal must not invite a retry', () => {
   it('tells the user to check the amount rather than repeat the command', async () => {
     // `adjustWeight` rethrows H-E-B's own refusal with `details.rejected` intact — repeating

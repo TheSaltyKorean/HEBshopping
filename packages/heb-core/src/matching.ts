@@ -351,7 +351,11 @@ function parseWeightPhrase(raw: readonly string[]): { pounds: number; rest: stri
   // unmatched unit word and the whole phrase falls through to a count-and-query parse that
   // drops the weight and writes a counter product at H-E-B's default size instead of the
   // 1.5 lb actually requested.
-  if (numeric !== undefined && raw[index] === 'point') {
+  //
+  // "point five pounds of turkey" — the leading whole-number word can be omitted entirely,
+  // same as a numeral written "0.5" or ".5" would be. `first` is then `point` itself and
+  // `numeric` is undefined, so the check below must not require a preceding number.
+  if (raw[index] === 'point') {
     const digits: number[] = [];
     let cursor = index + 1;
     while (cursor < raw.length && NUMBER_WORDS[raw[cursor]!] !== undefined && NUMBER_WORDS[raw[cursor]!]! <= 9) {
@@ -359,7 +363,7 @@ function parseWeightPhrase(raw: readonly string[]): { pounds: number; rest: stri
       cursor += 1;
     }
     if (digits.length > 0) {
-      pounds = numeric + Number(`0.${digits.join('')}`);
+      pounds = (numeric ?? 0) + Number(`0.${digits.join('')}`);
       index = cursor;
     }
   }
@@ -754,9 +758,14 @@ export function parseSpokenRequest(text: string): SpokenRequest {
   // `tokens`, so reading the last token there picks "dinner" instead of "pizzas". Walking
   // `raw` (which still has the filler) from the composition word to the next filler word, or
   // to the end if none follows, finds the noun phrase's actual boundary in both cases.
+  //
+  // "and" is excepted from that stop set: "two cheese and pepperoni pizzas" uses it to join
+  // toppings *within* the noun phrase, not to introduce a trailing modifier the way "for"
+  // does — stopping there would read "cheese" as the (singular) head and lose the count.
   let headEnd = raw.length;
   if (secondAt >= 0) {
     for (let i = secondAt + 1; i < raw.length; i += 1) {
+      if (raw[i] === 'and') continue;
       if (FILLER.has(raw[i]!)) {
         headEnd = i;
         break;

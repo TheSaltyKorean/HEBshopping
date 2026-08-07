@@ -16,6 +16,7 @@
  * What it writes is a live credential. See the Security section of the README.
  */
 
+import { execFileSync } from 'node:child_process';
 import { rm, stat } from 'node:fs/promises';
 import { resolve } from 'node:path';
 import {
@@ -66,6 +67,20 @@ function parseArgs(argv: string[]): Options {
 }
 
 const sleep = (ms: number): Promise<void> => new Promise((done) => setTimeout(done, ms));
+
+/**
+ * `icacls` is a Windows tool and only understands Windows-style paths. On WSL,
+ * `options.sessionPath` is POSIX-style (e.g. `/mnt/c/repo/.session/session.json`), so
+ * translate it via `wslpath` before printing a command meant to run in PowerShell.
+ */
+function windowsPathFor(path: string): string {
+  if (process.platform !== 'linux') return path;
+  try {
+    return execFileSync('wslpath', ['-w', path], { encoding: 'utf8' }).trim();
+  } catch {
+    return path;
+  }
+}
 
 /** Days until a cookie dies, or null for a session cookie. */
 function daysUntil(expiresSeconds: number, nowMs: number): number | null {
@@ -224,18 +239,23 @@ async function main(): Promise<void> {
     `\n✅ Session written to ${options.sessionPath}` + (ownerOnly ? ' (mode 0600).' : '.'),
   );
   if (!ownerOnly) {
+    const onWsl = process.platform === 'linux';
+    const icaclsPath = windowsPathFor(options.sessionPath);
     console.log(
       "   This filesystem didn't enforce the owner-only permission, so the file is only as\n" +
         "   protected as the OS ACL it inherits — commonly the case on Windows, and on some\n" +
         '   WSL mounts of a Windows drive. Restrict just this file (safe even if its\n' +
-        "   directory holds other files you don't want touched):\n" +
-        `   icacls "${options.sessionPath}" /inheritance:r /grant:r "\${env:USERNAME}:F"\n` +
+        "   directory holds other files you don't want touched)" +
+        (onWsl ? ', from a Windows PowerShell prompt (not this WSL shell)' : '') +
+        ':\n' +
+        `   icacls "${icaclsPath}" /inheritance:r /grant:r "\${env:USERNAME}:F"\n` +
         '   Every login replaces this file (writes a temp file, then renames it over the\n' +
         "   old one), and the replacement inherits the directory's ACL rather than the file\n" +
         '   you just locked — so re-run that command after every login, not just the first.\n' +
-        '   For the default .session directory (and .playwright-profile), see the Windows\n' +
-        '   note above Step 5 in docs/setup.md instead: locking the directory protects every\n' +
-        '   future login automatically, with nothing to repeat.',
+        '   For the default .session directory, see the Windows note above Step 5 in\n' +
+        '   docs/setup.md instead: locking the directory protects every future login\n' +
+        "   automatically. The same applies to .playwright-profile, except `--switch`\n" +
+        '   recreates it under the parent ACL — re-apply that fix after switching accounts.',
     );
   }
   describe(session);

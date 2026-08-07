@@ -314,8 +314,14 @@ describe('isDedicatedDirectory', () => {
     // cwd that still holds the junction. Comparing those lexically made the default directory
     // look foreign, so `--session .session/other.json` was blocked outright. Every other
     // default-directory case here passes a lexical path, which is why none of them caught it.
+    //
+    // `readdir` is mocked to return a second, non-expected `.json` entry so the assertion can
+    // only pass via the default-directory relaxation loop, which is what actually consults the
+    // junction-resolved comparison — a synthetic directory with no entries would return `true`
+    // from the earlier "doesn't exist yet" branch regardless of whether that comparison ran.
     const realSessionDir = resolve('/real-target/HEBshopping/.session');
     vi.mocked(realpath).mockResolvedValueOnce(realSessionDir as never);
+    vi.mocked(readdir).mockResolvedValueOnce(['session.json'] as never);
     await expect(isDedicatedDirectory(realSessionDir, 'second.json', 'powershell')).resolves.toBe(true);
   });
 });

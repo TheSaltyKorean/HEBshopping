@@ -164,7 +164,10 @@ export function untrustedSessionNote(
         '   docs/setup.md instead: locking the directory protects every future login\n' +
         "   automatically. The same applies to .playwright-profile, except `--switch`\n" +
         '   recreates it under the parent ACL — re-apply that fix after switching accounts.'
-      : '')
+      : `\n   ${PROFILE_DIR} holds a live logged-in browser profile from this same login.\n` +
+        "   It isn't relocated by --session, so it stays exposed under its inherited ACL\n" +
+        '   even after you lock this file — see the Windows note above Step 5 in\n' +
+        '   docs/setup.md to restrict it too.')
   );
 }
 

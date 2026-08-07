@@ -139,4 +139,10 @@ describe('untrustedSessionNote', () => {
     expect(atDefault).toContain('the default .session directory');
     expect(atCustom).not.toContain('the default .session directory');
   });
+
+  it('still warns about .playwright-profile on Windows/WSL for a custom --session path', () => {
+    const atCustom = untrustedSessionNote(false, 'powershell', 'C:\\creds\\foo.json', false);
+    expect(atCustom).toContain('.playwright-profile');
+    expect(atCustom).toContain("isn't relocated by --session");
+  });
 });

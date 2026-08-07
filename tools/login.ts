@@ -16,8 +16,9 @@
  * What it writes is a live credential. See the Security section of the README.
  */
 
+import { randomBytes } from 'node:crypto';
 import { realpathSync } from 'node:fs';
-import { lstat, readdir, rm, stat } from 'node:fs/promises';
+import { lstat, readdir, rename, rm, stat } from 'node:fs/promises';
 import { basename, dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
@@ -426,32 +427,35 @@ export function untrustedProfileNote(
  * would recreate it fresh under the parent's (often broader) inherited ACL. Clearing its
  * contents instead keeps that lock in place across a switch.
  *
- * Checked with `lstat`, not `stat`, so a symlink or junction planted where the directory used
- * to be is caught as itself rather than followed: `readdir` follows a symlinked path, and this
- * would otherwise recursively delete the *target's* contents — reachable in exactly the
- * shared-repository layouts the ACL work in this file exists for, if another account replaces
- * `.playwright-profile` with a link to somewhere it can write. The link itself is removed
- * instead; `launchBrowser` creates a real directory fresh either way.
+ * Detaches `dir` with a single `rename()` before doing anything else, rather than checking
+ * what it is (`lstat`) and separately reading it (`readdir`): those are two syscalls
+ * resolving the same path independently, and another account with write access to the parent
+ * could swap `dir` for a symlink/junction in the gap between them, which `readdir` would then
+ * follow — recursively deleting the *target's* contents. `rename()` never follows a symlink at
+ * its source (same guarantee as `unlink`/`lstat`), so the check and the move happen as one step
+ * nothing can land in between. The random suffix means the detached name is one only this call
+ * knows, so telling a link from a real directory and clearing it happens on a reference nobody
+ * else can race. A second `rename()` puts the original (now-emptied) directory object back under
+ * `dir`, carrying its original ACL with it since it's the same object throughout; if something
+ * now occupies `dir`, that rename fails instead of silently overwriting or merging into it.
  */
 export async function clearDirectoryContents(dir: string): Promise<void> {
+  const detached = `${dir}.clearing-${randomBytes(6).toString('hex')}`;
   try {
-    if ((await lstat(dir)).isSymbolicLink()) {
-      await rm(dir, { force: true });
-      return;
-    }
+    await rename(dir, detached);
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === 'ENOENT') return;
     throw error;
   }
 
-  let entries: string[];
-  try {
-    entries = await readdir(dir);
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return;
-    throw error;
+  if ((await lstat(detached)).isSymbolicLink()) {
+    await rm(detached, { force: true });
+    return;
   }
-  await Promise.all(entries.map((entry) => rm(join(dir, entry), { recursive: true, force: true })));
+
+  const entries = await readdir(detached);
+  await Promise.all(entries.map((entry) => rm(join(detached, entry), { recursive: true, force: true })));
+  await rename(detached, dir);
 }
 
 /**

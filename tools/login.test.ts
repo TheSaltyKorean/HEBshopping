@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { lstat, mkdir, mkdtemp, readdir, realpath, rm, stat, symlink, writeFile } from 'node:fs/promises';
+import { lstat, mkdir, mkdtemp, readdir, realpath, rename, rm, stat, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 
@@ -10,6 +10,7 @@ vi.mock('node:fs/promises', async (importOriginal) => {
     lstat: vi.fn(actual.lstat),
     readdir: vi.fn(actual.readdir),
     realpath: vi.fn(actual.realpath),
+    rename: vi.fn(actual.rename),
     stat: vi.fn(actual.stat),
   };
 });
@@ -401,10 +402,9 @@ describe('clearDirectoryContents', () => {
     await expect(clearDirectoryContents(dir)).resolves.toBeUndefined();
   });
 
-  it('propagates read failures other than "does not exist" instead of treating the directory as empty', async () => {
-    vi.mocked(lstat).mockResolvedValueOnce({ isSymbolicLink: () => false } as never);
+  it('propagates rename failures other than "does not exist" instead of treating the directory as empty', async () => {
     const error = Object.assign(new Error('permission denied'), { code: 'EACCES' });
-    vi.mocked(readdir).mockRejectedValueOnce(error);
+    vi.mocked(rename).mockRejectedValueOnce(error);
     await expect(clearDirectoryContents('/some/profile/dir')).rejects.toThrow('permission denied');
   });
 
@@ -426,6 +426,38 @@ describe('clearDirectoryContents', () => {
 
       await expect(readdir(scratch)).resolves.toEqual(['target']); // the link itself is gone
       await expect(readdir(target)).resolves.toEqual(['outside-file.txt']); // target untouched
+    } finally {
+      await rm(scratch, { recursive: true, force: true });
+    }
+  });
+
+  it('detaches dir with one rename before touching anything else, so a link swapped into its name mid-clear is never followed and the restore fails closed', async () => {
+    // The race this guards: a separate lstat then readdir are two syscalls resolving the same
+    // path independently, so another account with write access to the parent could swap `dir`
+    // for a link in the gap between them, which readdir would then follow. The fix detaches
+    // `dir` with a single rename() before anything else runs, closing that gap. Proved here by
+    // planting a junction at `dir`'s name from inside the mocked rename call itself — the
+    // earliest any outside actor could possibly act — and confirming it changes nothing about
+    // what gets cleared, and that the final restore fails instead of silently overwriting it.
+    const { rename: realRename } = await vi.importActual<typeof import('node:fs/promises')>('node:fs/promises');
+    const scratch = await mkdtemp(join(tmpdir(), 'heb-profile-race-'));
+    const dir = join(scratch, 'profile');
+    const plantedTarget = join(scratch, 'planted-target');
+    try {
+      await mkdir(dir);
+      await writeFile(join(dir, 'Cookies'), 'data');
+      await mkdir(plantedTarget);
+      await writeFile(join(plantedTarget, 'secret.txt'), 'do not delete me');
+
+      vi.mocked(rename).mockImplementationOnce(async (from, to) => {
+        await realRename(from as string, to as string);
+        await symlink(plantedTarget, dir, 'junction');
+      });
+
+      await expect(clearDirectoryContents(dir)).rejects.toThrow();
+
+      await expect(readdir(plantedTarget)).resolves.toEqual(['secret.txt']); // never touched
+      expect((await lstat(dir)).isSymbolicLink()).toBe(true); // swapped-in link left alone, not clobbered
     } finally {
       await rm(scratch, { recursive: true, force: true });
     }

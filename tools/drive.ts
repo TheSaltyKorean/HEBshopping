@@ -368,8 +368,8 @@ async function main(): Promise<void> {
       console.error(`Unknown command: ${command}`);
     }
   } finally {
-    await saveCapture(context, capture, command);
     await warnIfUntrustedDir(CAPTURE_DIR);
+    await saveCapture(context, capture, command);
     await context.close().catch(() => {});
   }
 }

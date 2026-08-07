@@ -10,9 +10,9 @@
 
 import { chromium, type BrowserContext } from 'playwright';
 import { execFileSync } from 'node:child_process';
-import { chmod, mkdir, stat, writeFile } from 'node:fs/promises';
+import { chmod, mkdir, realpath, stat, writeFile } from 'node:fs/promises';
 import { homedir } from 'node:os';
-import { posix, resolve, win32 } from 'node:path';
+import { basename, dirname, join, posix, resolve, win32 } from 'node:path';
 import { filterHebStorageState, isGraphqlUrl, parseGraphqlPost } from '@heb/core';
 
 /** Owner-only: these files carry live cookies and raw request bodies. */
@@ -156,6 +156,27 @@ export function homeDirFor(shell: ReturnType<typeof windowsPathFor>['shell']): s
 }
 
 /**
+ * Resolves `dir` through any symlinks/junctions to its real on-disk location, so a directory
+ * that merely *looks* like it's under the user's home profile — because a junction planted
+ * there points somewhere else entirely — isn't mistaken by `isUnderOwnHomeDirectory` for one
+ * that genuinely is. `dir` (or a deeper descendant of it a caller may run this against before
+ * `mkdir` creates it) may not exist yet, so `realpath` can fail on the full path even though an
+ * ancestor — the junction itself — does exist and would still redirect it: walk up to the
+ * nearest ancestor `realpath` can resolve and reapply the unresolved tail on top of that,
+ * instead of giving up and handing back the lexical path a junction earlier in it could still
+ * make misleading. Stops at the root once there's no further ancestor to try.
+ */
+export async function realDir(dir: string): Promise<string> {
+  try {
+    return await realpath(dir);
+  } catch {
+    const parent = dirname(dir);
+    if (parent === dir) return dir;
+    return join(await realDir(parent), basename(dir));
+  }
+}
+
+/**
  * The remediation note for a directory holding a live credential whose owner-only mode
  * couldn't be confirmed — null when `checkOwnerOnly` + `isSessionTrusted` already call it
  * trusted, or when `alreadySafe` (the directory is under the user's own home profile, per
@@ -189,7 +210,10 @@ export function untrustedDirNote(
 
 /** Checks `dir` and prints `untrustedDirNote`'s remediation, if any. */
 export async function warnIfUntrustedDir(dir: string): Promise<void> {
-  const { path: dirIcaclsPath, shell } = windowsPathFor(dir);
+  // Resolved through realDir first: a junction/symlink lexically under the home directory but
+  // redirecting elsewhere would otherwise pass isUnderOwnHomeDirectory's plain string comparison
+  // even though PROFILE_DIR/CAPTURE_DIR actually land on the junction's (possibly broader) ACL.
+  const { path: dirIcaclsPath, shell } = windowsPathFor(await realDir(dir));
   const home = shell === null ? null : homeDirFor(shell);
   const alreadySafe = home !== null && isUnderOwnHomeDirectory(dirIcaclsPath, home, shell);
   const note = untrustedDirNote(dir, await checkOwnerOnly(dir), shell, alreadySafe);

@@ -1,18 +1,17 @@
 import { describe, expect, it, vi } from 'vitest';
-import { mkdir, mkdtemp, readdir, realpath, rm, stat, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readdir, rm, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 
 vi.mock('node:fs/promises', async (importOriginal) => {
   const actual = await importOriginal<typeof import('node:fs/promises')>();
-  return { ...actual, readdir: vi.fn(actual.readdir), stat: vi.fn(actual.stat), realpath: vi.fn(actual.realpath) };
+  return { ...actual, readdir: vi.fn(actual.readdir), stat: vi.fn(actual.stat) };
 });
 
 const {
   clearDirectoryContents,
   customSessionParentAction,
   isDedicatedDirectory,
-  realDir,
   sessionAlreadySafe,
   untrustedProfileNote,
   untrustedSessionNote,
@@ -24,8 +23,8 @@ describe('untrustedSessionNote', () => {
     expect(untrustedSessionNote(null, null, '/whatever', true, '/whatever/dir', true)).toBeNull();
   });
 
-  it('warns about the browser profile too when stuck on a permissionless mount', () => {
-    const note = untrustedSessionNote(
+  it('gives a POSIX remediation with no command to run when stuck on a permissionless mount, and never mentions the browser profile', () => {
+    const atDefault = untrustedSessionNote(
       false,
       null,
       '/mnt/share/.session/session.json',
@@ -33,16 +32,13 @@ describe('untrustedSessionNote', () => {
       '/mnt/share/.session',
       true,
     );
-    expect(note).toContain('.playwright-profile');
-    expect(note).toContain('there is no command this tool can print here');
-    expect(note).toContain('exposed on the mount');
-  });
-
-  it('does not claim the browser profile shares a custom --session path\'s permissionless mount', () => {
-    const note = untrustedSessionNote(false, null, '/mnt/share/creds/foo.json', false, '/mnt/share/creds', true);
-    expect(note).toContain('.playwright-profile');
-    expect(note).toContain('need not share\n   this mount at all');
-    expect(note).not.toContain('exposed on the mount');
+    const atCustom = untrustedSessionNote(false, null, '/mnt/share/creds/foo.json', false, '/mnt/share/creds', true);
+    for (const note of [atDefault, atCustom]) {
+      expect(note).toContain('there is no command this tool can print here');
+      // PROFILE_DIR is checked independently by the caller (untrustedProfileNote) — this note
+      // must not assert anything about it either way, since it can sit on a different mount.
+      expect(note).not.toContain('.playwright-profile');
+    }
   });
 
   it('still prints the icacls remediation when stat() failed to verify the mode — the prior regression', () => {
@@ -98,10 +94,9 @@ describe('untrustedSessionNote', () => {
     expect(atCustom).not.toContain('the default .session directory');
   });
 
-  it('still warns about .playwright-profile on Windows/WSL for a custom --session path', () => {
+  it('never mentions the browser profile — the caller checks it independently via untrustedProfileNote', () => {
     const atCustom = untrustedSessionNote(false, 'powershell', 'C:\\creds\\foo.json', false, 'C:\\creds', true);
-    expect(atCustom).toContain('.playwright-profile');
-    expect(atCustom).toContain("isn't relocated by --session");
+    expect(atCustom).not.toContain('.playwright-profile');
   });
 
   it('locks the parent directory for a custom --session path, and does not claim the file fix is a one-time thing', () => {
@@ -355,38 +350,6 @@ describe('sessionAlreadySafe', () => {
 
   it('is not safe when the home directory could not be determined', () => {
     expect(sessionAlreadySafe('wsl-powershell', 'C:\\Users\\randy\\creds', null)).toBe(false);
-  });
-});
-
-describe('realDir', () => {
-  it('resolves an existing directory to its real, canonical path', async () => {
-    const dir = await mkdtemp(join(tmpdir(), 'heb-realdir-'));
-    try {
-      expect(await realDir(dir)).toBe(await realpath(dir));
-    } finally {
-      await rm(dir, { recursive: true, force: true });
-    }
-  });
-
-  it('joins the unresolved name onto the resolved parent, when the directory itself does not exist yet', async () => {
-    const parent = await mkdtemp(join(tmpdir(), 'heb-realdir-'));
-    try {
-      const missing = join(parent, 'does-not-exist');
-      expect(await realDir(missing)).toBe(join(await realpath(parent), 'does-not-exist'));
-    } finally {
-      await rm(parent, { recursive: true, force: true });
-    }
-  });
-
-  it('resolves through a junction even when a not-yet-created directory sits beneath it', async () => {
-    const link = join(tmpdir(), 'heb-realdir-link');
-    const target = join(tmpdir(), 'heb-realdir-target');
-    const missing = join(link, 'new');
-    vi.mocked(realpath)
-      .mockRejectedValueOnce(Object.assign(new Error('missing'), { code: 'ENOENT' })) // realpath(missing)
-      .mockResolvedValueOnce(target); // realpath(link) — the junction's real target
-
-    expect(await realDir(missing)).toBe(join(target, 'new'));
   });
 });
 

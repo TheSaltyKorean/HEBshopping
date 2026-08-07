@@ -17,7 +17,7 @@
  */
 
 import { realpathSync } from 'node:fs';
-import { readdir, realpath, rm, stat } from 'node:fs/promises';
+import { readdir, rm, stat } from 'node:fs/promises';
 import { basename, dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
@@ -40,6 +40,7 @@ import {
   isUnderOwnHomeDirectory,
   launchBrowser,
   PROFILE_DIR,
+  realDir,
   windowsPathFor,
 } from './lib/browser.js';
 
@@ -115,6 +116,11 @@ function lockDirectoryCommand(dirIcaclsPath: string): string {
  * files this tool has no business touching, so that case must be told to relocate to a new
  * directory instead — and, critically, must not also print a fix for the file at its old
  * location, since that location stops existing once the reader moves it.
+ *
+ * Deliberately silent about PROFILE_DIR: it can sit on a different mount than the session
+ * file, so this note asserting it either way (safe or exposed) without checking it would
+ * often be wrong. The caller always runs `untrustedProfileNote` separately, regardless of
+ * what this function returns.
  */
 export function untrustedSessionNote(
   ownerOnly: boolean | null,
@@ -126,19 +132,11 @@ export function untrustedSessionNote(
 ): string | null {
   if (shell === null) {
     if (ownerOnly !== false) return null;
-    const profileNote = isDefaultSessionPath
-      ? `   The same applies to ${PROFILE_DIR} — the logged-in browser profile from this\n` +
-        "   same login. It isn't relocated by --session, so moving only this file still\n" +
-        '   leaves that credential exposed on the mount.'
-      : `   ${PROFILE_DIR} holds a live logged-in browser profile from this same login.\n` +
-        "   It isn't relocated by --session, and a custom --session path need not share\n" +
-        '   this mount at all — check it separately.';
     return (
       "   This filesystem didn't enforce the owner-only permission, and it isn't a Windows\n" +
       "   filesystem `icacls` can secure either — for example a CIFS, FAT, or other\n" +
       '   permissionless mount. Move the credential to a permission-capable filesystem, or\n' +
-      "   restrict that mount's ACLs directly; there is no command this tool can print here.\n" +
-      profileNote
+      "   restrict that mount's ACLs directly; there is no command this tool can print here."
     );
   }
 
@@ -170,8 +168,7 @@ export function untrustedSessionNote(
       '   you just locked — so re-run that command after every login, not just the first.\n' +
       '   For the default .session directory, see the Windows note above Step 5 in\n' +
       '   docs/setup.md instead: locking the directory protects every future login\n' +
-      "   automatically. The same applies to .playwright-profile — `--switch` only clears\n" +
-      "   its contents, not the directory itself, so that lock survives a switch too."
+      '   automatically.'
     );
   }
 
@@ -184,11 +181,6 @@ export function untrustedSessionNote(
   // the named account, so it strips every other account's access to the directory itself
   // and to files created in it later. Without `/T` it does not touch files already inside
   // it, so a directory with other content in it isn't retroactively protected.
-  const profileNote =
-    `   ${PROFILE_DIR} holds a live logged-in browser profile from this same login.\n` +
-    "   It isn't relocated by --session, so it stays exposed under its inherited ACL\n" +
-    '   even after you lock this file — see the Windows note above Step 5 in\n' +
-    '   docs/setup.md to restrict it too.';
   const cautionary =
     reason +
     ' A fix on just this file would not last — the next\n' +
@@ -216,8 +208,7 @@ export function untrustedSessionNote(
       "   move this file into that new directory, point --session there, and run again;\n" +
       "   locking first means that write inherits the safe ACL from the moment it\n" +
       "   happens, instead of landing under an unlocked directory again, and that same\n" +
-      "   write is what secures the file — no separate per-file fix is needed for it.\n" +
-      profileNote
+      "   write is what secures the file — no separate per-file fix is needed for it."
     );
   }
 
@@ -228,8 +219,7 @@ export function untrustedSessionNote(
     "   Windows can't confirm from here whether this file already picked up that ACL\n" +
     '   or still carries whatever it inherited before the directory was locked, so lock\n' +
     '   the file itself too, every time you see this:\n' +
-    fileFix +
-    profileNote
+    fileFix
   );
 }
 
@@ -479,27 +469,6 @@ export function customSessionParentAction(
 }
 
 /**
- * Resolves `dir` through any symlinks/junctions to its real on-disk location, so a directory
- * that merely *looks* like it's under the user's home profile — because a junction planted
- * there points somewhere else entirely — isn't mistaken by `isUnderOwnHomeDirectory` for one
- * that genuinely is. `dir` (or a deeper descendant of it the preflight runs against before
- * `mkdir` creates it) may not exist yet, so `realpath` can fail on the full path even though an
- * ancestor — the junction itself — does exist and would still redirect it: walk up to the
- * nearest ancestor `realpath` can resolve and reapply the unresolved tail on top of that,
- * instead of giving up and handing back the lexical path a junction earlier in it could still
- * make misleading. Stops at the root once there's no further ancestor to try.
- */
-export async function realDir(dir: string): Promise<string> {
-  try {
-    return await realpath(dir);
-  } catch {
-    const parent = dirname(dir);
-    if (parent === dir) return dir;
-    return join(await realDir(parent), basename(dir));
-  }
-}
-
-/**
  * Checked before login starts, not just after writing. `store.putSession()` persists the
  * credential as soon as a usable session shows up, so a check that only ran afterward — the
  * prior shape of this code — meant the very first write into a shared or unlocked Windows/WSL
@@ -657,25 +626,22 @@ async function main(): Promise<void> {
         "   it isn't readable by other accounts before trusting it.",
     );
   }
-  if (trusted || alreadySafe) {
-    // A trusted (or already-safe) --session path only proves that file's own filesystem is
-    // safe. PROFILE_DIR is a second live credential (the logged-in browser profile) that
-    // always lives in the repo and can sit on a different, less-trusted mount than a custom
-    // session path — so this must not silently vouch for it too. It gets its own home-directory
-    // exemption check for the same reason: PROFILE_DIR may not sit under the same directory the
-    // --session file does.
-    const profileOwnerOnly = await checkOwnerOnly(PROFILE_DIR);
-    const { path: profileIcaclsPath, shell: profileShell } = windowsPathFor(PROFILE_DIR);
-    const profileHome = profileShell === null ? null : homeDirFor(profileShell);
-    const profileAlreadySafe = sessionAlreadySafe(profileShell, profileIcaclsPath, profileHome);
-    const profileNote = untrustedProfileNote(profileOwnerOnly, profileShell, profileAlreadySafe);
-    if (profileNote !== null) console.log(profileNote);
-  } else {
+  if (!trusted && !alreadySafe) {
     const dedicated =
       isDefaultSessionPath || (await isDedicatedDirectory(dir, basename(options.sessionPath), shell));
     const note = untrustedSessionNote(ownerOnly, shell, icaclsPath, isDefaultSessionPath, dirIcaclsPath, dedicated);
     if (note !== null) console.log(note);
   }
+  // PROFILE_DIR is a second live credential (the logged-in browser profile) that always lives
+  // in the repo and can sit on a different, less-trusted mount than the --session path, so it
+  // needs its own home-directory exemption check regardless of whether the session file's own
+  // check above passed or failed — it must not silently inherit that verdict either way.
+  const profileOwnerOnly = await checkOwnerOnly(PROFILE_DIR);
+  const { path: profileIcaclsPath, shell: profileShell } = windowsPathFor(PROFILE_DIR);
+  const profileHome = profileShell === null ? null : homeDirFor(profileShell);
+  const profileAlreadySafe = sessionAlreadySafe(profileShell, profileIcaclsPath, profileHome);
+  const profileNote = untrustedProfileNote(profileOwnerOnly, profileShell, profileAlreadySafe);
+  if (profileNote !== null) console.log(profileNote);
   describe(session);
 
   // Writing a session that cannot actually authenticate would be a silent failure that

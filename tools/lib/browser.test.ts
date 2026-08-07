@@ -1,10 +1,15 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { chmod, mkdir, mkdtemp, rm, stat, writeFile } from 'node:fs/promises';
+import { chmod, mkdir, mkdtemp, realpath, rm, stat, writeFile } from 'node:fs/promises';
 import { homedir, tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 
 const execFileSyncMock = vi.hoisted(() => vi.fn());
 vi.mock('node:child_process', () => ({ execFileSync: execFileSyncMock }));
+
+vi.mock('node:fs/promises', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('node:fs/promises')>();
+  return { ...actual, realpath: vi.fn(actual.realpath) };
+});
 
 const {
   checkOwnerOnly,
@@ -12,6 +17,7 @@ const {
   homeDirFor,
   isSessionTrusted,
   isUnderOwnHomeDirectory,
+  realDir,
   untrustedDirNote,
   warnIfUntrustedDir,
   windowsPathFor,
@@ -247,6 +253,38 @@ describe('homeDirFor', () => {
   });
 });
 
+describe('realDir', () => {
+  it('resolves an existing directory to its real, canonical path', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'heb-realdir-'));
+    try {
+      expect(await realDir(dir)).toBe(await realpath(dir));
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('joins the unresolved name onto the resolved parent, when the directory itself does not exist yet', async () => {
+    const parent = await mkdtemp(join(tmpdir(), 'heb-realdir-'));
+    try {
+      const missing = join(parent, 'does-not-exist');
+      expect(await realDir(missing)).toBe(join(await realpath(parent), 'does-not-exist'));
+    } finally {
+      await rm(parent, { recursive: true, force: true });
+    }
+  });
+
+  it('resolves through a junction even when a not-yet-created directory sits beneath it', async () => {
+    const link = join(tmpdir(), 'heb-realdir-link');
+    const target = join(tmpdir(), 'heb-realdir-target');
+    const missing = join(link, 'new');
+    vi.mocked(realpath)
+      .mockRejectedValueOnce(Object.assign(new Error('missing'), { code: 'ENOENT' })) // realpath(missing)
+      .mockResolvedValueOnce(target); // realpath(link) — the junction's real target
+
+    expect(await realDir(missing)).toBe(join(target, 'new'));
+  });
+});
+
 describe('untrustedDirNote', () => {
   it('has nothing to add when the directory mode is trusted', () => {
     expect(untrustedDirNote('captures', true, 'powershell', false)).toBeNull();
@@ -309,6 +347,20 @@ describe('warnIfUntrustedDir', () => {
     } finally {
       warn.mockRestore();
       await rm(parent, { recursive: true, force: true });
+    }
+  });
+
+  it('does not grant the home-directory exemption when a junction lexically under home redirects elsewhere', async () => {
+    setPlatform('win32');
+    const dir = join(homedir(), 'heb-fake-linked-profile');
+    const target = join(dirname(homedir()), 'heb-fake-junction-target');
+    vi.mocked(realpath).mockResolvedValueOnce(target);
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      await warnIfUntrustedDir(dir);
+      expect(warn).toHaveBeenCalledTimes(1);
+    } finally {
+      warn.mockRestore();
     }
   });
 });

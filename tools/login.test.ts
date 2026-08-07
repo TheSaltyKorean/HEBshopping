@@ -462,6 +462,26 @@ describe('clearDirectoryContents', () => {
       await rm(scratch, { recursive: true, force: true });
     }
   });
+
+  it('restores the detached directory back under dir when clearing fails partway through', async () => {
+    // A locked Chromium LOCK/SingletonLock file makes readdir/rm throw after the detach. Without
+    // a restore, the original ACL-locked directory object would be stranded under its
+    // `.clearing-<hex>` name and the next run would find `dir` missing and silently recreate it
+    // under the parent's (often broader) inherited ACL — the exact outcome this function exists
+    // to avoid.
+    const dir = await mkdtemp(join(tmpdir(), 'heb-profile-'));
+    try {
+      await writeFile(join(dir, 'Cookies'), 'data');
+      const error = Object.assign(new Error('resource busy or locked'), { code: 'EBUSY' });
+      vi.mocked(readdir).mockRejectedValueOnce(error);
+
+      await expect(clearDirectoryContents(dir)).rejects.toThrow('resource busy or locked');
+
+      await expect(readdir(dir)).resolves.toEqual(['Cookies']); // restored, not left under .clearing-<hex>
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
 });
 
 describe('untrustedProfileNote', () => {

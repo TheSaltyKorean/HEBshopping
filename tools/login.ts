@@ -435,9 +435,12 @@ export function untrustedProfileNote(
  * its source (same guarantee as `unlink`/`lstat`), so the check and the move happen as one step
  * nothing can land in between. The random suffix means the detached name is one only this call
  * knows, so telling a link from a real directory and clearing it happens on a reference nobody
- * else can race. A second `rename()` puts the original (now-emptied) directory object back under
- * `dir`, carrying its original ACL with it since it's the same object throughout; if something
- * now occupies `dir`, that rename fails instead of silently overwriting or merging into it.
+ * else can race. A second `rename()` puts the original directory object back under `dir`,
+ * carrying its original ACL with it since it's the same object throughout — run from a `finally`
+ * so a failure partway through clearing (e.g. a locked Chromium `LOCK` file) still restores it,
+ * rather than leaving it orphaned under its `.clearing-<hex>` name for the next run to find
+ * missing and silently recreate under the parent's broader inherited ACL. If something now
+ * occupies `dir`, that rename fails instead of silently overwriting or merging into it.
  */
 export async function clearDirectoryContents(dir: string): Promise<void> {
   const detached = `${dir}.clearing-${randomBytes(6).toString('hex')}`;
@@ -453,9 +456,12 @@ export async function clearDirectoryContents(dir: string): Promise<void> {
     return;
   }
 
-  const entries = await readdir(detached);
-  await Promise.all(entries.map((entry) => rm(join(detached, entry), { recursive: true, force: true })));
-  await rename(detached, dir);
+  try {
+    const entries = await readdir(detached);
+    await Promise.all(entries.map((entry) => rm(join(detached, entry), { recursive: true, force: true })));
+  } finally {
+    await rename(detached, dir);
+  }
 }
 
 /**

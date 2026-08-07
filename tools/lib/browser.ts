@@ -11,7 +11,8 @@
 import { chromium, type BrowserContext } from 'playwright';
 import { execFileSync } from 'node:child_process';
 import { chmod, mkdir, stat, writeFile } from 'node:fs/promises';
-import { resolve } from 'node:path';
+import { homedir } from 'node:os';
+import { posix, resolve, win32 } from 'node:path';
 import { filterHebStorageState, isGraphqlUrl, parseGraphqlPost } from '@heb/core';
 
 /** Owner-only: these files carry live cookies and raw request bodies. */
@@ -105,18 +106,72 @@ export async function checkOwnerOnly(path: string): Promise<boolean | null> {
 }
 
 /**
+ * Whether `dir` is the current user's own home directory, or sits inside it — checked with
+ * `home` passed in (like `isSessionTrusted` takes `shell`) rather than calling `os.homedir()`
+ * internally, so this stays a plain comparison a test can drive without mocking. This is the
+ * one case docs/setup.md already calls out as needing no icacls fix at all ("Under your own
+ * profile … the inherited ACL is already user-only and there is nothing to do"), so a
+ * directory there is safe to write into even when it holds other files this tool doesn't own
+ * — `node:fs`'s `mode` can't tell us that on Windows (chmod there only toggles the read-only
+ * attribute, so `stat().mode` never reflects the real ACL either way), but this can.
+ *
+ * `shell` — like `isDedicatedDirectory`'s (login.ts) — decides both the path style to parse
+ * `dir`/`home` with and whether the comparison is case-insensitive: `'powershell'`/
+ * `'wsl-powershell'` mean both strings are Windows-style (backslash-separated, possibly
+ * translated from a WSL path via `windowsPathFor`), so they must be parsed with `path.win32`,
+ * not the host's own `path.resolve` — under WSL that's POSIX and would mangle a `C:\...`
+ * string instead of recognizing it as absolute. `null` means both are plain POSIX paths on
+ * the host's own filesystem.
+ */
+export function isUnderOwnHomeDirectory(
+  dir: string,
+  home: string,
+  shell: ReturnType<typeof windowsPathFor>['shell'],
+): boolean {
+  const { resolve: resolvePath, sep: pathSep } = shell === null ? posix : win32;
+  const resolvedHome = resolvePath(home);
+  const resolvedDir = resolvePath(dir);
+  const [target, base] =
+    shell === null ? [resolvedDir, resolvedHome] : [resolvedDir.toLowerCase(), resolvedHome.toLowerCase()];
+  return target === base || target.startsWith(base + pathSep);
+}
+
+/**
+ * The home directory to compare `isUnderOwnHomeDirectory` against, in whatever path style
+ * `shell` implies. Native Windows and native POSIX already have `os.homedir()` in the right
+ * style. WSL is the odd one out: `os.homedir()` there returns the *Linux* home directory
+ * (somewhere under /home), which lives on WSL's own filesystem and has nothing to do with the
+ * Windows user profile (`C:\Users\randy`) that docs/setup.md's "nothing to do" exemption is
+ * actually about — so ask Windows directly, via `cmd.exe`'s environment, the same way
+ * `windowsPathFor` asks it to translate a path. Returns null when that can't be determined, so
+ * the caller falls back to "not confirmed safe" instead of guessing.
+ */
+export function homeDirFor(shell: ReturnType<typeof windowsPathFor>['shell']): string | null {
+  if (shell !== 'wsl-powershell') return homedir();
+  try {
+    return execFileSync('cmd.exe', ['/c', 'echo %USERPROFILE%'], { encoding: 'utf8' }).trim();
+  } catch {
+    return null;
+  }
+}
+
+/**
  * The remediation note for a directory holding a live credential whose owner-only mode
  * couldn't be confirmed — null when `checkOwnerOnly` + `isSessionTrusted` already call it
- * trusted. Generic sibling of login.ts's `untrustedSessionNote`/`untrustedProfileNote` for
- * callers (capture.ts, drive.ts) that have no --session-style custom path, or check "above",
- * to fold into the message — so it only ever reports what was measured, not a generated
- * remediation command.
+ * trusted, or when `alreadySafe` (the directory is under the user's own home profile, per
+ * `isUnderOwnHomeDirectory` — the same "nothing to do" exemption `login.ts` already applies
+ * to the session file and its own custom `--session` parent) already covers it. Generic
+ * sibling of login.ts's `untrustedSessionNote`/`untrustedProfileNote` for callers (capture.ts,
+ * drive.ts) that have no --session-style custom path, or check "above", to fold into the
+ * message — so it only ever reports what was measured, not a generated remediation command.
  */
 export function untrustedDirNote(
   dir: string,
   ownerOnly: boolean | null,
   shell: ReturnType<typeof windowsPathFor>['shell'],
+  alreadySafe: boolean,
 ): string | null {
+  if (alreadySafe) return null;
   if (ownerOnly !== null && isSessionTrusted(ownerOnly, shell)) return null;
   if (shell === null) {
     if (ownerOnly !== false) return null;
@@ -134,7 +189,10 @@ export function untrustedDirNote(
 
 /** Checks `dir` and prints `untrustedDirNote`'s remediation, if any. */
 export async function warnIfUntrustedDir(dir: string): Promise<void> {
-  const note = untrustedDirNote(dir, await checkOwnerOnly(dir), windowsPathFor(dir).shell);
+  const { path: dirIcaclsPath, shell } = windowsPathFor(dir);
+  const home = shell === null ? null : homeDirFor(shell);
+  const alreadySafe = home !== null && isUnderOwnHomeDirectory(dirIcaclsPath, home, shell);
+  const note = untrustedDirNote(dir, await checkOwnerOnly(dir), shell, alreadySafe);
   if (note !== null) console.warn(note);
 }
 

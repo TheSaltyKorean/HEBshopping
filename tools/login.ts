@@ -19,8 +19,7 @@
 import { execFileSync } from 'node:child_process';
 import { realpathSync } from 'node:fs';
 import { readdir, realpath, rm, stat } from 'node:fs/promises';
-import { homedir } from 'node:os';
-import { basename, dirname, join, posix, resolve, win32 } from 'node:path';
+import { basename, dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
   FileStore,
@@ -35,7 +34,15 @@ import {
   type SessionState,
   type Store,
 } from '@heb/core';
-import { checkOwnerOnly, isSessionTrusted, launchBrowser, PROFILE_DIR, windowsPathFor } from './lib/browser.js';
+import {
+  checkOwnerOnly,
+  homeDirFor,
+  isSessionTrusted,
+  isUnderOwnHomeDirectory,
+  launchBrowser,
+  PROFILE_DIR,
+  windowsPathFor,
+} from './lib/browser.js';
 
 const START_URL = 'https://www.heb.com/shopping-list';
 const DEFAULT_SESSION_PATH = '.session/session.json';
@@ -379,11 +386,20 @@ async function sameFileCaseFolded(dir: string, entry: string, allowed: Set<strin
  * The remediation note for PROFILE_DIR when a trusted --session path doesn't also vouch for
  * it — pulled out as a pure function, like `untrustedSessionNote`, so this boolean-composed
  * gate on a security-relevant message is unit-tested rather than only reasoned about by hand.
+ *
+ * `profileAlreadySafe` is PROFILE_DIR's own home-directory exemption (`isUnderOwnHomeDirectory`)
+ * — independent of whatever the `--session` file's directory computed, since PROFILE_DIR always
+ * lives in the repo and can sit on a different mount than a custom session path. Without it, the
+ * simplest, safest setup (everything under the user's own profile, which docs/setup.md already
+ * says needs no fix) still printed this warning, because `checkOwnerOnly` alone is never `true`
+ * on native Windows.
  */
 export function untrustedProfileNote(
   profileOwnerOnly: boolean | null,
   profileShell: ReturnType<typeof windowsPathFor>['shell'],
+  profileAlreadySafe: boolean,
 ): string | null {
+  if (profileAlreadySafe) return null;
   if (profileOwnerOnly !== null && isSessionTrusted(profileOwnerOnly, profileShell)) return null;
   const intro =
     `\n   ${PROFILE_DIR} is a separate live credential (the logged-in browser profile)\n` +
@@ -420,55 +436,6 @@ export async function clearDirectoryContents(dir: string): Promise<void> {
     throw error;
   }
   await Promise.all(entries.map((entry) => rm(join(dir, entry), { recursive: true, force: true })));
-}
-
-/**
- * Whether `dir` is the current user's own home directory, or sits inside it — checked with
- * `home` passed in (like `isSessionTrusted` takes `shell`) rather than calling `os.homedir()`
- * internally, so this stays a plain comparison a test can drive without mocking. This is the
- * one case docs/setup.md already calls out as needing no icacls fix at all ("Under your own
- * profile … the inherited ACL is already user-only and there is nothing to do"), so a custom
- * `--session` directory there is safe to write into even when it holds other files this tool
- * doesn't own — `node:fs`'s `mode` can't tell us that on Windows (chmod there only toggles the
- * read-only attribute, so `stat().mode` never reflects the real ACL either way), but this can.
- *
- * `shell` — like `isDedicatedDirectory`'s — decides both the path style to parse `dir`/`home`
- * with and whether the comparison is case-insensitive: `'powershell'`/`'wsl-powershell'` mean
- * both strings are Windows-style (backslash-separated, possibly translated from a WSL path via
- * `windowsPathFor`), so they must be parsed with `path.win32`, not the host's own `path.resolve`
- * — under WSL that's POSIX and would mangle a `C:\...` string instead of recognizing it as
- * absolute. `null` means both are plain POSIX paths on the host's own filesystem.
- */
-export function isUnderOwnHomeDirectory(
-  dir: string,
-  home: string,
-  shell: ReturnType<typeof windowsPathFor>['shell'],
-): boolean {
-  const { resolve: resolvePath, sep: pathSep } = shell === null ? posix : win32;
-  const resolvedHome = resolvePath(home);
-  const resolvedDir = resolvePath(dir);
-  const [target, base] =
-    shell === null ? [resolvedDir, resolvedHome] : [resolvedDir.toLowerCase(), resolvedHome.toLowerCase()];
-  return target === base || target.startsWith(base + pathSep);
-}
-
-/**
- * The home directory to compare `isUnderOwnHomeDirectory` against, in whatever path style
- * `shell` implies. Native Windows and native POSIX already have `os.homedir()` in the right
- * style. WSL is the odd one out: `os.homedir()` there returns the *Linux* home directory
- * (somewhere under /home), which lives on WSL's own filesystem and has nothing to do with the
- * Windows user profile (`C:\Users\randy`) that docs/setup.md's "nothing to do" exemption is
- * actually about — so ask Windows directly, via `cmd.exe`'s environment, the same way
- * `windowsPathFor` asks it to translate a path. Returns null when that can't be determined, so
- * the caller falls back to "not confirmed safe" instead of guessing.
- */
-export function homeDirFor(shell: ReturnType<typeof windowsPathFor>['shell']): string | null {
-  if (shell !== 'wsl-powershell') return homedir();
-  try {
-    return execFileSync('cmd.exe', ['/c', 'echo %USERPROFILE%'], { encoding: 'utf8' }).trim();
-  } catch {
-    return null;
-  }
 }
 
 /**
@@ -695,10 +662,15 @@ async function main(): Promise<void> {
     // A trusted (or already-safe) --session path only proves that file's own filesystem is
     // safe. PROFILE_DIR is a second live credential (the logged-in browser profile) that
     // always lives in the repo and can sit on a different, less-trusted mount than a custom
-    // session path — so this must not silently vouch for it too.
+    // session path — so this must not silently vouch for it too. It gets its own home-directory
+    // exemption check for the same reason: PROFILE_DIR may not sit under the same directory the
+    // --session file does.
     const profileOwnerOnly = await checkOwnerOnly(PROFILE_DIR);
-    const profileShell = windowsPathFor(PROFILE_DIR).shell;
-    const profileNote = untrustedProfileNote(profileOwnerOnly, profileShell);
+    const { path: profileIcaclsPath, shell: profileShell } = windowsPathFor(PROFILE_DIR);
+    const profileHome = profileShell === null ? null : homeDirFor(profileShell);
+    const profileAlreadySafe =
+      profileHome !== null && isUnderOwnHomeDirectory(profileIcaclsPath, profileHome, profileShell);
+    const profileNote = untrustedProfileNote(profileOwnerOnly, profileShell, profileAlreadySafe);
     if (profileNote !== null) console.log(profileNote);
   } else {
     const dedicated =

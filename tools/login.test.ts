@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { mkdir, mkdtemp, readdir, realpath, rm, stat, writeFile } from 'node:fs/promises';
-import { homedir, tmpdir } from 'node:os';
+import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 
 const execFileSyncMock = vi.hoisted(() => vi.fn());
@@ -14,9 +14,7 @@ vi.mock('node:fs/promises', async (importOriginal) => {
 const {
   clearDirectoryContents,
   customSessionParentAction,
-  homeDirFor,
   isDedicatedDirectory,
-  isUnderOwnHomeDirectory,
   realDir,
   sessionAlreadySafe,
   untrustedProfileNote,
@@ -341,58 +339,6 @@ describe('customSessionParentAction', () => {
   });
 });
 
-describe('isUnderOwnHomeDirectory', () => {
-  it('treats the home directory itself as under the home directory', () => {
-    expect(isUnderOwnHomeDirectory('C:\\Users\\randy', 'C:\\Users\\randy', 'powershell')).toBe(true);
-  });
-
-  it('treats a subdirectory of home as under the home directory', () => {
-    expect(isUnderOwnHomeDirectory('C:\\Users\\randy\\creds', 'C:\\Users\\randy', 'powershell')).toBe(true);
-  });
-
-  it('is case-insensitive on native Windows, where a drive letter or name may be typed differently', () => {
-    expect(isUnderOwnHomeDirectory('c:\\users\\RANDY\\creds', 'C:\\Users\\randy', 'powershell')).toBe(true);
-  });
-
-  it('is case-insensitive on WSL too, comparing the Windows-translated forms of both paths', () => {
-    expect(isUnderOwnHomeDirectory('C:\\Users\\randy\\creds', 'c:\\users\\RANDY', 'wsl-powershell')).toBe(true);
-  });
-
-  it('rejects a sibling directory that merely shares a prefix', () => {
-    expect(isUnderOwnHomeDirectory('C:\\Users\\randy-other', 'C:\\Users\\randy', 'powershell')).toBe(false);
-  });
-
-  it('rejects a directory outside the home directory entirely', () => {
-    expect(isUnderOwnHomeDirectory('C:\\shared', 'C:\\Users\\randy', 'powershell')).toBe(false);
-  });
-
-  it('parses both paths as plain, case-sensitive POSIX paths when icacls cannot help', () => {
-    expect(isUnderOwnHomeDirectory('/srv/randy/creds', '/srv/randy', null)).toBe(true);
-    expect(isUnderOwnHomeDirectory('/srv/RANDY/creds', '/srv/randy', null)).toBe(false);
-  });
-});
-
-describe('homeDirFor', () => {
-  it('uses os.homedir() directly on native Windows and native POSIX, no shell-out needed', () => {
-    expect(homeDirFor('powershell')).toBe(homedir());
-    expect(homeDirFor(null)).toBe(homedir());
-    expect(execFileSyncMock).not.toHaveBeenCalled();
-  });
-
-  it('asks cmd.exe for %USERPROFILE% on WSL instead of the Linux home os.homedir() would return', () => {
-    execFileSyncMock.mockReturnValue('C:\\Users\\randy\r\n');
-    expect(homeDirFor('wsl-powershell')).toBe('C:\\Users\\randy');
-    expect(execFileSyncMock).toHaveBeenCalledWith('cmd.exe', ['/c', 'echo %USERPROFILE%'], { encoding: 'utf8' });
-  });
-
-  it('returns null when the cmd.exe interop call fails, instead of falling back to the Linux home', () => {
-    execFileSyncMock.mockImplementation(() => {
-      throw new Error('cmd.exe: command not found');
-    });
-    expect(homeDirFor('wsl-powershell')).toBeNull();
-  });
-});
-
 describe('sessionAlreadySafe', () => {
   it('is safe for a custom directory under the home directory on native Windows', () => {
     expect(sessionAlreadySafe('powershell', 'C:\\Users\\randy\\creds', 'C:\\Users\\randy')).toBe(true);
@@ -481,31 +427,36 @@ describe('clearDirectoryContents', () => {
 
 describe('untrustedProfileNote', () => {
   it('has nothing to add when the profile mode is trusted', () => {
-    expect(untrustedProfileNote(true, 'powershell')).toBeNull();
-    expect(untrustedProfileNote(true, null)).toBeNull();
+    expect(untrustedProfileNote(true, 'powershell', false)).toBeNull();
+    expect(untrustedProfileNote(true, null, false)).toBeNull();
   });
 
   it('warns when the profile mode could not be verified', () => {
-    const note = untrustedProfileNote(null, 'powershell');
+    const note = untrustedProfileNote(null, 'powershell', false);
     expect(note).toContain('.playwright-profile');
     expect(note).toContain("wasn't covered by the check above");
   });
 
   it('warns when the profile mode was never restricted', () => {
-    expect(untrustedProfileNote(false, 'powershell')).toContain('.playwright-profile');
+    expect(untrustedProfileNote(false, 'powershell', false)).toContain('.playwright-profile');
   });
 
   it('never trusts the mode bit alone on WSL, even when it reports owner-only', () => {
-    expect(untrustedProfileNote(true, 'wsl-powershell')).not.toBeNull();
+    expect(untrustedProfileNote(true, 'wsl-powershell', false)).not.toBeNull();
   });
 
   it('gives a POSIX remediation instead of the Windows note on a permissionless mount', () => {
-    const note = untrustedProfileNote(false, null);
+    const note = untrustedProfileNote(false, null, false);
     expect(note).toContain('there is no command this tool can print here');
     expect(note).not.toContain('the Windows note above Step 5');
   });
 
   it('has nothing to add on native POSIX when the profile mode could not be verified', () => {
-    expect(untrustedProfileNote(null, null)).toBeNull();
+    expect(untrustedProfileNote(null, null, false)).toBeNull();
+  });
+
+  it('has nothing to add when the profile directory is under the home directory, regardless of its measured mode', () => {
+    expect(untrustedProfileNote(false, 'powershell', true)).toBeNull();
+    expect(untrustedProfileNote(null, 'powershell', true)).toBeNull();
   });
 });

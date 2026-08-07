@@ -176,12 +176,20 @@ describe('untrustedSessionNote', () => {
     const atCustom = untrustedSessionNote(false, 'powershell', 'C:\\shared\\foo.json', false, 'C:\\shared');
     expect(atCustom).not.toContain('safe even if it holds other files');
     expect(atCustom).toContain("strips every other account's access");
-    expect(atCustom).toContain('create a new,\n   dedicated directory and lock it down first');
+    // Without /T the directory-level fix never reaches files already inside it — only the
+    // directory itself and what's created afterward — so it must not claim otherwise.
+    expect(atCustom).not.toContain('anything already in it');
+    expect(atCustom).toContain('create a new, empty, dedicated directory');
+  });
+
+  it('creates the dedicated directory before locking it, in case it does not exist yet', () => {
+    const atCustom = untrustedSessionNote(false, 'powershell', 'C:\\shared\\foo.json', false, 'C:\\shared');
+    expect(atCustom).toContain("mkdir -Force 'C:\\shared'");
   });
 
   it('locks the new dedicated directory before telling the user to move the file in and rerun', () => {
     const atCustom = untrustedSessionNote(false, 'powershell', 'C:\\shared\\foo.json', false, 'C:\\shared');
-    const lockIndex = atCustom!.indexOf('lock it down first');
+    const lockIndex = atCustom!.indexOf('lock it down');
     const moveIndex = atCustom!.indexOf('move this file into it and point --session there');
     expect(lockIndex).toBeGreaterThan(-1);
     expect(moveIndex).toBeGreaterThan(lockIndex);

@@ -191,16 +191,20 @@ export function untrustedSessionNote(
   // but only a directory dedicated to this file: unlike the file-level fix above,
   // `/inheritance:r` on a directory removes every inherited ACE and `/grant:r` leaves only
   // the named account, so it strips every other account's access to the directory itself
-  // (and its existing contents), not just what future files inherit.
+  // and to files created in it later. Without `/T` it does not touch files already inside
+  // it, so a directory with other content in it isn't retroactively protected — hence the
+  // new, empty, dedicated directory rather than reusing one that already holds something else.
   return (
     reason +
     ' A fix on just this file would not last — the next\n' +
     "   login replaces it with a fresh temp file that inherits its directory's ACL, not\n" +
     "   the file's. Lock the directory that holds it instead — but only if it's dedicated\n" +
-    "   to this file: this strips every other account's access to the directory and to\n" +
-    "   anything already in it, not just to files created later, so it isn't safe on a\n" +
-    "   directory anything else depends on. If this one holds anything else, create a new,\n" +
-    `   dedicated directory and lock it down first, from a Windows PowerShell prompt${wslSuffix}:\n` +
+    "   to this file: without `/T` this only strips every other account's access to the\n" +
+    "   directory itself and to files created in it later, not to files already inside it,\n" +
+    "   so it isn't safe to rely on for a directory anything else depends on. If this one\n" +
+    "   holds anything else, create a new, empty, dedicated directory and lock it down\n" +
+    `   first, from a Windows PowerShell prompt${wslSuffix}:\n` +
+    `   mkdir -Force ${quote(dirIcaclsPath)}\n` +
     `   icacls ${quote(dirIcaclsPath)} /reset\n` +
     `   icacls ${quote(dirIcaclsPath)} /inheritance:r /grant:r "\${env:USERDOMAIN}\\\${env:USERNAME}:(OI)(CI)F"\n` +
     '   Only then move this file into it and point --session there for the next login —\n' +

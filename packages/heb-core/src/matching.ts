@@ -313,6 +313,8 @@ const FRACTION_WORDS: Readonly<Record<string, number>> = {
   half: 0.5,
   quarter: 0.25,
   quarters: 0.25,
+  third: 1 / 3,
+  thirds: 1 / 3,
 };
 
 /** Articles skipped while reading a weight phrase; everything else is significant. */

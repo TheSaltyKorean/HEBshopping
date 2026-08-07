@@ -17,7 +17,6 @@
     "typecheck": "npm run build",
     "test": "vitest run",
     "test:watch": "vitest",
-    "test:live": "HEB_LIVE=1 vitest run --testNamePattern=live",
     "login": "tsx tools/login.ts",
     "capture": "tsx tools/capture.ts",
     "scan": "tsx tools/scan-secrets.ts",

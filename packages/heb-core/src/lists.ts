@@ -716,8 +716,15 @@ export class HebListOps implements ListOps {
           : merged
             ? { weightRequested: input.weight }
             : {};
+      // The concurrent add already sat the line on its own ceiling before this request's
+      // write, so `target` above landed on exactly `added.weight` — none of `input.weight`
+      // made it onto the list. `status: 'added'` there would have the caller confirm somebody
+      // else's pre-existing weight as this request's own successful add before appending the
+      // cap caveat. `already_present` is what actually happened: the line was already there,
+      // unchanged by this call.
+      const noContribution = merged && target === (added.weight ?? 0);
       return {
-        status,
+        status: noContribution ? 'already_present' : status,
         item: await this.adjustWeight(listId, added, target, !wasPresent && !merged),
         ...shortfall,
       };

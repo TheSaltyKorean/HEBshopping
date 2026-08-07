@@ -313,16 +313,16 @@ describe('weight on a counter line', () => {
     expect(result.status === 'added' && result.weightRequested).toBe(0.5);
   });
 
-  it('reports the merged total, not its own contribution, when a concurrent merge is already at the ladder cap', async () => {
+  it('reports no contribution, not a false add, when a concurrent merge is already at the ladder cap', async () => {
     // Same concurrent-create merge as above, but the household member's line is already at
     // the top of the ladder (2.5 lb) when this request's 0.5 lb add merges in. None of this
-    // request's weight can land — the target stays 2.5, unchanged. Reporting `weightRequested`
-    // as this request's own 0.5 lb ask (as an earlier version of this code did) reads as an
-    // ordinary merged success to the caller — Alexa said "Added 0.5 lb ... someone else added
-    // some too, now has 2.5" when in fact none of the 0.5 lb landed. `weightRequested` must
-    // instead be the merged total (3), the same shape the non-merged ladder-shortfall case
-    // uses, so the caller renders "H-E-B only sells up to 2.5 lb, could not bring it up to 3"
-    // instead of a false success notice.
+    // request's weight can land — the target stays 2.5, unchanged. Reporting `status: 'added'`
+    // there (as an earlier version of this code did) has the caller confirm the household
+    // member's pre-existing 2.5 lb as if this request had just added it — Alexa said "Added
+    // 2.5 lb" before appending the cap caveat, none of which was this request's doing.
+    // `already_present` says what actually happened: the line was already there, unchanged by
+    // this call. `weightRequested` still carries the merged total (3) so the caller renders
+    // "H-E-B only sells up to 2.5 lb, could not bring it up to 3".
     const { ops, lines } = scripted([]);
     const client = (ops as unknown as { client: { execute: (d: unknown) => Promise<unknown> } })
       .client;
@@ -336,9 +336,9 @@ describe('weight on a counter line', () => {
 
     const result = await ops.addItem({ productId: 'p-turkey', weight: 0.5 });
 
-    expect(result.status).toBe('added');
-    expect(result.status === 'added' && result.item.weight).toBe(2.5);
-    expect(result.status === 'added' && result.weightRequested).toBe(3);
+    expect(result.status).toBe('already_present');
+    expect(result.status === 'already_present' && result.item.weight).toBe(2.5);
+    expect(result.status === 'already_present' && result.weightRequested).toBe(3);
   });
 
   it('preserves a definitive refusal instead of reconciling it into a generic error', async () => {

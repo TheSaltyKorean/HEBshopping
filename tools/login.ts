@@ -205,11 +205,13 @@ export function untrustedSessionNote(
     "   to this file: without `/T` this only strips every other account's access to the\n" +
     "   directory itself and to files created in it later, not to files already inside it,\n" +
     "   so it isn't safe to rely on for a directory anything else depends on. If this one\n" +
-    "   holds anything else, don't lock it: move this file into a new, empty,\n" +
-    "   dedicated directory of your own choosing instead, point --session there,\n" +
-    "   and run this again — this note will then print the lock commands for\n" +
-    `   that directory. Otherwise, lock this one now, from a Windows PowerShell\n` +
-    `   prompt${wslSuffix}:\n` +
+    "   holds anything else, don't lock it: create a new, empty,\n" +
+    "   dedicated directory of your own choosing and lock that new directory first —\n" +
+    "   the same mkdir/icacls pattern shown below, just against its own path — then\n" +
+    "   move this file into that new directory, point --session there, and run again;\n" +
+    "   locking first means that write inherits the safe ACL from the moment it\n" +
+    "   happens, instead of landing under an unlocked directory again. Otherwise, lock\n" +
+    `   this one now, from a Windows PowerShell prompt${wslSuffix}:\n` +
     `   mkdir -Force ${quote(dirIcaclsPath)}\n` +
     `   icacls ${quote(dirIcaclsPath)} /reset\n` +
     `   icacls ${quote(dirIcaclsPath)} /inheritance:r /grant:r "\${env:USERDOMAIN}\\\${env:USERNAME}:(OI)(CI)F"\n` +

@@ -202,8 +202,16 @@ describe('untrustedSessionNote', () => {
 
   it('tells the user to relocate to a directory of their own choosing when this one is not dedicated', () => {
     const atCustom = untrustedSessionNote(false, 'powershell', 'C:\\shared\\foo.json', false, 'C:\\shared');
-    expect(atCustom).toContain('move this file into a new, empty,\n   dedicated directory of your own choosing');
-    expect(atCustom).toContain('run this again');
+    expect(atCustom).toContain('dedicated directory of your own choosing and lock that new directory first');
+    expect(atCustom).toContain('move this file into that new directory, point --session there, and run again');
+  });
+
+  it('locks the new directory before moving the file into it, not after', () => {
+    const atCustom = untrustedSessionNote(false, 'powershell', 'C:\\shared\\foo.json', false, 'C:\\shared');
+    const lockFirstIndex = atCustom!.indexOf('lock that new directory first');
+    const moveIndex = atCustom!.indexOf('move this file into that new directory');
+    expect(lockFirstIndex).toBeGreaterThan(-1);
+    expect(moveIndex).toBeGreaterThan(lockFirstIndex);
   });
 });
 

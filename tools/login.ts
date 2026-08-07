@@ -134,14 +134,19 @@ export function untrustedSessionNote(
 ): string | null {
   if (shell === null) {
     if (ownerOnly !== false) return null;
+    const profileNote = isDefaultSessionPath
+      ? `   The same applies to ${PROFILE_DIR} — the logged-in browser profile from this\n` +
+        "   same login. It isn't relocated by --session, so moving only this file still\n" +
+        '   leaves that credential exposed on the mount.'
+      : `   ${PROFILE_DIR} holds a live logged-in browser profile from this same login.\n` +
+        "   It isn't relocated by --session, and a custom --session path need not share\n" +
+        '   this mount at all — check it separately.';
     return (
       "   This filesystem didn't enforce the owner-only permission, and it isn't a Windows\n" +
       "   filesystem `icacls` can secure either — for example a CIFS, FAT, or other\n" +
       '   permissionless mount. Move the credential to a permission-capable filesystem, or\n' +
       "   restrict that mount's ACLs directly; there is no command this tool can print here.\n" +
-      `   The same applies to ${PROFILE_DIR} — the logged-in browser profile from this\n` +
-      "   same login. It isn't relocated by --session, so moving only this file still\n" +
-      '   leaves that credential exposed on the mount.'
+      profileNote
     );
   }
 

@@ -117,6 +117,14 @@ describe('untrustedSessionNote', () => {
     const note = untrustedSessionNote(false, null, '/mnt/share/.session/session.json', true, '/mnt/share/.session');
     expect(note).toContain('.playwright-profile');
     expect(note).toContain('there is no command this tool can print here');
+    expect(note).toContain('exposed on the mount');
+  });
+
+  it('does not claim the browser profile shares a custom --session path\'s permissionless mount', () => {
+    const note = untrustedSessionNote(false, null, '/mnt/share/creds/foo.json', false, '/mnt/share/creds');
+    expect(note).toContain('.playwright-profile');
+    expect(note).toContain('need not share\n   this mount at all');
+    expect(note).not.toContain('exposed on the mount');
   });
 
   it('still prints the icacls remediation when stat() failed to verify the mode — the prior regression', () => {

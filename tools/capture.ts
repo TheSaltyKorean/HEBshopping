@@ -16,10 +16,11 @@
  * so treat captures/ as a secret until scrubbed into fixtures/.
  */
 
-import { chromium, type BrowserContext } from 'playwright';
+import type { BrowserContext } from 'playwright';
 import { chmod, mkdir, writeFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
 import { filterHebStorageState, isGraphqlUrl, type StorageStateLike } from '@heb/core';
+import { launchBrowser } from './lib/browser.js';
 
 /**
  * Owner-only. These files hold the live H-E-B cookie jar and raw request/response bodies
@@ -47,7 +48,6 @@ async function writeSecret(path: string, contents: string): Promise<void> {
 }
 
 
-const PROFILE_DIR = resolve('.playwright-profile');
 const CAPTURE_DIR = resolve('captures');
 const START_URL = 'https://www.heb.com/shopping-list';
 
@@ -240,12 +240,7 @@ async function flush(context: BrowserContext): Promise<void> {
 }
 
 async function main(): Promise<void> {
-  const context = await chromium.launchPersistentContext(PROFILE_DIR, {
-    headless: false,
-    viewport: { width: 1400, height: 900 },
-    // A stock Chromium fingerprint is what Imperva expects to see; don't get clever.
-    args: ['--disable-blink-features=AutomationControlled'],
-  });
+  const context = await launchBrowser();
 
   await recordGraphqlTraffic(context);
 

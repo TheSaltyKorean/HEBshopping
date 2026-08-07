@@ -281,6 +281,23 @@ async function checkOwnerOnly(path: string): Promise<boolean | null> {
   }
 }
 
+/**
+ * The remediation note for PROFILE_DIR when a trusted --session path doesn't also vouch for
+ * it — pulled out as a pure function, like `untrustedSessionNote`, so this boolean-composed
+ * gate on a security-relevant message is unit-tested rather than only reasoned about by hand.
+ */
+export function untrustedProfileNote(
+  profileOwnerOnly: boolean | null,
+  profileShell: ReturnType<typeof windowsPathFor>['shell'],
+): string | null {
+  if (profileOwnerOnly !== null && isSessionTrusted(profileOwnerOnly, profileShell)) return null;
+  return (
+    `\n   ${PROFILE_DIR} is a separate live credential (the logged-in browser profile)\n` +
+    "   and wasn't covered by the check above — see the Windows note above Step 5 in\n" +
+    '   docs/setup.md to check and, if needed, restrict it.'
+  );
+}
+
 async function main(): Promise<void> {
   const options = parseArgs(process.argv.slice(2));
 
@@ -389,13 +406,8 @@ async function main(): Promise<void> {
     // trusting the session file must not silently vouch for it too.
     const profileOwnerOnly = await checkOwnerOnly(PROFILE_DIR);
     const profileShell = windowsPathFor(PROFILE_DIR).shell;
-    if (!(profileOwnerOnly !== null && isSessionTrusted(profileOwnerOnly, profileShell))) {
-      console.log(
-        `\n   ${PROFILE_DIR} is a separate live credential (the logged-in browser profile)\n` +
-          "   and wasn't covered by the check above — see the Windows note above Step 5 in\n" +
-          '   docs/setup.md to check and, if needed, restrict it.',
-      );
-    }
+    const profileNote = untrustedProfileNote(profileOwnerOnly, profileShell);
+    if (profileNote !== null) console.log(profileNote);
   }
   describe(session);
 

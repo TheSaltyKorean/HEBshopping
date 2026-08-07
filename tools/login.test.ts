@@ -3,7 +3,9 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 const execFileSyncMock = vi.hoisted(() => vi.fn());
 vi.mock('node:child_process', () => ({ execFileSync: execFileSyncMock }));
 
-const { isSessionTrusted, untrustedSessionNote, windowsPathFor } = await import('./login.js');
+const { isSessionTrusted, untrustedProfileNote, untrustedSessionNote, windowsPathFor } = await import(
+  './login.js'
+);
 
 const originalPlatform = process.platform;
 
@@ -158,5 +160,26 @@ describe('untrustedSessionNote', () => {
   it('still tells the default .session path to re-run the per-file fix after every login', () => {
     const atDefault = untrustedSessionNote(false, 'powershell', 'C:\\repo\\.session\\session.json', true, 'C:\\repo\\.session');
     expect(atDefault).toContain('re-run that command after every login');
+  });
+});
+
+describe('untrustedProfileNote', () => {
+  it('has nothing to add when the profile mode is trusted', () => {
+    expect(untrustedProfileNote(true, 'powershell')).toBeNull();
+    expect(untrustedProfileNote(true, null)).toBeNull();
+  });
+
+  it('warns when the profile mode could not be verified', () => {
+    const note = untrustedProfileNote(null, 'powershell');
+    expect(note).toContain('.playwright-profile');
+    expect(note).toContain("wasn't covered by the check above");
+  });
+
+  it('warns when the profile mode was never restricted', () => {
+    expect(untrustedProfileNote(false, 'powershell')).toContain('.playwright-profile');
+  });
+
+  it('never trusts the mode bit alone on WSL, even when it reports owner-only', () => {
+    expect(untrustedProfileNote(true, 'wsl-powershell')).not.toBeNull();
   });
 });

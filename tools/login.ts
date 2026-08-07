@@ -364,7 +364,13 @@ async function checkOwnerOnly(path: string): Promise<boolean | null> {
  */
 export async function isDedicatedDirectory(dir: string, expectedEntry: string): Promise<boolean> {
   const allowed = new Set([expectedEntry]);
-  if (resolve(dir) === dirname(resolve(DEFAULT_SESSION_PATH))) allowed.add(basename(DEFAULT_SESSION_PATH));
+  const resolvedDir = resolve(dir);
+  const resolvedDefaultDir = dirname(resolve(DEFAULT_SESSION_PATH));
+  const sameAsDefaultDir =
+    process.platform === 'win32'
+      ? resolvedDir.toLowerCase() === resolvedDefaultDir.toLowerCase()
+      : resolvedDir === resolvedDefaultDir;
+  if (sameAsDefaultDir) allowed.add(basename(DEFAULT_SESSION_PATH));
   try {
     const entries = await readdir(dir);
     return entries.every((entry) => allowed.has(entry));

@@ -330,6 +330,12 @@ describe('isDedicatedDirectory', () => {
     await expect(isDedicatedDirectory(resolve('.session'), 'second.json')).resolves.toBe(false);
   });
 
+  it('recognizes the default .session directory case-insensitively on Windows', async () => {
+    setPlatform('win32');
+    vi.mocked(readdir).mockResolvedValueOnce(['session.json'] as never);
+    await expect(isDedicatedDirectory(resolve('.SESSION'), 'second.json')).resolves.toBe(true);
+  });
+
   it('does not extend the default-session exception to an unrelated directory', async () => {
     const dir = await mkdtemp(join(tmpdir(), 'heb-dedicated-not-default-'));
     try {

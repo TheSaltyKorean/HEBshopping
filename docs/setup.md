@@ -104,6 +104,9 @@ These run entirely offline, so if they pass, your install is good.
 > icacls .playwright-profile /T /reset
 > icacls .playwright-profile /T /inheritance:r /grant:r "${env:USERDOMAIN}\${env:USERNAME}:F"
 > icacls .playwright-profile /inheritance:r /grant:r "${env:USERDOMAIN}\${env:USERNAME}:(OI)(CI)F"
+> Get-ChildItem .playwright-profile -Recurse -Directory | ForEach-Object {
+>   icacls $_.FullName /inheritance:r /grant:r "${env:USERDOMAIN}\${env:USERNAME}:(OI)(CI)F"
+> }
 > ```
 >
 > Do this in separate calls per directory, not one `/T` with `(OI)(CI)`: those inherit flags
@@ -114,6 +117,15 @@ These run entirely offline, so if they pass, your install is good.
 > that plain-`F` grant overwrites the directory's `(OI)(CI)F` grant from the first block —
 > the final command per directory restores it, so the *next* login's temp-file-then-rename
 > write still inherits a safe ACL instead of the process's default one.
+>
+> `.playwright-profile` can already hold nested directories from a prior login — Chromium's
+> own `Default/`, `Default/Cache/`, and so on — which the `/T` block above reaches too, but
+> only with the plain, non-inheritable `F` grant; only the profile root gets `(OI)(CI)` back
+> from the command after it. Left there, a directory Chromium already created stays
+> non-inheritable, so anything written under it afterward falls back to a default DACL instead
+> of the hardened grant. The `Get-ChildItem -Recurse -Directory` loop reapplies `(OI)(CI)F` to
+> every directory that already exists, not just the root, so their contents inherit correctly
+> too. `.session` doesn't need the same loop — this tool never creates subdirectories under it.
 >
 > The same applies to `captures/` if you ever run `npm run capture`, which writes raw cookie
 > jars and request bodies the first time it runs — lock it down the same way, before that

@@ -17,7 +17,7 @@
  */
 
 import { realpathSync } from 'node:fs';
-import { readdir, rm, stat } from 'node:fs/promises';
+import { lstat, readdir, rm, stat } from 'node:fs/promises';
 import { basename, dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
@@ -299,10 +299,15 @@ async function worksAgainstHeb(candidate: SessionState): Promise<boolean> {
  * custom-`--session` icacls remediation: locking a directory that holds anything else would
  * strip every other account's access to files this tool has no business touching, so that fix
  * must only ever be offered for a directory the session file has entirely to itself. The
- * default `.session` directory is the one exception, and unconditionally so: `docs/setup.md`
- * already has the reader lock that whole directory down before Step 5, so nothing in it is ever
- * a foreign file sharing space with this tool — not a second `--session .session/other.json`
- * file, not a stray leftover — and its contents don't need enumerating to know it's dedicated.
+ * default `.session` directory relaxes this to any `*.json`/`*.json.tmp` entry, not just
+ * `expectedEntry`: `docs/setup.md` already has the reader lock that whole directory down before
+ * Step 5, and every file this tool itself would ever write there follows that naming, so a
+ * second `--session .session/other.json` file left by an earlier run isn't evidence of sharing
+ * with something outside this tool's business — but a genuinely foreign entry (a stray
+ * `desktop.ini`, a note someone else left there) still is: locking the directory would strip
+ * access to that file too, so it still has to fail the check, the same as in any other
+ * directory.
+ *
  * A directory that doesn't exist yet — or exists but is empty — is trivially dedicated, since it
  * will be created with nothing else in it; that's what lets the preflight in `main()` call this
  * *before* `store.putSession()` has written anything. Any other read failure (e.g. permission
@@ -335,7 +340,6 @@ export async function isDedicatedDirectory(
   const sameAsDefaultDir = caseInsensitive
     ? resolvedDir.toLowerCase() === resolvedDefaultDir.toLowerCase()
     : resolvedDir === resolvedDefaultDir;
-  if (sameAsDefaultDir) return true;
 
   // FileStore.putSession writes `<path>.tmp` then renames it onto `<path>` (file-store.ts) —
   // an interrupted write leaves that `.tmp` sibling behind. It's this tool's own leftover,
@@ -345,6 +349,11 @@ export async function isDedicatedDirectory(
     const entries = await readdir(dir);
     for (const entry of entries) {
       if (allowed.has(entry)) continue;
+      // Only in the default directory: every file this tool would ever write there is a
+      // *.json session file (or its *.json.tmp write-in-progress sibling), so another one is a
+      // previous run's file, not a foreign entry — but something that isn't shaped like a
+      // session file at all still has to pass the check below.
+      if (sameAsDefaultDir && /\.json(\.tmp)?$/i.test(entry)) continue;
       if (!caseInsensitive || !(await sameFileCaseFolded(dir, entry, allowed))) return false;
     }
     return true;
@@ -416,8 +425,25 @@ export function untrustedProfileNote(
  * the directory would drop a Windows ACL locked onto it per the setup docs, and Playwright
  * would recreate it fresh under the parent's (often broader) inherited ACL. Clearing its
  * contents instead keeps that lock in place across a switch.
+ *
+ * Checked with `lstat`, not `stat`, so a symlink or junction planted where the directory used
+ * to be is caught as itself rather than followed: `readdir` follows a symlinked path, and this
+ * would otherwise recursively delete the *target's* contents — reachable in exactly the
+ * shared-repository layouts the ACL work in this file exists for, if another account replaces
+ * `.playwright-profile` with a link to somewhere it can write. The link itself is removed
+ * instead; `launchBrowser` creates a real directory fresh either way.
  */
 export async function clearDirectoryContents(dir: string): Promise<void> {
+  try {
+    if ((await lstat(dir)).isSymbolicLink()) {
+      await rm(dir, { force: true });
+      return;
+    }
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return;
+    throw error;
+  }
+
   let entries: string[];
   try {
     entries = await readdir(dir);

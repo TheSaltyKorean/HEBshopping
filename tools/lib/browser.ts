@@ -96,8 +96,13 @@ export function isSessionTrusted(ownerOnly: boolean, shell: ReturnType<typeof wi
   return ownerOnly && shell !== 'wsl-powershell';
 }
 
-/** `statfs().type` for Linux's SMB/CIFS client, the same value for every SMB dialect. */
+/**
+ * `statfs().type` for Linux's SMB client. Not one value for every dialect: the kernel reports
+ * `CIFS_SUPER_MAGIC` for an SMB1 mount and the distinct `SMB2_SUPER_MAGIC` for SMB2 *and*
+ * SMB3 alike — there is no separate SMB3 constant, the two newer dialects share this one.
+ */
 const CIFS_SUPER_MAGIC = 0xff534d42;
+const SMB2_SUPER_MAGIC = 0xfe534d42;
 
 /**
  * Owner-only mode on POSIX, or `null` when it can't be determined (missing, or stat failed).
@@ -113,7 +118,8 @@ const CIFS_SUPER_MAGIC = 0xff534d42;
 export async function checkOwnerOnly(path: string): Promise<boolean | null> {
   try {
     if (((await stat(path)).mode & 0o077) !== 0) return false;
-    return (await statfs(path).catch(() => null))?.type !== CIFS_SUPER_MAGIC;
+    const fsType = (await statfs(path).catch(() => null))?.type;
+    return fsType !== CIFS_SUPER_MAGIC && fsType !== SMB2_SUPER_MAGIC;
   } catch {
     return null;
   }
@@ -174,16 +180,24 @@ export function homeDirFor(shell: ReturnType<typeof windowsPathFor>['shell']): s
  * that merely *looks* like it's under the user's home profile — because a junction planted
  * there points somewhere else entirely — isn't mistaken by `isUnderOwnHomeDirectory` for one
  * that genuinely is. `dir` (or a deeper descendant of it a caller may run this against before
- * `mkdir` creates it) may not exist yet, so `realpath` can fail on the full path even though an
- * ancestor — the junction itself — does exist and would still redirect it: walk up to the
- * nearest ancestor `realpath` can resolve and reapply the unresolved tail on top of that,
- * instead of giving up and handing back the lexical path a junction earlier in it could still
- * make misleading. Stops at the root once there's no further ancestor to try.
+ * `mkdir` creates it) may not exist yet, so `realpath` can fail with `ENOENT` on the full path
+ * even though an ancestor — the junction itself — does exist and would still redirect it: walk
+ * up to the nearest ancestor `realpath` can resolve and reapply the unresolved tail on top of
+ * that, instead of giving up and handing back the lexical path a junction earlier in it could
+ * still make misleading. Stops at the root once there's no further ancestor to try.
+ *
+ * Only `ENOENT` gets that treatment. `EACCES`/`EPERM`/anything else means the component is
+ * there but couldn't be read — not the same as "missing, so the lexical path is fine to use" —
+ * an existing junction the process can't resolve could still be redirecting somewhere no
+ * caller has actually confirmed, and reconstructing the lexical path anyway would grant every
+ * exemption gated on this function's output for that unconfirmed location. Propagating the
+ * error instead fails closed on it, the same as any other unexpected failure here.
  */
 export async function realDir(dir: string): Promise<string> {
   try {
     return await realpath(dir);
-  } catch {
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
     const parent = dirname(dir);
     if (parent === dir) return dir;
     return join(await realDir(parent), basename(dir));

@@ -205,11 +205,15 @@ describe('checkOwnerOnly', () => {
   });
 
   // stat/statfs are mocked rather than driven off a real file so this runs on every platform:
-  // the case it describes is a Linux CIFS mount, which no CI host has to hand.
-  it('does not trust an owner-only mode a CIFS mount synthesized from its mount options', async () => {
+  // the case it describes is a Linux SMB mount, which no CI host has to hand.
+  it('does not trust an owner-only mode a CIFS or SMB2/SMB3 mount synthesized from its mount options', async () => {
     vi.mocked(stat).mockResolvedValueOnce({ mode: 0o600 } as never);
-    vi.mocked(statfs).mockResolvedValueOnce({ type: 0xff534d42 } as never); // CIFS_SUPER_MAGIC
+    vi.mocked(statfs).mockResolvedValueOnce({ type: 0xff534d42 } as never); // CIFS_SUPER_MAGIC (SMB1)
     expect(await checkOwnerOnly('/mnt/share/session.json')).toBe(false);
+
+    vi.mocked(stat).mockResolvedValueOnce({ mode: 0o600 } as never);
+    vi.mocked(statfs).mockResolvedValueOnce({ type: 0xfe534d42 } as never); // SMB2_SUPER_MAGIC (SMB2/SMB3)
+    expect(await checkOwnerOnly('/mnt/share2/session.json')).toBe(false);
 
     vi.mocked(stat).mockResolvedValueOnce({ mode: 0o600 } as never);
     vi.mocked(statfs).mockResolvedValueOnce({ type: 0x01021994 } as never); // tmpfs
@@ -298,6 +302,15 @@ describe('realDir', () => {
       .mockResolvedValueOnce(target); // realpath(link) — the junction's real target
 
     expect(await realDir(missing)).toBe(join(target, 'new'));
+  });
+
+  it('propagates a non-ENOENT failure instead of falling back to the lexical path', async () => {
+    // EACCES/EPERM on an existing junction means it couldn't be resolved, not that it's
+    // missing — reconstructing the lexical path anyway would grant a caller's home-directory
+    // exemption for a location nobody actually confirmed.
+    const dir = join(tmpdir(), 'heb-realdir-eacces');
+    vi.mocked(realpath).mockRejectedValueOnce(Object.assign(new Error('permission denied'), { code: 'EACCES' }));
+    await expect(realDir(dir)).rejects.toThrow('permission denied');
   });
 });
 

@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { mkdir, mkdtemp, readdir, realpath, rm, stat, writeFile } from 'node:fs/promises';
+import { lstat, mkdir, mkdtemp, readdir, realpath, rm, stat, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 
@@ -7,6 +7,7 @@ vi.mock('node:fs/promises', async (importOriginal) => {
   const actual = await importOriginal<typeof import('node:fs/promises')>();
   return {
     ...actual,
+    lstat: vi.fn(actual.lstat),
     readdir: vi.fn(actual.readdir),
     realpath: vi.fn(actual.realpath),
     stat: vi.fn(actual.stat),
@@ -218,19 +219,33 @@ describe('isDedicatedDirectory', () => {
     await expect(isDedicatedDirectory('/some/dir', 'session.json', null)).resolves.toBe(false);
   });
 
-  it('treats the default .session directory as dedicated regardless of what else is in it', async () => {
-    // docs/setup.md already has the reader lock the whole directory down before Step 5, so
-    // nothing already there — a second --session file, a stray session.json.bak, an unrelated
-    // desktop.ini — is evidence of sharing with something outside this tool's business. No
-    // readdir mock needed: the default directory is dedicated unconditionally, without looking.
+  it('treats the default .session directory as dedicated when it holds other session-like files', async () => {
+    // A previous `--session .session/work.json` run left work.json (and session.json from a
+    // plain `npm run login`) behind. docs/setup.md already has the reader lock the whole
+    // directory down before Step 5, and every file this tool itself would ever write there is
+    // a *.json (or *.json.tmp) session file, so another one isn't evidence of sharing with
+    // something outside this tool's business.
+    vi.mocked(readdir).mockResolvedValueOnce(['session.json', 'work.json'] as never);
     await expect(isDedicatedDirectory(resolve('.session'), 'second.json', 'powershell')).resolves.toBe(true);
   });
 
+  it('does not extend the default-.session exemption to a genuinely foreign file', async () => {
+    // Locking the directory — the advice `ensureCustomSessionParentReady` gives once this
+    // returns true — strips every other account's access to everything in it, which is only
+    // safe when everything in it is this tool's own. A file that isn't shaped like a session
+    // file at all is evidence it might not be, so it must still fail the check like it would
+    // in any other directory, not be waved through by an unconditional default-directory pass.
+    vi.mocked(readdir).mockResolvedValueOnce(['session.json', 'desktop.ini'] as never);
+    await expect(isDedicatedDirectory(resolve('.session'), 'second.json', 'powershell')).resolves.toBe(false);
+  });
+
   it('recognizes the default .session directory case-insensitively on native Windows', async () => {
+    vi.mocked(readdir).mockResolvedValueOnce([]);
     await expect(isDedicatedDirectory(resolve('.SESSION'), 'second.json', 'powershell')).resolves.toBe(true);
   });
 
   it('recognizes the default .session directory case-insensitively on WSL over a Windows drive', async () => {
+    vi.mocked(readdir).mockResolvedValueOnce([]);
     await expect(isDedicatedDirectory(resolve('.SESSION'), 'second.json', 'wsl-powershell')).resolves.toBe(true);
   });
 
@@ -381,9 +396,33 @@ describe('clearDirectoryContents', () => {
   });
 
   it('propagates read failures other than "does not exist" instead of treating the directory as empty', async () => {
+    vi.mocked(lstat).mockResolvedValueOnce({ isSymbolicLink: () => false } as never);
     const error = Object.assign(new Error('permission denied'), { code: 'EACCES' });
     vi.mocked(readdir).mockRejectedValueOnce(error);
     await expect(clearDirectoryContents('/some/profile/dir')).rejects.toThrow('permission denied');
+  });
+
+  it('removes a junction standing in for the profile directory, instead of following it into its target', async () => {
+    // Another account could have replaced .playwright-profile with a junction to somewhere it
+    // can write; readdir() follows a junctioned path, so without the lstat check above this
+    // would recursively delete the *target's* contents instead of just the link. A real
+    // junction, not a mock: this is exactly the "does readdir follow it" question a mock of
+    // readdir can't actually answer.
+    const scratch = await mkdtemp(join(tmpdir(), 'heb-profile-link-'));
+    const target = join(scratch, 'target');
+    const link = join(scratch, 'link');
+    try {
+      await mkdir(target);
+      await writeFile(join(target, 'outside-file.txt'), 'do not delete me');
+      await symlink(target, link, 'junction');
+
+      await clearDirectoryContents(link);
+
+      await expect(readdir(scratch)).resolves.toEqual(['target']); // the link itself is gone
+      await expect(readdir(target)).resolves.toEqual(['outside-file.txt']); // target untouched
+    } finally {
+      await rm(scratch, { recursive: true, force: true });
+    }
   });
 });
 

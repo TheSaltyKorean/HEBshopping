@@ -192,8 +192,11 @@ export function untrustedSessionNote(
   // `/inheritance:r` on a directory removes every inherited ACE and `/grant:r` leaves only
   // the named account, so it strips every other account's access to the directory itself
   // and to files created in it later. Without `/T` it does not touch files already inside
-  // it, so a directory with other content in it isn't retroactively protected — hence the
-  // new, empty, dedicated directory rather than reusing one that already holds something else.
+  // it, so a directory with other content in it isn't retroactively protected. `dirIcaclsPath`
+  // is always the file's *existing* parent (it's already writing there), so this can only
+  // ever offer to lock that directory — not a new one — and must tell the user to relocate
+  // to a directory of their own choosing when this one isn't dedicated, rather than claiming
+  // to create and lock a "new" directory that's actually the same one.
   return (
     reason +
     ' A fix on just this file would not last — the next\n' +
@@ -202,15 +205,16 @@ export function untrustedSessionNote(
     "   to this file: without `/T` this only strips every other account's access to the\n" +
     "   directory itself and to files created in it later, not to files already inside it,\n" +
     "   so it isn't safe to rely on for a directory anything else depends on. If this one\n" +
-    "   holds anything else, create a new, empty, dedicated directory and lock it down\n" +
-    `   first, from a Windows PowerShell prompt${wslSuffix}:\n` +
+    "   holds anything else, don't lock it: move this file into a new, empty,\n" +
+    "   dedicated directory of your own choosing instead, point --session there,\n" +
+    "   and run this again — this note will then print the lock commands for\n" +
+    `   that directory. Otherwise, lock this one now, from a Windows PowerShell\n` +
+    `   prompt${wslSuffix}:\n` +
     `   mkdir -Force ${quote(dirIcaclsPath)}\n` +
     `   icacls ${quote(dirIcaclsPath)} /reset\n` +
     `   icacls ${quote(dirIcaclsPath)} /inheritance:r /grant:r "\${env:USERDOMAIN}\\\${env:USERNAME}:(OI)(CI)F"\n` +
-    '   Only then move this file into it and point --session there for the next login —\n' +
-    "   locking before the move means that write inherits the safe ACL from the moment\n" +
-    '   it happens, instead of landing under the old one first. This run already wrote\n' +
-    '   the file under the old ACL though, so fix that one file too, once:\n' +
+    '   This run already wrote the file under the old ACL, so fix that one file too,\n' +
+    '   once:\n' +
     fileFix +
     `   ${PROFILE_DIR} holds a live logged-in browser profile from this same login.\n` +
     "   It isn't relocated by --session, so it stays exposed under its inherited ACL\n" +

@@ -179,20 +179,26 @@ describe('untrustedSessionNote', () => {
     // Without /T the directory-level fix never reaches files already inside it — only the
     // directory itself and what's created afterward — so it must not claim otherwise.
     expect(atCustom).not.toContain('anything already in it');
-    expect(atCustom).toContain('create a new, empty, dedicated directory');
+    expect(atCustom).toContain('dedicated directory of your own choosing');
   });
 
-  it('creates the dedicated directory before locking it, in case it does not exist yet', () => {
+  it('creates the directory before locking it, in case it does not exist yet', () => {
     const atCustom = untrustedSessionNote(false, 'powershell', 'C:\\shared\\foo.json', false, 'C:\\shared');
     expect(atCustom).toContain("mkdir -Force 'C:\\shared'");
   });
 
-  it('locks the new dedicated directory before telling the user to move the file in and rerun', () => {
+  it('locks the directory that already holds the file, not a fabricated new one', () => {
     const atCustom = untrustedSessionNote(false, 'powershell', 'C:\\shared\\foo.json', false, 'C:\\shared');
-    const lockIndex = atCustom!.indexOf('lock it down');
-    const moveIndex = atCustom!.indexOf('move this file into it and point --session there');
-    expect(lockIndex).toBeGreaterThan(-1);
-    expect(moveIndex).toBeGreaterThan(lockIndex);
+    // dirIcaclsPath is always the file's own parent directory — there is nothing to "move"
+    // into it, so the note must not claim it is proposing a different, new location.
+    expect(atCustom).not.toContain('move this file into it');
+    expect(atCustom).toContain("icacls 'C:\\shared' /inheritance:r /grant:r");
+  });
+
+  it('tells the user to relocate to a directory of their own choosing when this one is not dedicated', () => {
+    const atCustom = untrustedSessionNote(false, 'powershell', 'C:\\shared\\foo.json', false, 'C:\\shared');
+    expect(atCustom).toContain('move this file into a new, empty,\n   dedicated directory of your own choosing');
+    expect(atCustom).toContain('run this again');
   });
 });
 

@@ -38,6 +38,15 @@ describe('windowsPathFor', () => {
     });
   });
 
+  it('treats a wslpath translation onto its own WSL-native filesystem as not Windows-backed', () => {
+    setPlatform('linux');
+    execFileSyncMock.mockReturnValue('\\\\wsl.localhost\\Ubuntu\\home\\user\\repo\\.session\\session.json\r\n');
+    expect(windowsPathFor('/home/user/repo/.session/session.json')).toEqual({
+      path: '/home/user/repo/.session/session.json',
+      shell: null,
+    });
+  });
+
   it('falls back to no icacls command when wslpath is unavailable on Linux', () => {
     setPlatform('linux');
     execFileSyncMock.mockImplementation(() => {

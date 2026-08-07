@@ -74,20 +74,24 @@ const sleep = (ms: number): Promise<void> => new Promise((done) => setTimeout(do
  * `options.sessionPath` is POSIX-style (e.g. `/mnt/c/repo/.session/session.json`), so
  * translate it via `wslpath` before printing a command meant to run in PowerShell.
  *
+ * `wslpath` succeeds for *any* path, including one on WSL's own native filesystem — there it
+ * translates to a `\\wsl.localhost\...` UNC alias rather than a drive letter. That's not a
+ * DrvFS/NTFS mount, so it isn't Windows-backed and `icacls` doesn't apply; treat it the same
+ * as a `wslpath` failure.
+ *
  * `shell` says where that command has to be run: `'powershell'` on native Windows,
- * `'wsl-powershell'` on WSL (translated via `wslpath`, which only exists there — plain Linux
- * also reports `process.platform === 'linux'` but fails the `wslpath` call), or `null` on a
- * platform `icacls` can't help (native Linux/macOS, including permissionless mounts like
- * CIFS or FAT) where the caller should not print an `icacls` command at all.
+ * `'wsl-powershell'` on WSL when the path actually resolves onto a Windows drive, or `null`
+ * on a platform (or WSL path) `icacls` can't help — native Linux/macOS, permissionless mounts
+ * like CIFS or FAT, or a WSL-native path — where the caller should not print an `icacls`
+ * command at all.
  */
 export function windowsPathFor(path: string): { path: string; shell: 'powershell' | 'wsl-powershell' | null } {
   if (process.platform === 'win32') return { path, shell: 'powershell' };
   if (process.platform !== 'linux') return { path, shell: null };
   try {
-    return {
-      path: execFileSync('wslpath', ['-w', path], { encoding: 'utf8' }).trim(),
-      shell: 'wsl-powershell',
-    };
+    const winPath = execFileSync('wslpath', ['-w', path], { encoding: 'utf8' }).trim();
+    if (!/^[A-Za-z]:\\/.test(winPath)) return { path, shell: null };
+    return { path: winPath, shell: 'wsl-powershell' };
   } catch {
     return { path, shell: null };
   }
@@ -280,7 +284,7 @@ async function main(): Promise<void> {
           '   prompt' +
           (shell === 'wsl-powershell' ? ' (not this WSL shell)' : '') +
           ':\n' +
-          `   icacls "${icaclsPath}" /inheritance:r /grant:r "\${env:USERNAME}:F"\n` +
+          `   icacls '${icaclsPath.replace(/'/g, "''")}' /inheritance:r /grant:r "\${env:USERDOMAIN}\\\${env:USERNAME}:F"\n` +
           '   Every login replaces this file (writes a temp file, then renames it over the\n' +
           "   old one), and the replacement inherits the directory's ACL rather than the file\n" +
           '   you just locked — so re-run that command after every login, not just the first.\n' +

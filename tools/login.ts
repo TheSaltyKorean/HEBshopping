@@ -299,6 +299,7 @@ async function main(): Promise<void> {
           '   prompt' +
           (shell === 'wsl-powershell' ? ' (not this WSL shell)' : '') +
           ':\n' +
+          `   icacls '${icaclsPath.replace(/'/g, "''")}' /reset\n` +
           `   icacls '${icaclsPath.replace(/'/g, "''")}' /inheritance:r /grant:r "\${env:USERDOMAIN}\\\${env:USERNAME}:F"\n` +
           '   Every login replaces this file (writes a temp file, then renames it over the\n' +
           "   old one), and the replacement inherits the directory's ACL rather than the file\n" +

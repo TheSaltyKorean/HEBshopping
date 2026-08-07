@@ -103,19 +103,23 @@ That last line is the proof: it made a real authenticated call and saw your real
 > than one account, another user can read your session. Under your own profile
 > (`C:\Users\<you>\...`) the inherited ACL is already user-only and there is nothing to fix.
 >
-> If the repo lives outside your profile, restrict the directory once:
+> If the repo lives outside your profile, restrict the directory once. `npm run login` also
+> writes `.playwright-profile/` — a live, already-authenticated browser profile — so it needs
+> the same treatment as `.session`:
 >
 > ```powershell
 > icacls .session /inheritance:r /grant:r "${env:USERNAME}:(OI)(CI)F"
 > icacls .session /T /inheritance:r /grant:r "${env:USERNAME}:F"
+> icacls .playwright-profile /inheritance:r /grant:r "${env:USERNAME}:(OI)(CI)F"
+> icacls .playwright-profile /T /inheritance:r /grant:r "${env:USERNAME}:F"
 > ```
 >
-> Both lines matter. The first sets up the directory so anything created in it *from now on*
-> inherits a user-only ACL. The second re-ACLs what's *already* there — the `session.json`
-> that `npm run login` already wrote. `/inheritance:r` on that second call is what actually
-> strips the stale inherited ACE (the `Users:(R)` grant from `C:\`'s default ACL); `/grant:r`
-> alone only replaces the explicit rights already granted to your own account and leaves
-> other trustees' inherited access untouched.
+> Both lines per directory matter. The first sets up the directory so anything created in it
+> *from now on* inherits a user-only ACL. The second re-ACLs what's *already* there — the
+> `session.json` (or profile files) that `npm run login` already wrote. `/inheritance:r` on
+> that second call is what actually strips the stale inherited ACE (the `Users:(R)` grant from
+> `C:\`'s default ACL); `/grant:r` alone only replaces the explicit rights already granted to
+> your own account and leaves other trustees' inherited access untouched.
 > Do this in two calls, not one `/T` with `(OI)(CI)`: those inherit flags are directory-only
 > semantics, and applying them to an existing file via `/T` silently produces an empty,
 > protected ACL — locking you out of the very file you're trying to protect.

@@ -55,9 +55,11 @@ Confirm it's sound before going further:
 npm test
 ```
 
-Expected: every file passes and nothing is skipped — the counts grow as the project does,
-so match on `passed` rather than a number. These run entirely offline, so if they pass,
-your install is good.
+Expected: every file passes. On Windows, one test reports as skipped — it checks a
+POSIX-only file permission bit that Windows doesn't have — so don't expect "nothing
+skipped" there; match on `passed` instead. The counts grow as the project does, so match
+on `passed` rather than a number. These run entirely offline, so if they pass, your
+install is good.
 
 ---
 
@@ -104,7 +106,7 @@ That last line is the proof: it made a real authenticated call and saw your real
 > If the repo lives outside your profile, restrict the directory once:
 >
 > ```powershell
-> icacls .session /inheritance:r /grant:r "$env:USERNAME:(OI)(CI)F"
+> icacls .session /inheritance:r /grant:r "${env:USERNAME}:(OI)(CI)F"
 > ```
 >
 > The same applies to `captures/` if you ever run `npm run capture`, which writes raw cookie

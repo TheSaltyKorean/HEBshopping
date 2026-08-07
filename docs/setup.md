@@ -80,8 +80,8 @@ entirely offline, so if they pass, your install is good.
 >
 > ```powershell
 > mkdir .session, .playwright-profile
-> icacls .session /inheritance:r /grant:r "${env:USERNAME}:(OI)(CI)F"
-> icacls .playwright-profile /inheritance:r /grant:r "${env:USERNAME}:(OI)(CI)F"
+> icacls .session /inheritance:r /grant:r "${env:USERDOMAIN}\${env:USERNAME}:(OI)(CI)F"
+> icacls .playwright-profile /inheritance:r /grant:r "${env:USERDOMAIN}\${env:USERNAME}:(OI)(CI)F"
 > ```
 >
 > Already ran `npm run login` before reading this? Those directories exist already and may
@@ -90,8 +90,8 @@ entirely offline, so if they pass, your install is good.
 > them — this is the only case that needs it:
 >
 > ```powershell
-> icacls .session /T /inheritance:r /grant:r "${env:USERNAME}:F"
-> icacls .playwright-profile /T /inheritance:r /grant:r "${env:USERNAME}:F"
+> icacls .session /T /inheritance:r /grant:r "${env:USERDOMAIN}\${env:USERNAME}:F"
+> icacls .playwright-profile /T /inheritance:r /grant:r "${env:USERDOMAIN}\${env:USERNAME}:F"
 > ```
 >
 > Do this in two calls per directory, not one `/T` with `(OI)(CI)`: those inherit flags are

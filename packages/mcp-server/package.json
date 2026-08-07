@@ -1,0 +1,17 @@
+{
+  "name": "@heb/mcp-server",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "MCP server exposing the HEB shopping list to Gemini CLI, Claude, and Gemini Spark.",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "bin": { "heb-mcp": "./dist/stdio.js" },
+  "exports": { ".": { "types": "./dist/index.d.ts", "default": "./dist/index.js" } },
+  "scripts": { "build": "tsc --build", "clean": "tsc --build --clean" },
+  "dependencies": {
+    "@heb/core": "*",
+    "@modelcontextprotocol/sdk": "^1.30.0",
+    "zod": "^4.4.3"
+  }
+}

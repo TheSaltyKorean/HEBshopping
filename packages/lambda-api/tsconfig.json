@@ -1,0 +1,21 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "rootDir": "./src",
+    "outDir": "./dist"
+  },
+  "include": [
+    "src/**/*"
+  ],
+  "exclude": [
+    "**/*.test.ts"
+  ],
+  "references": [
+    {
+      "path": "../heb-core"
+    },
+    {
+      "path": "../mcp-server"
+    }
+  ]
+}

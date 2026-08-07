@@ -1,0 +1,208 @@
+/**
+ * W0 experiments. Each one can delete or invalidate a whole subsystem, so they run before
+ * any of the real code gets written.
+ *
+ *   npx tsx tools/experiments.ts
+ *
+ * Requires captures/storage-state.json from `npm run capture` or `tools/drive.ts`.
+ */
+
+import { readFileSync } from 'node:fs';
+import { createHash } from 'node:crypto';
+import { resolve } from 'node:path';
+import {
+  HEB_GRAPHQL_URL,
+  HEB_ORIGIN,
+  cookieHeaderFor,
+  getShoppingListsDocument,
+  type Cookie,
+  type SessionState,
+} from '@heb/core';
+
+const state: SessionState = {
+  cookies: JSON.parse(readFileSync(resolve('captures/storage-state.json'), 'utf8'))
+    .cookies as Cookie[],
+  capturedAt: 0,
+  buildId: null,
+};
+
+/**
+ * Cookies a request to `www.heb.com/graphql` would carry — built by the *production*
+ * rule, not a local approximation.
+ *
+ * The hand-rolled domain filter this replaces sent every domain-matching cookie: expired
+ * ones, ones whose path excludes `/graphql`, and duplicate copies of the same name from
+ * different scopes. Any of those can make the server reject a jar that `HebClient` would
+ * authenticate with perfectly well — and these two experiments are what decided whether the
+ * architecture needs a browser at all. Measuring something other than production is worse
+ * than not measuring.
+ */
+const cookies = (): string => cookieHeaderFor(state, 'www.heb.com', '/graphql');
+
+const BROWSER_HEADERS: Record<string, string> = {
+  'User-Agent':
+    'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/151.0.0.0 Safari/537.36',
+  'Content-Type': 'application/json',
+  Accept: '*/*',
+  'Accept-Language': 'en-US,en;q=0.9',
+  Origin: HEB_ORIGIN,
+  Referer: `${HEB_ORIGIN}/shopping-list`,
+};
+
+async function graphql(body: unknown): Promise<{ status: number; text: string }> {
+  const response = await fetch(HEB_GRAPHQL_URL, {
+    method: 'POST',
+    headers: { ...BROWSER_HEADERS, Cookie: cookies() },
+    body: JSON.stringify(body),
+  });
+  // The COMPLETE body. Truncating here fed a cut-off document to `JSON.parse` further
+  // down, so a perfectly good authenticated response for an account with several lists
+  // was classified "Inconclusive" — and that classification is what decided whether this
+  // project needs a browser at all. Only the printed copy is shortened.
+  return { status: response.status, text: await response.text() };
+}
+
+/** How much of a body to show a human. The classification always uses the whole thing. */
+function forDisplay(text: string): string {
+  return text.replace(/\n/g, ' ').slice(0, 300);
+}
+
+/**
+ * Did this response actually succeed?
+ *
+ * A GraphQL 200 carrying `{"data":null,"errors":[…]}` still contains the string `"data"`,
+ * so substring checks read a refusal as proof of success. That mattered here: this probe's
+ * verdict is what removed the persisted-query fallback from the design.
+ */
+function isSuccessfulEnvelope(text: string): boolean {
+  try {
+    const parsed = JSON.parse(text) as { data?: unknown; errors?: unknown[] };
+    if (Array.isArray(parsed.errors) && parsed.errors.length > 0) return false;
+    return parsed.data !== null && parsed.data !== undefined;
+  } catch {
+    return false;
+  }
+}
+
+// ---------------------------------------------------------------------------
+
+async function experimentHeadlessHttp(): Promise<void> {
+  console.log('\n══ EXPERIMENT 1 — can a plain HTTP client use the captured cookies? ══');
+  console.log('   This is the load-bearing assumption of the whole fast-Lambda design.');
+  console.log('   If Imperva rejects non-browser clients, the architecture needs rethinking.\n');
+
+  // The production document, sent as query text — not a persisted-query hash.
+  //
+  // This experiment asks one question: does Imperva let a non-browser client through with
+  // captured cookies? A hash-only request answers a different one. H-E-B's APQ store is a
+  // cache that evicts rarely-used entries (that is Experiment 2's whole subject), so a
+  // `PersistedQueryNotFound` here would print "Inconclusive" for a session that
+  // authenticates perfectly — and the architecture rests on this verdict. Sending what
+  // production sends measures authentication rather than APQ cache state.
+  const document = getShoppingListsDocument();
+  const result = await graphql({
+    operationName: document.operationName,
+    query: document.query,
+    variables: {},
+  });
+
+  console.log(`   HTTP ${result.status}`);
+  console.log(`   ${forDisplay(result.text)}`);
+
+  // This experiment's answer is load-bearing for the whole architecture, so it must not
+  // rest on a substring. A rejected session returns
+  // {"data":{"getShoppingListsV2":null},"errors":[…]} — which *contains* the field name,
+  // and would have printed the definitive "cookies alone are enough" for a dead jar.
+  let succeeded = false;
+  try {
+    const envelope = JSON.parse(result.text) as {
+      data?: { getShoppingListsV2?: { __typename?: string } | null };
+      errors?: unknown[];
+    };
+    succeeded =
+      !envelope.errors?.length &&
+      envelope.data?.getShoppingListsV2?.__typename === 'ShoppingListsWithHeaderPageV2';
+  } catch {
+    succeeded = false;
+  }
+
+  if (result.status === 200 && succeeded) {
+    console.log('\n   ✅ YES — cookies alone are enough. The browser-free request path works.');
+  } else if (result.text.toLowerCase().includes('pardon our interruption')) {
+    console.log('\n   ❌ NO — Imperva blocked it. The request path cannot be browser-free.');
+  } else {
+    console.log('\n   ⚠  Inconclusive — inspect the body above.');
+  }
+}
+
+async function experimentNonStrictApq(): Promise<void> {
+  console.log('\n══ EXPERIMENT 2 — is APQ non-strict (does it accept arbitrary queries)? ══');
+  console.log('   If yes, hash rot self-heals instantly with no browser involved.\n');
+
+  const query = 'query ProbeTypename { __typename }';
+  const sha256Hash = createHash('sha256').update(query).digest('hex');
+
+  const result = await graphql({
+    operationName: 'ProbeTypename',
+    query,
+    variables: {},
+    extensions: { persistedQuery: { version: 1, sha256Hash } },
+  });
+
+  console.log(`   HTTP ${result.status}`);
+  console.log(`   ${forDisplay(result.text)}`);
+
+  if (result.text.includes('PersistedQueryNotFound')) {
+    console.log('\n   ❌ NO — safelisted. Hash relearning must come from browser capture.');
+  } else if (isSuccessfulEnvelope(result.text)) {
+    console.log('\n   ✅ YES — arbitrary queries accepted. Self-heal can be browser-free.');
+  } else {
+    console.log('\n   ⚠  Inconclusive — inspect the body above.');
+  }
+}
+
+function experimentOidcSession(): void {
+  console.log('\n══ EXPERIMENT 3 — is the identity session renewable without a browser? ══');
+  console.log('   Looking for long-lived refresh material on accounts.heb.com.\n');
+
+  const now = Date.now() / 1000;
+  const interesting = state.cookies
+    .filter((c) => c.domain.includes('heb.com'))
+    .sort((a, b) => a.domain.localeCompare(b.domain) || a.name.localeCompare(b.name));
+
+  console.log('   name                              domain                   expires in');
+  console.log('   ' + '-'.repeat(74));
+  for (const cookie of interesting) {
+    const ttl =
+      cookie.expires === -1
+        ? 'session'
+        : cookie.expires < now
+          ? 'EXPIRED'
+          : `${((cookie.expires - now) / 3600).toFixed(1)}h`;
+    console.log(
+      `   ${cookie.name.slice(0, 33).padEnd(34)}${cookie.domain.padEnd(25)}${ttl}`,
+    );
+  }
+
+  const longLived = interesting.filter(
+    (c) => c.expires > 0 && (c.expires - now) / 86400 > 7,
+  );
+  console.log(
+    `\n   ${longLived.length} cookie(s) live longer than 7 days: ${
+      longLived.map((c) => c.name).join(', ') || '(none)'
+    }`,
+  );
+  console.log('   Long-lived + httpOnly on accounts.heb.com would suggest a refresh path.');
+}
+
+async function main(): Promise<void> {
+  console.log(`Loaded ${state.cookies.length} cookies from captures/storage-state.json`);
+  await experimentHeadlessHttp();
+  await experimentNonStrictApq();
+  experimentOidcSession();
+}
+
+main().catch((error: unknown) => {
+  console.error(error);
+  process.exit(1);
+});

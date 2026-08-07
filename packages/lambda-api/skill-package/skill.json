@@ -1,0 +1,51 @@
+{
+  "manifest": {
+    "manifestVersion": "1.0",
+    "publishingInformation": {
+      "locales": {
+        "en-US": {
+          "name": "My Grocery List",
+          "summary": "Add, read, and remove items on a personal H-E-B shopping list.",
+          "description": "A private, self-hosted skill for one household's H-E-B shopping list. Not affiliated with or endorsed by H-E-B. Intended to stay in development mode; it is not distributable, because it has no account linking and rides an unofficial API.",
+          "examplePhrases": [
+            "Alexa, ask grocery list to add oat milk",
+            "Alexa, ask grocery list what is on my list",
+            "Alexa, ask grocery list to remove tortillas"
+          ],
+          "keywords": [
+            "grocery",
+            "shopping",
+            "list"
+          ]
+        }
+      },
+      "isAvailableWorldwide": false,
+      "distributionCountries": [
+        "US"
+      ],
+      "distributionMode": "PRIVATE",
+      "category": "SHOPPING",
+      "testingInstructions": "Development-mode only. Requires a self-hosted Lambda and a logged-in H-E-B session."
+    },
+    "apis": {
+      "custom": {
+        "endpoint": {
+          "uri": "arn:aws:lambda:us-east-1:000000000000:function:heb-shopping-list"
+        }
+      }
+    },
+    "privacyAndCompliance": {
+      "allowsPurchases": false,
+      "usesPersonalInfo": true,
+      "isChildDirected": false,
+      "isExportCompliant": true,
+      "containsAds": false,
+      "locales": {
+        "en-US": {
+          "privacyPolicyUrl": "https://example.invalid/privacy",
+          "termsOfUseUrl": "https://example.invalid/terms"
+        }
+      }
+    }
+  }
+}

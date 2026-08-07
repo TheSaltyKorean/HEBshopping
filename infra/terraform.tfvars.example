@@ -1,0 +1,25 @@
+# Copy to terraform.tfvars and fill in. That file is gitignored: keep it that way.
+#
+# Nothing here is a secret — these are identifiers — but the state file that results is
+# not, so treat the whole infra/ directory as sensitive.
+#
+# The placeholders below are deliberately not shaped like real values, so that
+# `npm run scan` cannot mistake this example for a leaked identifier.
+
+# Alexa developer console → your skill → Endpoint. Each starts with amzn1.ask.skill.
+#
+# A list, because Alexa allows exactly ONE invocation name per skill. If you want to say
+# both "Alexa, ask grocery list ..." and "Alexa, ask heb list ...", create two skills with
+# the same interaction model and the same endpoint ARN, then list both ids here.
+alexa_skill_ids = ["amzn1.ask.skill.PASTE-YOUR-SKILL-ID-HERE"]
+
+# Where "your H-E-B login expired" is sent. Strongly recommended: an expired login is a
+# handled error, so the skill keeps answering politely and nothing else tells you.
+alert_email = "PASTE-YOUR-EMAIL-HERE"
+
+# Only if the H-E-B account has several lists.
+# heb_list_id = "PASTE-LIST-ID-HERE"
+
+# Only for Gemini Spark, which needs an AI Ultra subscription. An unused public URL is
+# only an attack surface, so this stays off by default.
+# enable_mcp_url = true

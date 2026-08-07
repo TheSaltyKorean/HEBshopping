@@ -1,0 +1,13 @@
+{
+  "extends": "../tsconfig.base.json",
+  "compilerOptions": {
+    // page.evaluate() bodies are compiled here but execute in the browser, so these files
+    // legitimately need DOM types alongside Node's.
+    "lib": ["ES2023", "DOM"],
+    "noEmit": true,
+    "composite": false,
+    "declaration": false,
+    "declarationMap": false
+  },
+  "include": ["**/*.ts"]
+}

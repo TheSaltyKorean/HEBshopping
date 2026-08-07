@@ -493,6 +493,26 @@ export function homeDirFor(shell: ReturnType<typeof windowsPathFor>['shell']): s
 }
 
 /**
+ * Whether a custom `--session` directory needs no icacls fix because it is the user's own home
+ * directory (or under it) — the "nothing to do" exemption docs/setup.md already describes. The
+ * exemption is specifically about Windows ACL inheritance, so it never applies to the default
+ * `.session` path (which gets its own directory-level fix instead) or when `shell === null`
+ * (native POSIX, or a WSL mount `windowsPathFor` couldn't translate) — there, a directly measured
+ * permission failure is real evidence, not something a location heuristic should override. Pulled
+ * out as a pure function, like `isUnderOwnHomeDirectory` itself, so this composition is
+ * unit-tested instead of only reachable through `main()`.
+ */
+export function sessionAlreadySafe(
+  isDefaultSessionPath: boolean,
+  shell: ReturnType<typeof windowsPathFor>['shell'],
+  dirIcaclsPath: string,
+  home: string | null,
+): boolean {
+  if (isDefaultSessionPath || shell === null || home === null) return false;
+  return isUnderOwnHomeDirectory(dirIcaclsPath, home, shell);
+}
+
+/**
  * The decision behind `ensureCustomSessionParentReady`: whether a custom `--session` parent
  * directory needs no action — either not a Windows/WSL path `icacls` can help, or already safe
  * because it's under the user's own home directory (`isUnderOwnHomeDirectory`) — must block the
@@ -657,16 +677,11 @@ async function main(): Promise<void> {
   const trusted = ownerOnly !== null && isSessionTrusted(ownerOnly, shell);
   // A custom --session path under the user's own home profile needs no icacls fix at all — the
   // same exemption the preflight (`ensureCustomSessionParentReady`) already grants via
-  // `isUnderOwnHomeDirectory` — so it must not be told afterward to lock a directory that
-  // was already judged safe moments earlier. That reasoning is specifically about Windows ACL
-  // inheritance, though, and doesn't apply when shell is null (native POSIX, or a WSL mount
-  // windowsPathFor couldn't translate): there's no icacls to reason about there, and a directly
-  // measured `ownerOnly === false` is real evidence chmod didn't hold, not something a location
-  // heuristic should override — the same reason `ensureCustomSessionParentReady` returns early
-  // on `shell === null` rather than computing `alreadySafe` at all.
+  // `sessionAlreadySafe` — so it must not be told afterward to lock a directory that was already
+  // judged safe moments earlier.
   const dirIcaclsPath = windowsPathFor(dirname(options.sessionPath)).path;
   const home = isDefaultSessionPath || shell === null ? null : homeDirFor(shell);
-  const alreadySafe = home !== null && isUnderOwnHomeDirectory(dirIcaclsPath, home, shell);
+  const alreadySafe = sessionAlreadySafe(isDefaultSessionPath, shell, dirIcaclsPath, home);
   console.log(`\n✅ Session written to ${options.sessionPath}` + (trusted ? ' (mode 0600).' : '.'));
   if (ownerOnly === null) {
     console.log(

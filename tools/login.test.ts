@@ -18,6 +18,7 @@ const {
   isDedicatedDirectory,
   isSessionTrusted,
   isUnderOwnHomeDirectory,
+  sessionAlreadySafe,
   untrustedProfileNote,
   untrustedSessionNote,
   windowsPathFor,
@@ -454,6 +455,32 @@ describe('homeDirFor', () => {
       throw new Error('cmd.exe: command not found');
     });
     expect(homeDirFor('wsl-powershell')).toBeNull();
+  });
+});
+
+describe('sessionAlreadySafe', () => {
+  it('is safe for a custom directory under the home directory on native Windows', () => {
+    expect(sessionAlreadySafe(false, 'powershell', 'C:\\Users\\randy\\creds', 'C:\\Users\\randy')).toBe(true);
+  });
+
+  it('is safe for a custom directory under the home directory on WSL', () => {
+    expect(sessionAlreadySafe(false, 'wsl-powershell', 'C:\\Users\\randy\\creds', 'C:\\Users\\randy')).toBe(true);
+  });
+
+  it('is not safe for a custom directory outside the home directory', () => {
+    expect(sessionAlreadySafe(false, 'powershell', 'C:\\shared', 'C:\\Users\\randy')).toBe(false);
+  });
+
+  it('is never safe for the default .session path, even if it happens to sit under home', () => {
+    expect(sessionAlreadySafe(true, 'powershell', 'C:\\Users\\randy\\.session', 'C:\\Users\\randy')).toBe(false);
+  });
+
+  it('is never safe when icacls cannot help (native POSIX), even under the home directory — a directly measured permission failure must still warn', () => {
+    expect(sessionAlreadySafe(false, null, '/srv/randy/creds', '/srv/randy')).toBe(false);
+  });
+
+  it('is not safe when the home directory could not be determined', () => {
+    expect(sessionAlreadySafe(false, 'wsl-powershell', 'C:\\Users\\randy\\creds', null)).toBe(false);
   });
 });
 

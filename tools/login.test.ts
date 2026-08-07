@@ -47,6 +47,24 @@ describe('windowsPathFor', () => {
     });
   });
 
+  it('treats the older \\\\wsl$\\ alias the same as \\\\wsl.localhost\\', () => {
+    setPlatform('linux');
+    execFileSyncMock.mockReturnValue('\\\\wsl$\\Ubuntu\\path\\to\\HEBshopping\\.session\\session.json\r\n');
+    expect(windowsPathFor('/path/to/HEBshopping/.session/session.json')).toEqual({
+      path: '/path/to/HEBshopping/.session/session.json',
+      shell: null,
+    });
+  });
+
+  it('accepts a Windows-backed UNC translation, e.g. a network share mounted through DrvFS', () => {
+    setPlatform('linux');
+    execFileSyncMock.mockReturnValue('\\\\server\\share\\repo\\.session\\session.json\r\n');
+    expect(windowsPathFor('/mnt/z/repo/.session/session.json')).toEqual({
+      path: '\\\\server\\share\\repo\\.session\\session.json',
+      shell: 'wsl-powershell',
+    });
+  });
+
   it('falls back to no icacls command when wslpath is unavailable on Linux', () => {
     setPlatform('linux');
     execFileSyncMock.mockImplementation(() => {

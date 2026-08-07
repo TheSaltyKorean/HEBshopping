@@ -80,23 +80,35 @@ entirely offline, so if they pass, your install is good.
 >
 > ```powershell
 > mkdir .session, .playwright-profile
+> icacls .session /reset
 > icacls .session /inheritance:r /grant:r "${env:USERDOMAIN}\${env:USERNAME}:(OI)(CI)F"
+> icacls .playwright-profile /reset
 > icacls .playwright-profile /inheritance:r /grant:r "${env:USERDOMAIN}\${env:USERNAME}:(OI)(CI)F"
 > ```
 >
+> The `/reset` strips any explicit `Users`/`Everyone` allow ACE the directory might already
+> carry — e.g. if it was copied in with ACL preservation, or shared deliberately before you
+> read this — since `/inheritance:r` only removes *inherited* ACEs and `/grant:r` only
+> replaces the named account's own explicit grant; neither touches another trustee's explicit
+> entry on its own.
+>
 > Already ran `npm run login` before reading this? Those directories exist already and may
-> hold a session written under the old, wider ACL. Run the two `icacls` commands above
+> hold a session written under the old, wider ACL. Run the four `icacls` commands above
 > (skip `mkdir` — the directories already exist), then also re-ACL what's already inside
 > them — this is the only case that needs it:
 >
 > ```powershell
+> icacls .session /T /reset
 > icacls .session /T /inheritance:r /grant:r "${env:USERDOMAIN}\${env:USERNAME}:F"
+> icacls .playwright-profile /T /reset
 > icacls .playwright-profile /T /inheritance:r /grant:r "${env:USERDOMAIN}\${env:USERNAME}:F"
 > ```
 >
-> Do this in two calls per directory, not one `/T` with `(OI)(CI)`: those inherit flags are
-> directory-only semantics, and applying them to an existing file via `/T` silently produces
-> an empty, protected ACL — locking you out of the very file you're trying to protect.
+> Do this in separate calls per directory, not one `/T` with `(OI)(CI)`: those inherit flags
+> are directory-only semantics, and applying them to an existing file via `/T` silently
+> produces an empty, protected ACL — locking you out of the very file you're trying to
+> protect. The `/T /reset` call is what strips a stray explicit ACE from files that already
+> exist under the directory, same reason as above.
 >
 > The same applies to `captures/` if you ever run `npm run capture`, which writes raw cookie
 > jars and request bodies.

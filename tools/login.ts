@@ -75,9 +75,11 @@ const sleep = (ms: number): Promise<void> => new Promise((done) => setTimeout(do
  * translate it via `wslpath` before printing a command meant to run in PowerShell.
  *
  * `wslpath` succeeds for *any* path, including one on WSL's own native filesystem — there it
- * translates to a `\\wsl.localhost\...` UNC alias rather than a drive letter. That's not a
- * DrvFS/NTFS mount, so it isn't Windows-backed and `icacls` doesn't apply; treat it the same
- * as a `wslpath` failure.
+ * translates to a `\\wsl.localhost\...` (or the older `\\wsl$\...`) UNC alias rather than a
+ * drive letter. That's not a DrvFS/NTFS mount, so it isn't Windows-backed and `icacls`
+ * doesn't apply; treat it the same as a `wslpath` failure. Any other UNC path — e.g. a
+ * Windows-backed network share mounted through DrvFS — is a real `icacls` target and should
+ * be accepted, same as a drive letter.
  *
  * `shell` says where that command has to be run: `'powershell'` on native Windows,
  * `'wsl-powershell'` on WSL when the path actually resolves onto a Windows drive, or `null`
@@ -90,7 +92,8 @@ export function windowsPathFor(path: string): { path: string; shell: 'powershell
   if (process.platform !== 'linux') return { path, shell: null };
   try {
     const winPath = execFileSync('wslpath', ['-w', path], { encoding: 'utf8' }).trim();
-    if (!/^[A-Za-z]:\\/.test(winPath)) return { path, shell: null };
+    if (/^\\\\wsl(\.localhost|\$)\\/i.test(winPath)) return { path, shell: null };
+    if (!/^([A-Za-z]:\\|\\\\)/.test(winPath)) return { path, shell: null };
     return { path: winPath, shell: 'wsl-powershell' };
   } catch {
     return { path, shell: null };
@@ -277,23 +280,32 @@ async function main(): Promise<void> {
         '   locking the freshly-renamed file). Treat it as unverified and check manually that\n' +
         "   it isn't readable by other accounts before trusting it.",
     );
-  } else if (!trusted) {
+  }
+  if (!trusted) {
     if (shell === null) {
-      console.log(
-        "   This filesystem didn't enforce the owner-only permission, and it isn't a Windows\n" +
-          "   filesystem `icacls` can secure either — for example a CIFS, FAT, or other\n" +
-          '   permissionless mount. Move the credential to a permission-capable filesystem, or\n' +
-          "   restrict that mount's ACLs directly; there is no command this tool can print here.",
-      );
+      if (ownerOnly === false) {
+        console.log(
+          "   This filesystem didn't enforce the owner-only permission, and it isn't a Windows\n" +
+            "   filesystem `icacls` can secure either — for example a CIFS, FAT, or other\n" +
+            '   permissionless mount. Move the credential to a permission-capable filesystem, or\n' +
+            "   restrict that mount's ACLs directly; there is no command this tool can print here.\n" +
+            `   The same applies to ${PROFILE_DIR} — the logged-in browser profile from this\n` +
+            "   same login. It isn't relocated by --session, so moving only this file still\n" +
+            '   leaves that credential exposed on the mount.',
+        );
+      }
     } else {
       console.log(
-        (ownerOnly
+        (ownerOnly === true
           ? "   This filesystem reports the owner-only permission, but a WSL mount of a Windows\n" +
             '   drive can accept that chmod as metadata while the underlying NTFS ACL still\n' +
             "   grants other accounts access — the mode bit alone isn't proof here."
-          : "   This filesystem didn't enforce the owner-only permission, so the file is only as\n" +
+          : ownerOnly === false
+          ? "   This filesystem didn't enforce the owner-only permission, so the file is only as\n" +
             "   protected as the OS ACL it inherits — commonly the case on Windows, and on some\n" +
-            '   WSL mounts of a Windows drive.') +
+            '   WSL mounts of a Windows drive.'
+          : "   This file's permissions could not be verified, so treat it as unprotected until\n" +
+            '   you confirm otherwise.') +
           ' Restrict just this file (safe even if its\n' +
           "   directory holds other files you don't want touched), from a Windows PowerShell\n" +
           '   prompt' +

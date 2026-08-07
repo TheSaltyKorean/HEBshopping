@@ -295,39 +295,35 @@ async function worksAgainstHeb(candidate: SessionState): Promise<boolean> {
 }
 
 /**
- * Whether `dir` holds nothing but `expectedEntry` (and, when `dir` is the default `.session`
- * directory, the default session file too) — or doesn't exist yet at all. Gates the custom-
- * `--session` icacls remediation: locking a directory that holds anything else would strip
- * every other account's access to files this tool has no business touching, so that fix must
- * only ever be offered for a directory the session file has entirely to itself. The default
- * `.session` directory is the one exception: `docs/setup.md` already has the reader lock it
- * down before Step 5, covering every file this tool writes there, so a custom `--session` path
- * pointed inside it (e.g. `.session/second.json`, alongside the default `session.json`) isn't
- * sharing the directory with a foreign file. A directory that doesn't exist yet — or exists
- * but is empty — is trivially dedicated, since it will be created with nothing else in it;
- * that's what lets the preflight in `main()` call this *before* `store.putSession()` has
- * written anything. Any other read failure (e.g. permission denied) is treated as "not
- * dedicated" — the safer assumption when it can't be verified.
+ * Whether `dir` holds nothing but `expectedEntry` — or doesn't exist yet at all. Gates the
+ * custom-`--session` icacls remediation: locking a directory that holds anything else would
+ * strip every other account's access to files this tool has no business touching, so that fix
+ * must only ever be offered for a directory the session file has entirely to itself. The
+ * default `.session` directory is the one exception, and unconditionally so: `docs/setup.md`
+ * already has the reader lock that whole directory down before Step 5, so nothing in it is ever
+ * a foreign file sharing space with this tool — not a second `--session .session/other.json`
+ * file, not a stray leftover — and its contents don't need enumerating to know it's dedicated.
+ * A directory that doesn't exist yet — or exists but is empty — is trivially dedicated, since it
+ * will be created with nothing else in it; that's what lets the preflight in `main()` call this
+ * *before* `store.putSession()` has written anything. Any other read failure (e.g. permission
+ * denied) is treated as "not dedicated" — the safer assumption when it can't be verified.
  *
- * `shell` decides whether the default-directory comparison is case-insensitive: both native
- * Windows (`'powershell'`) and WSL on a Windows drive (`'wsl-powershell'`) normally sit on a
- * case-insensitive filesystem, so `.Session` and `.session` are usually the same directory on
- * disk — deriving this from `process.platform` alone missed the WSL case, since WSL reports
- * `linux` even when `windowsPathFor` has already confirmed it's on a DrvFS mount. Entry names
- * inside the directory are verified with `sameFileCaseFolded` rather than assumed
- * case-insensitive outright: NTFS/DrvFS can enable per-directory case sensitivity (a real WSL
- * feature), where `Session.json` and `session.json` are two distinct files despite sitting on
- * an otherwise "case-insensitive" shell.
+ * `shell` decides whether the default-directory comparison, and the non-default entry-name
+ * comparisons below, are case-insensitive: both native Windows (`'powershell'`) and WSL on a
+ * Windows drive (`'wsl-powershell'`) normally sit on a case-insensitive filesystem, so
+ * `.Session` and `.session` are usually the same directory on disk — deriving this from
+ * `process.platform` alone missed the WSL case, since WSL reports `linux` even when
+ * `windowsPathFor` has already confirmed it's on a DrvFS mount. Entry names inside a non-default
+ * directory are verified with `sameFileCaseFolded` rather than assumed case-insensitive
+ * outright: NTFS/DrvFS can enable per-directory case sensitivity (a real WSL feature), where
+ * `Session.json` and `session.json` are two distinct files despite sitting on an otherwise
+ * "case-insensitive" shell.
  */
 export async function isDedicatedDirectory(
   dir: string,
   expectedEntry: string,
   shell: ReturnType<typeof windowsPathFor>['shell'],
 ): Promise<boolean> {
-  // FileStore.putSession writes `<path>.tmp` then renames it onto `<path>` (file-store.ts) —
-  // an interrupted write leaves that `.tmp` sibling behind. It's this tool's own leftover,
-  // not evidence of a shared directory, so it's allowed alongside the file it belongs to.
-  const allowed = new Set([expectedEntry, `${expectedEntry}.tmp`]);
   const resolvedDir = resolve(dir);
   // Canonicalized to match `dir`, which both callers resolve through `realDir` before passing
   // it here. `DEFAULT_SESSION_PATH` resolves against a `process.cwd()` that keeps whatever
@@ -339,11 +335,12 @@ export async function isDedicatedDirectory(
   const sameAsDefaultDir = caseInsensitive
     ? resolvedDir.toLowerCase() === resolvedDefaultDir.toLowerCase()
     : resolvedDir === resolvedDefaultDir;
-  if (sameAsDefaultDir) {
-    const defaultEntry = basename(DEFAULT_SESSION_PATH);
-    allowed.add(defaultEntry);
-    allowed.add(`${defaultEntry}.tmp`);
-  }
+  if (sameAsDefaultDir) return true;
+
+  // FileStore.putSession writes `<path>.tmp` then renames it onto `<path>` (file-store.ts) —
+  // an interrupted write leaves that `.tmp` sibling behind. It's this tool's own leftover,
+  // not evidence of a shared directory, so it's allowed alongside the file it belongs to.
+  const allowed = new Set([expectedEntry, `${expectedEntry}.tmp`]);
   try {
     const entries = await readdir(dir);
     for (const entry of entries) {

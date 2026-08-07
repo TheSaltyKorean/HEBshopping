@@ -218,23 +218,19 @@ describe('isDedicatedDirectory', () => {
     await expect(isDedicatedDirectory('/some/dir', 'session.json', null)).resolves.toBe(false);
   });
 
-  it('treats the default .session directory as dedicated to a second session file too', async () => {
-    vi.mocked(readdir).mockResolvedValueOnce(['session.json'] as never);
+  it('treats the default .session directory as dedicated regardless of what else is in it', async () => {
+    // docs/setup.md already has the reader lock the whole directory down before Step 5, so
+    // nothing already there — a second --session file, a stray session.json.bak, an unrelated
+    // desktop.ini — is evidence of sharing with something outside this tool's business. No
+    // readdir mock needed: the default directory is dedicated unconditionally, without looking.
     await expect(isDedicatedDirectory(resolve('.session'), 'second.json', 'powershell')).resolves.toBe(true);
   });
 
-  it('still rejects a directory holding an unrelated file, even if it is the default .session directory', async () => {
-    vi.mocked(readdir).mockResolvedValueOnce(['session.json', 'other.txt'] as never);
-    await expect(isDedicatedDirectory(resolve('.session'), 'second.json', 'powershell')).resolves.toBe(false);
-  });
-
   it('recognizes the default .session directory case-insensitively on native Windows', async () => {
-    vi.mocked(readdir).mockResolvedValueOnce(['session.json'] as never);
     await expect(isDedicatedDirectory(resolve('.SESSION'), 'second.json', 'powershell')).resolves.toBe(true);
   });
 
   it('recognizes the default .session directory case-insensitively on WSL over a Windows drive', async () => {
-    vi.mocked(readdir).mockResolvedValueOnce(['session.json'] as never);
     await expect(isDedicatedDirectory(resolve('.SESSION'), 'second.json', 'wsl-powershell')).resolves.toBe(true);
   });
 
@@ -298,11 +294,6 @@ describe('isDedicatedDirectory', () => {
     }
   });
 
-  it('tolerates a stray session.json.tmp in the default .session directory when checking a second file', async () => {
-    vi.mocked(readdir).mockResolvedValueOnce(['session.json.tmp', 'second.json'] as never);
-    await expect(isDedicatedDirectory(resolve('.session'), 'second.json', 'powershell')).resolves.toBe(true);
-  });
-
   it('still recognizes the default .session directory when the repo is reached through a junction', async () => {
     // Both callers pass a realDir-resolved `dir`, while DEFAULT_SESSION_PATH resolves against a
     // cwd that still holds the junction. Comparing those lexically made the default directory
@@ -310,7 +301,6 @@ describe('isDedicatedDirectory', () => {
     // default-directory case here passes a lexical path, which is why none of them caught it.
     const realSessionDir = resolve('/real-target/HEBshopping/.session');
     vi.mocked(realpath).mockResolvedValueOnce(realSessionDir as never);
-    vi.mocked(readdir).mockResolvedValueOnce(['session.json'] as never);
     await expect(isDedicatedDirectory(realSessionDir, 'second.json', 'powershell')).resolves.toBe(true);
   });
 });

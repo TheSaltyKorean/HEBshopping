@@ -349,13 +349,11 @@ describe('isDedicatedDirectory', () => {
   });
 
   it('recognizes an existing entry that only differs in case on a case-insensitive filesystem', async () => {
-    const dir = await mkdtemp(join(tmpdir(), 'heb-dedicated-case-'));
-    try {
-      await writeFile(join(dir, 'Session.json'), '{}');
-      await expect(isDedicatedDirectory(dir, 'session.json', 'powershell')).resolves.toBe(true);
-    } finally {
-      await rm(dir, { recursive: true, force: true });
-    }
+    vi.mocked(readdir).mockResolvedValueOnce(['Session.json'] as never);
+    vi.mocked(stat)
+      .mockResolvedValueOnce({ dev: 1, ino: 111 } as never) // Session.json
+      .mockResolvedValueOnce({ dev: 1, ino: 111 } as never); // session.json — same file
+    await expect(isDedicatedDirectory('/some/dir', 'session.json', 'powershell')).resolves.toBe(true);
   });
 
   it('does not conflate two distinct files that only differ in case, e.g. a directory with per-directory case sensitivity enabled', async () => {

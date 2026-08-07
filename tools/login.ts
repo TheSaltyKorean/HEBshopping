@@ -445,13 +445,14 @@ export function isUnderOwnHomeDirectory(dir: string, home: string): boolean {
  * directory needs no action — either not a Windows/WSL path `icacls` can help, or already safe
  * because it's under the user's own home directory (`isUnderOwnHomeDirectory`) — must block the
  * login outright (shared with other files, and not already safe — there's no ACL fix to offer
- * without taking away access that isn't this tool's to take), or must block until the reader
- * locks it (dedicated, but `stat()` can never confirm from here that it's already locked down,
- * and the very first write can land before a human has had a chance to run the commands).
- * Pulled out as a pure function — the same pattern as `untrustedSessionNote`/
- * `untrustedProfileNote` — so this choice between silently continuing and hard-aborting via
- * `process.exit(1)` for one of two reasons is unit-tested instead of only reachable through
- * `main()`.
+ * without taking away access that isn't this tool's to take), or just gets a reminder (dedicated,
+ * but `stat()` can never confirm from here that it's already locked down). `'lock'` can never
+ * turn into a hard block: since Windows/WSL can't verify an ACL fix actually landed, no rerun
+ * could ever prove it and clear a block, so blocking here would be a permanent dead end rather
+ * than a real gate — unlike `'blocked'`, which the reader can escape by relocating to a
+ * directory that genuinely is dedicated. Pulled out as a pure function — the same pattern as
+ * `untrustedSessionNote`/`untrustedProfileNote` — so this choice is unit-tested instead of only
+ * reachable through `main()`.
  */
 export function customSessionParentAction(
   shell: ReturnType<typeof windowsPathFor>['shell'],
@@ -466,11 +467,13 @@ export function customSessionParentAction(
  * Checked before login starts, not just after writing. `store.putSession()` persists the
  * credential as soon as a usable session shows up, so a check that only ran afterward — the
  * prior shape of this code — meant the very first write into a shared or unlocked Windows/WSL
- * directory was already exposed by the time the user ever saw an instruction about it. For the
- * same reason, the "dedicated but not confirmed locked" case blocks too, rather than just
- * printing the commands and continuing: an already-authenticated persistent profile can produce
- * a usable session — and therefore a write — within moments of the browser opening, faster than
- * a human can alt-tab to PowerShell and run them.
+ * directory was already exposed by the time the user ever saw an instruction about it.
+ *
+ * The "dedicated but not confirmed locked" case only warns and lets login continue, rather than
+ * blocking: `stat()` can never confirm an ACL fix already ran (see `isSessionTrusted`), so no
+ * rerun could ever earn its way past a hard block here — that would just be a permanent dead
+ * end, not a real gate. The shared-directory case below can still block, because relocating to
+ * a genuinely dedicated directory is a real, checkable way out.
  */
 async function ensureCustomSessionParentReady(sessionPath: string): Promise<void> {
   const dir = dirname(sessionPath);
@@ -496,15 +499,14 @@ async function ensureCustomSessionParentReady(sessionPath: string): Promise<void
   }
 
   const wslSuffix = shell === 'wsl-powershell' ? ' (not this WSL shell)' : '';
-  console.error(
-    `\n⛔ ${dir} isn't yet confirmed to be locked down for Windows access (stat() can't\n` +
-      "   confirm an ACL fix already ran; see isSessionTrusted). Lock it now, from a Windows\n" +
-      `   PowerShell prompt${wslSuffix}, then run this command again:\n` +
+  console.log(
+    `\nBefore logging in — ${dir} isn't yet known to be locked down for Windows access\n` +
+      "   (stat() can't confirm an ACL fix already ran; see isSessionTrusted). If you haven't\n" +
+      `   already, lock it now, from a Windows PowerShell prompt${wslSuffix}:\n` +
       lockDirectoryCommand(dirIcaclsPath) +
       "   Locking it first means this login's write inherits a safe ACL from the moment it\n" +
       '   happens, instead of landing under whatever this directory currently inherits.',
   );
-  process.exit(1);
 }
 
 async function main(): Promise<void> {
@@ -600,6 +602,11 @@ async function main(): Promise<void> {
   const ownerOnly = await checkOwnerOnly(options.sessionPath);
   const { path: icaclsPath, shell } = windowsPathFor(options.sessionPath);
   const trusted = ownerOnly !== null && isSessionTrusted(ownerOnly, shell);
+  // A custom --session path under the user's own home profile needs no icacls fix at all — the
+  // same exemption the preflight (`ensureCustomSessionParentReady`) already grants via
+  // `isUnderOwnHomeDirectory` — so it must not be told afterward to lock a directory that
+  // was already judged safe moments earlier.
+  const alreadySafe = !isDefaultSessionPath && isUnderOwnHomeDirectory(dirname(options.sessionPath), homedir());
   console.log(`\n✅ Session written to ${options.sessionPath}` + (trusted ? ' (mode 0600).' : '.'));
   if (ownerOnly === null) {
     console.log(
@@ -608,22 +615,22 @@ async function main(): Promise<void> {
         "   it isn't readable by other accounts before trusting it.",
     );
   }
-  if (!trusted) {
+  if (trusted || alreadySafe) {
+    // A trusted (or already-safe) --session path only proves that file's own filesystem is
+    // safe. PROFILE_DIR is a second live credential (the logged-in browser profile) that
+    // always lives in the repo and can sit on a different, less-trusted mount than a custom
+    // session path — so this must not silently vouch for it too.
+    const profileOwnerOnly = await checkOwnerOnly(PROFILE_DIR);
+    const profileShell = windowsPathFor(PROFILE_DIR).shell;
+    const profileNote = untrustedProfileNote(profileOwnerOnly, profileShell);
+    if (profileNote !== null) console.log(profileNote);
+  } else {
     const dirIcaclsPath = windowsPathFor(dirname(options.sessionPath)).path;
     const dedicated =
       isDefaultSessionPath ||
       (await isDedicatedDirectory(dirname(options.sessionPath), basename(options.sessionPath)));
     const note = untrustedSessionNote(ownerOnly, shell, icaclsPath, isDefaultSessionPath, dirIcaclsPath, dedicated);
     if (note !== null) console.log(note);
-  } else {
-    // A trusted --session path only proves that file's own filesystem is safe. PROFILE_DIR
-    // is a second live credential (the logged-in browser profile) that always lives in the
-    // repo and can sit on a different, less-trusted mount than a custom session path — so
-    // trusting the session file must not silently vouch for it too.
-    const profileOwnerOnly = await checkOwnerOnly(PROFILE_DIR);
-    const profileShell = windowsPathFor(PROFILE_DIR).shell;
-    const profileNote = untrustedProfileNote(profileOwnerOnly, profileShell);
-    if (profileNote !== null) console.log(profileNote);
   }
   describe(session);
 

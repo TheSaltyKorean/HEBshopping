@@ -13,6 +13,7 @@ vi.mock('node:fs/promises', async (importOriginal) => {
 
 const {
   clearDirectoryContents,
+  customSessionParentAction,
   isDedicatedDirectory,
   isSessionTrusted,
   untrustedProfileNote,
@@ -312,6 +313,29 @@ describe('isDedicatedDirectory', () => {
     const error = Object.assign(new Error('permission denied'), { code: 'EACCES' });
     vi.mocked(readdir).mockRejectedValueOnce(error);
     await expect(isDedicatedDirectory('/some/dir', 'session.json')).resolves.toBe(false);
+  });
+});
+
+describe('customSessionParentAction', () => {
+  it('skips a path icacls cannot help with, regardless of whether it is dedicated', () => {
+    expect(customSessionParentAction(null, true)).toBe('skip');
+    expect(customSessionParentAction(null, false)).toBe('skip');
+  });
+
+  it('blocks a shared directory on native Windows', () => {
+    expect(customSessionParentAction('powershell', false)).toBe('blocked');
+  });
+
+  it('blocks a shared directory on WSL', () => {
+    expect(customSessionParentAction('wsl-powershell', false)).toBe('blocked');
+  });
+
+  it('only reminds about a dedicated directory on native Windows', () => {
+    expect(customSessionParentAction('powershell', true)).toBe('reminder');
+  });
+
+  it('only reminds about a dedicated directory on WSL', () => {
+    expect(customSessionParentAction('wsl-powershell', true)).toBe('reminder');
   });
 });
 

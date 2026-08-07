@@ -412,24 +412,36 @@ export async function clearDirectoryContents(dir: string): Promise<void> {
 }
 
 /**
+ * The decision behind `ensureCustomSessionParentReady`: whether a custom `--session` parent
+ * directory needs no action (not a Windows/WSL path `icacls` can help), must block the login
+ * outright (shared with other files — there's no ACL fix to offer without taking away access
+ * that isn't this tool's to take), or just gets a reminder (dedicated, but `stat()` can never
+ * confirm from here that it's already locked down). Pulled out as a pure function — the same
+ * pattern as `untrustedSessionNote`/`untrustedProfileNote` — so this choice between silently
+ * continuing, hard-aborting via `process.exit(1)`, and printing a reminder is unit-tested
+ * instead of only reachable through `main()`.
+ */
+export function customSessionParentAction(
+  shell: ReturnType<typeof windowsPathFor>['shell'],
+  dedicated: boolean,
+): 'skip' | 'blocked' | 'reminder' {
+  if (shell === null) return 'skip';
+  return dedicated ? 'reminder' : 'blocked';
+}
+
+/**
  * Checked before login starts, not just after writing. `store.putSession()` persists the
  * credential as soon as a usable session shows up, so a check that only ran afterward — the
  * prior shape of this code — meant the very first write into a shared or unlocked Windows/WSL
  * directory was already exposed by the time the user ever saw an instruction about it.
- *
- * A directory shared with other files is refused outright: there's no ACL fix to offer for
- * it (locking it would strip access this tool has no business taking away), so there's no
- * point letting login proceed only to say so afterward. A dedicated directory only gets a
- * reminder, not a hard requirement — Windows never lets `stat()` confirm an ACL is actually
- * locked down (see `isSessionTrusted`), so a hard requirement here would block every
- * native-Windows login, not just the unlocked ones.
  */
 async function ensureCustomSessionParentReady(sessionPath: string): Promise<void> {
   const dir = dirname(sessionPath);
   const { path: dirIcaclsPath, shell } = windowsPathFor(dir);
   if (shell === null) return;
 
-  if (!(await isDedicatedDirectory(dir, basename(sessionPath)))) {
+  const dedicated = await isDedicatedDirectory(dir, basename(sessionPath));
+  if (customSessionParentAction(shell, dedicated) === 'blocked') {
     console.error(
       `\n⛔ ${dir} holds other files, so this tool won't write a live credential there —\n` +
         "   locking it down would strip access that isn't this tool's to take away. Point\n" +

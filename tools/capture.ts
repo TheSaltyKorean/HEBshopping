@@ -17,36 +17,10 @@
  */
 
 import type { BrowserContext } from 'playwright';
-import { chmod, mkdir, writeFile } from 'node:fs/promises';
+import { mkdir } from 'node:fs/promises';
 import { resolve } from 'node:path';
 import { filterHebStorageState, isGraphqlUrl, type StorageStateLike } from '@heb/core';
-import { launchBrowser } from './lib/browser.js';
-
-/**
- * Owner-only. These files hold the live H-E-B cookie jar and raw request/response bodies
- * for an account with a saved payment method; the default umask would commonly make them
- * world-readable, which on a shared machine is a real exposure regardless of .gitignore.
- */
-const SECRET_FILE_MODE = 0o600;
-
-/**
- * Write a file that only its owner can read, even if it already existed.
- *
- * `writeFile`'s `mode` applies only when the file is *created*. Rewriting an existing inode
- * leaves whatever permissions it already had — so a capture restored from elsewhere, or
- * created before this rule existed, keeps a live H-E-B cookie jar world-readable while the
- * code claims otherwise. The chmod is the part that actually holds the guarantee.
- *
- * On Windows it holds nothing: Node maps `chmod` onto the read-only attribute alone, so
- * these files get whatever ACL their directory hands them. The name of this function is a
- * POSIX promise, and saying so here is cheaper than someone trusting it on the wrong
- * platform — see docs/setup.md.
- */
-async function writeSecret(path: string, contents: string): Promise<void> {
-  await writeFile(path, contents, { mode: SECRET_FILE_MODE });
-  await chmod(path, SECRET_FILE_MODE);
-}
-
+import { launchBrowser, writeSecret } from './lib/browser.js';
 
 const CAPTURE_DIR = resolve('captures');
 const START_URL = 'https://www.heb.com/shopping-list';

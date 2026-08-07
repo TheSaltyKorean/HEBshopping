@@ -303,8 +303,10 @@ export function untrustedProfileNote(
     "   and wasn't covered by the check above";
   // A permissionless mount (CIFS, FAT, ...) with no Windows/WSL shell to run icacls from
   // isn't fixed by the Windows note this otherwise points to — same case `untrustedSessionNote`
-  // handles for the session file itself.
-  if (profileShell === null && profileOwnerOnly === false) {
+  // handles for the session file itself. When the mode couldn't even be verified there either,
+  // there's no Windows remediation to point to and nothing more useful to say than the intro.
+  if (profileShell === null) {
+    if (profileOwnerOnly !== false) return null;
     return (
       intro +
       " — this filesystem didn't enforce the owner-only\n" +

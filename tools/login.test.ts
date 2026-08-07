@@ -195,4 +195,8 @@ describe('untrustedProfileNote', () => {
     expect(note).toContain('there is no command this tool can print here');
     expect(note).not.toContain('the Windows note above Step 5');
   });
+
+  it('has nothing to add on native POSIX when the profile mode could not be verified', () => {
+    expect(untrustedProfileNote(null, null)).toBeNull();
+  });
 });

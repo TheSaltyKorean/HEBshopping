@@ -19,6 +19,7 @@
 import { execFileSync } from 'node:child_process';
 import { rm, stat } from 'node:fs/promises';
 import { resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import {
   FileStore,
   HebClient,
@@ -79,7 +80,7 @@ const sleep = (ms: number): Promise<void> => new Promise((done) => setTimeout(do
  * platform `icacls` can't help (native Linux/macOS, including permissionless mounts like
  * CIFS or FAT) where the caller should not print an `icacls` command at all.
  */
-function windowsPathFor(path: string): { path: string; shell: 'powershell' | 'wsl-powershell' | null } {
+export function windowsPathFor(path: string): { path: string; shell: 'powershell' | 'wsl-powershell' | null } {
   if (process.platform === 'win32') return { path, shell: 'powershell' };
   if (process.platform !== 'linux') return { path, shell: null };
   try {
@@ -90,6 +91,15 @@ function windowsPathFor(path: string): { path: string; shell: 'powershell' | 'ws
   } catch {
     return { path, shell: null };
   }
+}
+
+/**
+ * On WSL, `chmod`/`stat` reporting 0600 isn't proof either: a DrvFS mount with the `metadata`
+ * option can round-trip that mode bit while the underlying NTFS ACL still grants every account
+ * on the machine access, so WSL can never fully trust the mode.
+ */
+export function isSessionTrusted(ownerOnly: boolean, shell: ReturnType<typeof windowsPathFor>['shell']): boolean {
+  return ownerOnly && shell !== 'wsl-powershell';
 }
 
 /** Days until a cookie dies, or null for a session cookie. */
@@ -246,10 +256,7 @@ async function main(): Promise<void> {
   // like Windows does, so check the mode `putSession` actually produced.
   const ownerOnly = ((await stat(options.sessionPath)).mode & 0o077) === 0;
   const { path: icaclsPath, shell } = windowsPathFor(options.sessionPath);
-  // On WSL, `chmod`/`stat` reporting 0600 isn't proof either: a DrvFS mount with the
-  // `metadata` option can round-trip that mode bit while the underlying NTFS ACL still
-  // grants every account on the machine access, so WSL can never fully trust the mode.
-  const trusted = ownerOnly && shell !== 'wsl-powershell';
+  const trusted = isSessionTrusted(ownerOnly, shell);
   console.log(`\n✅ Session written to ${options.sessionPath}` + (trusted ? ' (mode 0600).' : '.'));
   if (!trusted) {
     if (shell === null) {
@@ -315,7 +322,11 @@ async function main(): Promise<void> {
   await context.close().catch(() => {});
 }
 
-main().catch((error: unknown) => {
-  console.error(error);
-  process.exit(1);
-});
+// Guarded so the test suite can import the pure helpers above (`windowsPathFor`,
+// `isSessionTrusted`) without launching a real browser and waiting on a human to log in.
+if (process.argv[1] !== undefined && fileURLToPath(import.meta.url) === resolve(process.argv[1])) {
+  main().catch((error: unknown) => {
+    console.error(error);
+    process.exit(1);
+  });
+}

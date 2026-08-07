@@ -55,11 +55,11 @@ Confirm it's sound before going further:
 npm test
 ```
 
-Expected: every file passes. On Windows, one test reports as skipped — it checks a
-POSIX-only file permission bit that Windows doesn't have — so don't expect "nothing
-skipped" there; match on `passed` instead. The counts grow as the project does, so match
-on `passed` rather than a number. These run entirely offline, so if they pass, your
-install is good.
+Expected: every file passes. On Windows, and on some WSL mounts of a Windows drive, one
+test reports as skipped — it checks a POSIX-only file permission bit that isn't enforced
+there — so don't expect "nothing skipped" in those cases; match on `passed` instead. The
+counts grow as the project does, so match on `passed` rather than a number. These run
+entirely offline, so if they pass, your install is good.
 
 ---
 

@@ -18,7 +18,7 @@
 
 import { execFileSync } from 'node:child_process';
 import { rm, stat } from 'node:fs/promises';
-import { resolve } from 'node:path';
+import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
   FileStore,
@@ -117,13 +117,19 @@ export function isSessionTrusted(ownerOnly: boolean, shell: ReturnType<typeof wi
  * printed the icacls hint even on Windows/WSL, a real regression a test would have caught.
  *
  * `isDefaultSessionPath` scopes the ".session directory" pointer to readers who are actually
- * using it — a `--session <custom path>` user isn't covered by that directory-wide fix.
+ * using it. A `--session <custom path>` user isn't covered by that directory-wide fix, and a
+ * fix applied only to their file wouldn't last anyway — the next login replaces it with a
+ * fresh temp file that inherits the *directory's* ACL, not the file's — so `dirIcaclsPath`
+ * (the icacls-ready form of that file's parent directory) lets the custom-path case be told
+ * to lock the directory instead, the same durable fix the default `.session` path already
+ * gets from docs/setup.md.
  */
 export function untrustedSessionNote(
   ownerOnly: boolean | null,
   shell: ReturnType<typeof windowsPathFor>['shell'],
   icaclsPath: string,
   isDefaultSessionPath: boolean,
+  dirIcaclsPath: string,
 ): string | null {
   if (shell === null) {
     if (ownerOnly !== false) return null;
@@ -138,8 +144,8 @@ export function untrustedSessionNote(
     );
   }
 
-  return (
-    (ownerOnly === true
+  const reason =
+    ownerOnly === true
       ? "   This filesystem reports the owner-only permission, but a WSL mount of a Windows\n" +
         '   drive can accept that chmod as metadata while the underlying NTFS ACL still\n' +
         "   grants other accounts access — the mode bit alone isn't proof here."
@@ -148,26 +154,50 @@ export function untrustedSessionNote(
         "   protected as the OS ACL it inherits — commonly the case on Windows, and on some\n" +
         '   WSL mounts of a Windows drive.'
       : "   This file's permissions could not be verified, so treat it as unprotected until\n" +
-        '   you confirm otherwise.') +
-    ' Restrict just this file (safe even if its\n' +
-    "   directory holds other files you don't want touched), from a Windows PowerShell\n" +
-    '   prompt' +
-    (shell === 'wsl-powershell' ? ' (not this WSL shell)' : '') +
-    ':\n' +
-    `   icacls '${icaclsPath.replace(/'/g, "''")}' /reset\n` +
-    `   icacls '${icaclsPath.replace(/'/g, "''")}' /inheritance:r /grant:r "\${env:USERDOMAIN}\\\${env:USERNAME}:F"\n` +
-    '   Every login replaces this file (writes a temp file, then renames it over the\n' +
-    "   old one), and the replacement inherits the directory's ACL rather than the file\n" +
-    '   you just locked — so re-run that command after every login, not just the first.' +
-    (isDefaultSessionPath
-      ? '\n   For the default .session directory, see the Windows note above Step 5 in\n' +
-        '   docs/setup.md instead: locking the directory protects every future login\n' +
-        "   automatically. The same applies to .playwright-profile, except `--switch`\n" +
-        '   recreates it under the parent ACL — re-apply that fix after switching accounts.'
-      : `\n   ${PROFILE_DIR} holds a live logged-in browser profile from this same login.\n` +
-        "   It isn't relocated by --session, so it stays exposed under its inherited ACL\n" +
-        '   even after you lock this file — see the Windows note above Step 5 in\n' +
-        '   docs/setup.md to restrict it too.')
+        '   you confirm otherwise.';
+  const wslSuffix = shell === 'wsl-powershell' ? ' (not this WSL shell)' : '';
+  const quote = (path: string): string => `'${path.replace(/'/g, "''")}'`;
+  const fileFix =
+    `   icacls ${quote(icaclsPath)} /reset\n` +
+    `   icacls ${quote(icaclsPath)} /inheritance:r /grant:r "\${env:USERDOMAIN}\\\${env:USERNAME}:F"\n`;
+
+  if (isDefaultSessionPath) {
+    return (
+      reason +
+      ' Restrict just this file (safe even if its\n' +
+      "   directory holds other files you don't want touched), from a Windows PowerShell\n" +
+      `   prompt${wslSuffix}:\n` +
+      fileFix +
+      '   Every login replaces this file (writes a temp file, then renames it over the\n' +
+      "   old one), and the replacement inherits the directory's ACL rather than the file\n" +
+      '   you just locked — so re-run that command after every login, not just the first.\n' +
+      '   For the default .session directory, see the Windows note above Step 5 in\n' +
+      '   docs/setup.md instead: locking the directory protects every future login\n' +
+      "   automatically. The same applies to .playwright-profile, except `--switch`\n" +
+      '   recreates it under the parent ACL — re-apply that fix after switching accounts.'
+    );
+  }
+
+  // A per-file fix here would be undone by the very next login (the replacement temp file
+  // inherits the directory's ACL, not the file's) before the user ever gets a chance to
+  // re-run it — presenting that as the remedy leaves the file briefly exposed on every
+  // single login. Lock the directory instead, so future writes inherit safety for free.
+  return (
+    reason +
+    ' A fix on just this file would not last — the next\n' +
+    "   login replaces it with a fresh temp file that inherits its directory's ACL, not\n" +
+    "   the file's. Lock the directory that holds it instead (safe even if it holds other\n" +
+    "   files you don't want touched — this only changes what *future* files inherit),\n" +
+    `   from a Windows PowerShell prompt${wslSuffix}:\n` +
+    `   icacls ${quote(dirIcaclsPath)} /reset\n` +
+    `   icacls ${quote(dirIcaclsPath)} /inheritance:r /grant:r "\${env:USERDOMAIN}\\\${env:USERNAME}:(OI)(CI)F"\n` +
+    '   That protects every future login automatically. It leaves the file this run\n' +
+    '   already wrote under the old ACL though, so fix that one file too, once:\n' +
+    fileFix +
+    `   ${PROFILE_DIR} holds a live logged-in browser profile from this same login.\n` +
+    "   It isn't relocated by --session, so it stays exposed under its inherited ACL\n" +
+    '   even after you lock this file — see the Windows note above Step 5 in\n' +
+    '   docs/setup.md to restrict it too.'
   );
 }
 
@@ -239,6 +269,15 @@ async function worksAgainstHeb(candidate: SessionState): Promise<boolean> {
     return data.getShoppingListsV2?.__typename === 'ShoppingListsWithHeaderPageV2';
   } catch {
     return false;
+  }
+}
+
+/** Owner-only mode on POSIX, or `null` when it can't be determined (missing, or stat failed). */
+async function checkOwnerOnly(path: string): Promise<boolean | null> {
+  try {
+    return ((await stat(path)).mode & 0o077) === 0;
+  } catch {
+    return null;
   }
 }
 
@@ -327,12 +366,7 @@ async function main(): Promise<void> {
   // The credential is already durably written by this point (temp-file-then-rename), so a
   // stat() failure here — e.g. AV briefly locking the freshly-renamed file — must not be
   // reported as a failed login; fall back to the plain success line instead.
-  let ownerOnly: boolean | null;
-  try {
-    ownerOnly = ((await stat(options.sessionPath)).mode & 0o077) === 0;
-  } catch {
-    ownerOnly = null;
-  }
+  const ownerOnly = await checkOwnerOnly(options.sessionPath);
   const { path: icaclsPath, shell } = windowsPathFor(options.sessionPath);
   const trusted = ownerOnly !== null && isSessionTrusted(ownerOnly, shell);
   console.log(`\n✅ Session written to ${options.sessionPath}` + (trusted ? ' (mode 0600).' : '.'));
@@ -345,8 +379,23 @@ async function main(): Promise<void> {
   }
   if (!trusted) {
     const isDefaultSessionPath = options.sessionPath === resolve(DEFAULT_SESSION_PATH);
-    const note = untrustedSessionNote(ownerOnly, shell, icaclsPath, isDefaultSessionPath);
+    const dirIcaclsPath = windowsPathFor(dirname(options.sessionPath)).path;
+    const note = untrustedSessionNote(ownerOnly, shell, icaclsPath, isDefaultSessionPath, dirIcaclsPath);
     if (note !== null) console.log(note);
+  } else {
+    // A trusted --session path only proves that file's own filesystem is safe. PROFILE_DIR
+    // is a second live credential (the logged-in browser profile) that always lives in the
+    // repo and can sit on a different, less-trusted mount than a custom session path — so
+    // trusting the session file must not silently vouch for it too.
+    const profileOwnerOnly = await checkOwnerOnly(PROFILE_DIR);
+    const profileShell = windowsPathFor(PROFILE_DIR).shell;
+    if (!(profileOwnerOnly !== null && isSessionTrusted(profileOwnerOnly, profileShell))) {
+      console.log(
+        `\n   ${PROFILE_DIR} is a separate live credential (the logged-in browser profile)\n` +
+          "   and wasn't covered by the check above — see the Windows note above Step 5 in\n" +
+          '   docs/setup.md to check and, if needed, restrict it.',
+      );
+    }
   }
   describe(session);
 

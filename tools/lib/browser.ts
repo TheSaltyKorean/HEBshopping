@@ -36,6 +36,9 @@ export async function writeSecret(path: string, contents: string): Promise<void>
 export const PROFILE_DIR = resolve('.playwright-profile');
 export const CAPTURE_DIR = resolve('captures');
 
+/** Owner-only: holds a live, already-authenticated H-E-B session. */
+const PROFILE_DIR_MODE = 0o700;
+
 export interface CapturedCall {
   operationName: string;
   sha256Hash: string | null;
@@ -74,6 +77,12 @@ export interface Capture {
  * expects to see.
  */
 export async function launchBrowser(): Promise<BrowserContext> {
+  // `launchPersistentContext` creates this directory if it's missing but leaves an existing
+  // one's permissions untouched — same reason `writeSecret` chmods after writing, not just on
+  // creation. Default umask would often leave it group/other-readable, so set it explicitly
+  // rather than assume; on Windows this is a no-op (see `writeSecret`'s own note).
+  await mkdir(PROFILE_DIR, { recursive: true });
+  await chmod(PROFILE_DIR, PROFILE_DIR_MODE);
   return chromium.launchPersistentContext(PROFILE_DIR, {
     headless: false,
     viewport: { width: 1400, height: 900 },

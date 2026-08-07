@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { mkdtemp, rm, stat, writeFile } from 'node:fs/promises';
+import { chmod, mkdtemp, rm, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { FileStore } from './file-store.js';
@@ -16,17 +16,30 @@ async function harness() {
 
 runStoreContract('FileStore', harness);
 
+// Whether this filesystem actually enforces the owner-only mode `chmod` requests. False on
+// Windows (`chmod` there only toggles the read-only attribute) and on some WSL mounts of a
+// Windows drive, which report `process.platform === 'linux'` but can behave the same way —
+// so this is checked by writing a real file rather than trusting the platform name.
+const honorsOwnerOnlyMode = await (async () => {
+  const probeDir = await mkdtemp(join(tmpdir(), 'heb-mode-probe-'));
+  try {
+    const probePath = join(probeDir, 'probe');
+    await writeFile(probePath, 'x', { mode: 0o600 });
+    await chmod(probePath, 0o600);
+    return ((await stat(probePath)).mode & 0o777) === 0o600;
+  } finally {
+    await rm(probeDir, { recursive: true, force: true });
+  }
+})();
+
 describe('FileStore specifics', () => {
-  // POSIX only, and skipped rather than loosened.
-  //
-  // Windows has no POSIX mode bits: `fs.chmod` there can toggle the read-only attribute and
-  // nothing else, so `stat().mode & 0o777` reads 0o666 for any writable file no matter what
-  // was requested. Relaxing the assertion to accept 0o666 would make it pass everywhere
-  // while checking nothing, and asserting 0o666 on Windows would pin Node's own quirk as if
-  // it were the guarantee. Neither is the guarantee, so the check runs where it is real and
-  // is honest about not running where it is not — see `SECRET_FILE_MODE` and docs/setup.md
-  // for what protects the file on Windows instead.
-  it.skipIf(process.platform === 'win32')('writes the session owner-only', async () => {
+  // Skipped rather than loosened where the filesystem doesn't honour the mode: relaxing the
+  // assertion to accept whatever comes back would make it pass everywhere while checking
+  // nothing, and asserting that value would pin the platform's quirk as if it were the
+  // guarantee. Neither is the guarantee, so the check runs where it is real and is honest
+  // about not running where it is not — see `SECRET_FILE_MODE` and docs/setup.md for what
+  // protects the file where this doesn't hold.
+  it.skipIf(!honorsOwnerOnlyMode)('writes the session owner-only', async () => {
     // The file holds live auth cookies for an account with a saved payment method, so a
     // default-umask world-readable file would be a real exposure on a shared machine.
     const { store, cleanup, directory } = await harness();

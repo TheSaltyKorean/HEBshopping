@@ -65,6 +65,46 @@ install is good.
 
 ## Part 2 — Log in
 
+> **Windows: read this before Step 5 if your repo lives outside your user profile.**
+> `npm run login` writes two live credentials: `.session/session.json` and
+> `.playwright-profile/` (a logged-in browser profile). Node's `chmod` on Windows only
+> toggles the read-only attribute, so both end up protected by whatever NTFS ACL they
+> inherit from their directory — and a repo under `C:\git\` inherits `C:\`'s default ACL,
+> which grants local `Users` read access, so on a machine with more than one account,
+> another user can read your session the moment it's written. Under your own profile
+> (`C:\Users\<you>\...`) the inherited ACL is already user-only and there is nothing to do.
+>
+> If the repo lives outside your profile, create and lock the directories *now*, before
+> Step 5 writes anything into them, so the files inherit a safe ACL from the moment they
+> exist:
+>
+> ```powershell
+> mkdir .session, .playwright-profile
+> icacls .session /inheritance:r /grant:r "${env:USERNAME}:(OI)(CI)F"
+> icacls .playwright-profile /inheritance:r /grant:r "${env:USERNAME}:(OI)(CI)F"
+> ```
+>
+> Already ran `npm run login` before reading this? Those directories exist already and may
+> hold a session written under the old, wider ACL. Run the two commands above, then also
+> re-ACL what's already inside them — this is the only case that needs it:
+>
+> ```powershell
+> icacls .session /T /inheritance:r /grant:r "${env:USERNAME}:F"
+> icacls .playwright-profile /T /inheritance:r /grant:r "${env:USERNAME}:F"
+> ```
+>
+> Do this in two calls per directory, not one `/T` with `(OI)(CI)`: those inherit flags are
+> directory-only semantics, and applying them to an existing file via `/T` silently produces
+> an empty, protected ACL — locking you out of the very file you're trying to protect.
+>
+> The same applies to `captures/` if you ever run `npm run capture`, which writes raw cookie
+> jars and request bodies.
+>
+> `npm run login -- --switch` deletes `.playwright-profile/` to forget the old account, and
+> Playwright recreates it from scratch on the next login — back under the parent directory's
+> inherited ACL. Re-run the `.playwright-profile` commands above after switching accounts;
+> `.session/` isn't touched by `--switch` and doesn't need repeating.
+
 ### Step 5. Run the login tool
 
 ```bash
@@ -94,43 +134,8 @@ That last line is the proof: it made a real authenticated call and saw your real
 
 > **`.session/session.json` is a live credential.** Anyone holding that file is logged in
 > as you, on an account with a saved payment method. It's written owner-only (mode 0600)
-> and gitignored. Don't copy it around, don't paste it anywhere.
-
-> **On Windows, mode 0600 does nothing.** Node maps `chmod` onto the single read-only
-> attribute and ignores the rest, so the file gets whatever NTFS ACL it inherits from its
-> directory. That matters because of *where you cloned*: a repo under `C:\git\` inherits
-> `C:\`'s default ACL, which grants local `Users` read access — so on a machine with more
-> than one account, another user can read your session. Under your own profile
-> (`C:\Users\<you>\...`) the inherited ACL is already user-only and there is nothing to fix.
->
-> If the repo lives outside your profile, restrict the directory once. `npm run login` also
-> writes `.playwright-profile/` — a live, already-authenticated browser profile — so it needs
-> the same treatment as `.session`:
->
-> ```powershell
-> icacls .session /inheritance:r /grant:r "${env:USERNAME}:(OI)(CI)F"
-> icacls .session /T /inheritance:r /grant:r "${env:USERNAME}:F"
-> icacls .playwright-profile /inheritance:r /grant:r "${env:USERNAME}:(OI)(CI)F"
-> icacls .playwright-profile /T /inheritance:r /grant:r "${env:USERNAME}:F"
-> ```
->
-> Both lines per directory matter. The first sets up the directory so anything created in it
-> *from now on* inherits a user-only ACL. The second re-ACLs what's *already* there — the
-> `session.json` (or profile files) that `npm run login` already wrote. `/inheritance:r` on
-> that second call is what actually strips the stale inherited ACE (the `Users:(R)` grant from
-> `C:\`'s default ACL); `/grant:r` alone only replaces the explicit rights already granted to
-> your own account and leaves other trustees' inherited access untouched.
-> Do this in two calls, not one `/T` with `(OI)(CI)`: those inherit flags are directory-only
-> semantics, and applying them to an existing file via `/T` silently produces an empty,
-> protected ACL — locking you out of the very file you're trying to protect.
->
-> The same applies to `captures/` if you ever run `npm run capture`, which writes raw cookie
-> jars and request bodies.
->
-> `npm run login -- --switch` deletes `.playwright-profile/` to forget the old account, and
-> Playwright recreates it from scratch on the next login — back under the parent directory's
-> inherited ACL. Re-run the `.playwright-profile` commands above after switching accounts;
-> `.session/` isn't touched by `--switch` and doesn't need repeating.
+> and gitignored. Don't copy it around, don't paste it anywhere. On Windows, that mode does
+> nothing — see the note above Step 5 for what actually protects it there.
 
 ### Step 6. Confirm it works
 

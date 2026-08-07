@@ -16,8 +16,8 @@
  * What it writes is a live credential. See the Security section of the README.
  */
 
-import { rm } from 'node:fs/promises';
-import { dirname, resolve } from 'node:path';
+import { rm, stat } from 'node:fs/promises';
+import { resolve } from 'node:path';
 import {
   FileStore,
   HebClient,
@@ -216,21 +216,22 @@ async function main(): Promise<void> {
   }
 
   await store.putSession(session);
-  // Say what actually happened, per platform. "mode 0600" on Windows is a claim the OS did
-  // not honour — Node maps `chmod` onto the read-only attribute alone — and a false
-  // reassurance about a live credential is worse than no line at all.
+  // Say what actually happened, not what the platform is expected to do. A WSL checkout on
+  // a Windows drive reports `linux` but can silently drop the owner-only permission just
+  // like Windows does, so check the mode `putSession` actually produced.
+  const ownerOnly = ((await stat(options.sessionPath)).mode & 0o077) === 0;
   console.log(
-    `\n✅ Session written to ${options.sessionPath}` +
-      (process.platform === 'win32' ? '.' : ' (mode 0600).'),
+    `\n✅ Session written to ${options.sessionPath}` + (ownerOnly ? ' (mode 0600).' : '.'),
   );
-  if (process.platform === 'win32') {
-    const sessionDir = dirname(options.sessionPath);
+  if (!ownerOnly) {
     console.log(
-      '   Windows has no POSIX file modes, so this file is protected only by the ACL it\n' +
-        '   inherits from its directory. Inside your user profile that is already user-only.\n' +
-        '   Outside it (a repo under C:\\git\\, say) local `Users` can read it — see the\n' +
-        '   Windows note in docs/setup.md for the `icacls` fix, run against\n' +
-        `   ${sessionDir} (substitute it for \`.session\` in that note if you passed --session).`,
+      "   This filesystem didn't enforce the owner-only permission, so the file is only as\n" +
+        "   protected as the OS ACL it inherits — commonly the case on Windows, and on some\n" +
+        '   WSL mounts of a Windows drive. Restrict just this file (safe even if its\n' +
+        "   directory holds other files you don't want touched):\n" +
+        `   icacls "${options.sessionPath}" /inheritance:r /grant:r "\${env:USERNAME}:F"\n` +
+        '   For the default .session directory (and .playwright-profile), see the Windows\n' +
+        '   note above Step 5 in docs/setup.md, which also keeps future logins protected.',
     );
   }
   describe(session);

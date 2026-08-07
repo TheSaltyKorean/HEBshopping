@@ -12,12 +12,13 @@
  */
 
 import type { Page } from 'playwright';
-import { mkdir, readFile, rm } from 'node:fs/promises';
-import { dirname, resolve } from 'node:path';
+import { readFile, rm } from 'node:fs/promises';
+import { resolve } from 'node:path';
 import {
   CAPTURE_DIR,
   PROFILE_DIR,
   attachCapture,
+  ensureOwnerOnlyDir,
   launchBrowser,
   saveCapture,
   warnIfUntrustedDir,
@@ -557,7 +558,7 @@ async function addItem(page: Page, text: string, capture: Capture): Promise<void
     return;
   }
 
-  await mkdir(dirname(THROWAWAY_PATH), { recursive: true });
+  await ensureOwnerOnlyDir(CAPTURE_DIR);
   await writeSecret(
     THROWAWAY_PATH,
     JSON.stringify(

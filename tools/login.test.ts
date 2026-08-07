@@ -16,6 +16,7 @@ const {
   customSessionParentAction,
   isDedicatedDirectory,
   isSessionTrusted,
+  isUnderOwnHomeDirectory,
   untrustedProfileNote,
   untrustedSessionNote,
   windowsPathFor,
@@ -342,24 +343,52 @@ describe('isDedicatedDirectory', () => {
 
 describe('customSessionParentAction', () => {
   it('skips a path icacls cannot help with, regardless of whether it is dedicated', () => {
-    expect(customSessionParentAction(null, true)).toBe('skip');
-    expect(customSessionParentAction(null, false)).toBe('skip');
+    expect(customSessionParentAction(null, true, false)).toBe('skip');
+    expect(customSessionParentAction(null, false, false)).toBe('skip');
   });
 
-  it('blocks a shared directory on native Windows', () => {
-    expect(customSessionParentAction('powershell', false)).toBe('blocked');
+  it('skips an already-safe directory even if shared with other files', () => {
+    expect(customSessionParentAction('powershell', false, true)).toBe('skip');
+    expect(customSessionParentAction('wsl-powershell', false, true)).toBe('skip');
   });
 
-  it('blocks a shared directory on WSL', () => {
-    expect(customSessionParentAction('wsl-powershell', false)).toBe('blocked');
+  it('blocks a shared directory that is not already safe, on native Windows', () => {
+    expect(customSessionParentAction('powershell', false, false)).toBe('blocked');
   });
 
-  it('only reminds about a dedicated directory on native Windows', () => {
-    expect(customSessionParentAction('powershell', true)).toBe('reminder');
+  it('blocks a shared directory that is not already safe, on WSL', () => {
+    expect(customSessionParentAction('wsl-powershell', false, false)).toBe('blocked');
   });
 
-  it('only reminds about a dedicated directory on WSL', () => {
-    expect(customSessionParentAction('wsl-powershell', true)).toBe('reminder');
+  it('requires locking a dedicated, not-already-safe directory on native Windows', () => {
+    expect(customSessionParentAction('powershell', true, false)).toBe('lock');
+  });
+
+  it('requires locking a dedicated, not-already-safe directory on WSL', () => {
+    expect(customSessionParentAction('wsl-powershell', true, false)).toBe('lock');
+  });
+});
+
+describe('isUnderOwnHomeDirectory', () => {
+  it('treats the home directory itself as under the home directory', () => {
+    expect(isUnderOwnHomeDirectory('C:\\Users\\randy', 'C:\\Users\\randy')).toBe(true);
+  });
+
+  it('treats a subdirectory of home as under the home directory', () => {
+    expect(isUnderOwnHomeDirectory('C:\\Users\\randy\\creds', 'C:\\Users\\randy')).toBe(true);
+  });
+
+  it('is case-insensitive on Windows, where a drive letter or name may be typed differently', () => {
+    setPlatform('win32');
+    expect(isUnderOwnHomeDirectory('c:\\users\\RANDY\\creds', 'C:\\Users\\randy')).toBe(true);
+  });
+
+  it('rejects a sibling directory that merely shares a prefix', () => {
+    expect(isUnderOwnHomeDirectory('C:\\Users\\randy-other', 'C:\\Users\\randy')).toBe(false);
+  });
+
+  it('rejects a directory outside the home directory entirely', () => {
+    expect(isUnderOwnHomeDirectory('C:\\shared', 'C:\\Users\\randy')).toBe(false);
   });
 });
 

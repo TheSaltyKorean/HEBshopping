@@ -19,7 +19,8 @@
 import { execFileSync } from 'node:child_process';
 import { realpathSync } from 'node:fs';
 import { readdir, rm, stat } from 'node:fs/promises';
-import { basename, dirname, join, resolve } from 'node:path';
+import { homedir } from 'node:os';
+import { basename, dirname, join, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
   FileStore,
@@ -420,36 +421,68 @@ export async function clearDirectoryContents(dir: string): Promise<void> {
 }
 
 /**
+ * Whether `dir` is the current user's own home directory, or sits inside it — checked with
+ * `home` passed in (like `isSessionTrusted` takes `shell`) rather than calling `os.homedir()`
+ * internally, so this stays a plain comparison a test can drive without mocking. This is the
+ * one case docs/setup.md already calls out as needing no icacls fix at all ("Under your own
+ * profile … the inherited ACL is already user-only and there is nothing to do"), so a custom
+ * `--session` directory there is safe to write into even when it holds other files this tool
+ * doesn't own — `node:fs`'s `mode` can't tell us that on Windows (chmod there only toggles the
+ * read-only attribute, so `stat().mode` never reflects the real ACL either way), but this can.
+ */
+export function isUnderOwnHomeDirectory(dir: string, home: string): boolean {
+  const resolvedHome = resolve(home);
+  const resolvedDir = resolve(dir);
+  const [target, base] =
+    process.platform === 'win32'
+      ? [resolvedDir.toLowerCase(), resolvedHome.toLowerCase()]
+      : [resolvedDir, resolvedHome];
+  return target === base || target.startsWith(base + sep);
+}
+
+/**
  * The decision behind `ensureCustomSessionParentReady`: whether a custom `--session` parent
- * directory needs no action (not a Windows/WSL path `icacls` can help), must block the login
- * outright (shared with other files — there's no ACL fix to offer without taking away access
- * that isn't this tool's to take), or just gets a reminder (dedicated, but `stat()` can never
- * confirm from here that it's already locked down). Pulled out as a pure function — the same
- * pattern as `untrustedSessionNote`/`untrustedProfileNote` — so this choice between silently
- * continuing, hard-aborting via `process.exit(1)`, and printing a reminder is unit-tested
- * instead of only reachable through `main()`.
+ * directory needs no action — either not a Windows/WSL path `icacls` can help, or already safe
+ * because it's under the user's own home directory (`isUnderOwnHomeDirectory`) — must block the
+ * login outright (shared with other files, and not already safe — there's no ACL fix to offer
+ * without taking away access that isn't this tool's to take), or must block until the reader
+ * locks it (dedicated, but `stat()` can never confirm from here that it's already locked down,
+ * and the very first write can land before a human has had a chance to run the commands).
+ * Pulled out as a pure function — the same pattern as `untrustedSessionNote`/
+ * `untrustedProfileNote` — so this choice between silently continuing and hard-aborting via
+ * `process.exit(1)` for one of two reasons is unit-tested instead of only reachable through
+ * `main()`.
  */
 export function customSessionParentAction(
   shell: ReturnType<typeof windowsPathFor>['shell'],
   dedicated: boolean,
-): 'skip' | 'blocked' | 'reminder' {
-  if (shell === null) return 'skip';
-  return dedicated ? 'reminder' : 'blocked';
+  alreadySafe: boolean,
+): 'skip' | 'blocked' | 'lock' {
+  if (shell === null || alreadySafe) return 'skip';
+  return dedicated ? 'lock' : 'blocked';
 }
 
 /**
  * Checked before login starts, not just after writing. `store.putSession()` persists the
  * credential as soon as a usable session shows up, so a check that only ran afterward — the
  * prior shape of this code — meant the very first write into a shared or unlocked Windows/WSL
- * directory was already exposed by the time the user ever saw an instruction about it.
+ * directory was already exposed by the time the user ever saw an instruction about it. For the
+ * same reason, the "dedicated but not confirmed locked" case blocks too, rather than just
+ * printing the commands and continuing: an already-authenticated persistent profile can produce
+ * a usable session — and therefore a write — within moments of the browser opening, faster than
+ * a human can alt-tab to PowerShell and run them.
  */
 async function ensureCustomSessionParentReady(sessionPath: string): Promise<void> {
   const dir = dirname(sessionPath);
   const { path: dirIcaclsPath, shell } = windowsPathFor(dir);
   if (shell === null) return;
 
+  const alreadySafe = isUnderOwnHomeDirectory(dir, homedir());
   const dedicated = await isDedicatedDirectory(dir, basename(sessionPath));
-  if (customSessionParentAction(shell, dedicated) === 'blocked') {
+  const action = customSessionParentAction(shell, dedicated, alreadySafe);
+  if (action === 'skip') return;
+
+  if (action === 'blocked') {
     console.error(
       `\n⛔ ${dir} isn't confirmed to be dedicated to this file — it may hold other\n` +
         "   files, or its contents couldn't be listed — so this tool won't write a live\n" +
@@ -462,20 +495,16 @@ async function ensureCustomSessionParentReady(sessionPath: string): Promise<void
     process.exit(1);
   }
 
-  // Unlike the post-write reminder in main() — which also re-locks the file itself, since a
-  // file written before this cycle's dir-lock landed may still carry the old ACL — there's no
-  // file to re-lock here yet: on a first run into this directory, `sessionPath` doesn't exist
-  // until the login that follows this check writes it, and `icacls` on a path that doesn't
-  // exist just fails.
   const wslSuffix = shell === 'wsl-powershell' ? ' (not this WSL shell)' : '';
-  console.log(
-    `\nBefore logging in — ${dir} isn't yet known to be locked down for Windows access\n` +
-      "   (stat() can't confirm an ACL fix already ran; see isSessionTrusted). If you haven't\n" +
-      `   already, lock it now, from a Windows PowerShell prompt${wslSuffix}:\n` +
+  console.error(
+    `\n⛔ ${dir} isn't yet confirmed to be locked down for Windows access (stat() can't\n` +
+      "   confirm an ACL fix already ran; see isSessionTrusted). Lock it now, from a Windows\n" +
+      `   PowerShell prompt${wslSuffix}, then run this command again:\n` +
       lockDirectoryCommand(dirIcaclsPath) +
       "   Locking it first means this login's write inherits a safe ACL from the moment it\n" +
       '   happens, instead of landing under whatever this directory currently inherits.',
   );
+  process.exit(1);
 }
 
 async function main(): Promise<void> {

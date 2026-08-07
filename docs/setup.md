@@ -106,13 +106,16 @@ That last line is the proof: it made a real authenticated call and saw your real
 > If the repo lives outside your profile, restrict the directory once:
 >
 > ```powershell
-> icacls .session /inheritance:r /grant:r "${env:USERNAME}:(OI)(CI)F" /T
+> icacls .session /inheritance:r /grant:r "${env:USERNAME}:(OI)(CI)F"
+> icacls .session /T /grant:r "${env:USERNAME}:F"
 > ```
 >
-> `/T` matters: without it, `icacls` only re-ACLs the `.session` directory object itself, not
-> the `session.json` that `npm run login` already wrote inside it — you'd see no error, but
-> the file you're trying to protect would keep its old, wider-open ACL. `/T` applies the same
-> restriction recursively to what's already there.
+> Both lines matter. The first sets up the directory so anything created in it *from now on*
+> inherits a user-only ACL. The second re-ACLs what's *already* there — the `session.json`
+> that `npm run login` already wrote — without which it would keep its old, wider-open ACL.
+> Do this in two calls, not one `/T` with `(OI)(CI)`: those inherit flags are directory-only
+> semantics, and applying them to an existing file via `/T` silently produces an empty,
+> protected ACL — locking you out of the very file you're trying to protect.
 >
 > The same applies to `captures/` if you ever run `npm run capture`, which writes raw cookie
 > jars and request bodies.

@@ -72,13 +72,17 @@ const sleep = (ms: number): Promise<void> => new Promise((done) => setTimeout(do
  * `icacls` is a Windows tool and only understands Windows-style paths. On WSL,
  * `options.sessionPath` is POSIX-style (e.g. `/mnt/c/repo/.session/session.json`), so
  * translate it via `wslpath` before printing a command meant to run in PowerShell.
+ *
+ * Whether we're actually on WSL is derived from `wslpath` succeeding, not from
+ * `process.platform`: plain Linux also reports `linux`, and there `wslpath` doesn't exist,
+ * so a failed translation means "not WSL" rather than "WSL but something went wrong".
  */
-function windowsPathFor(path: string): string {
-  if (process.platform !== 'linux') return path;
+function windowsPathFor(path: string): { path: string; onWsl: boolean } {
+  if (process.platform !== 'linux') return { path, onWsl: false };
   try {
-    return execFileSync('wslpath', ['-w', path], { encoding: 'utf8' }).trim();
+    return { path: execFileSync('wslpath', ['-w', path], { encoding: 'utf8' }).trim(), onWsl: true };
   } catch {
-    return path;
+    return { path, onWsl: false };
   }
 }
 
@@ -239,8 +243,7 @@ async function main(): Promise<void> {
     `\n✅ Session written to ${options.sessionPath}` + (ownerOnly ? ' (mode 0600).' : '.'),
   );
   if (!ownerOnly) {
-    const onWsl = process.platform === 'linux';
-    const icaclsPath = windowsPathFor(options.sessionPath);
+    const { path: icaclsPath, onWsl } = windowsPathFor(options.sessionPath);
     console.log(
       "   This filesystem didn't enforce the owner-only permission, so the file is only as\n" +
         "   protected as the OS ACL it inherits — commonly the case on Windows, and on some\n" +

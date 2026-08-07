@@ -565,15 +565,20 @@ export function customSessionParentAction(
  * Resolves `dir` through any symlinks/junctions to its real on-disk location, so a directory
  * that merely *looks* like it's under the user's home profile — because a junction planted
  * there points somewhere else entirely — isn't mistaken by `isUnderOwnHomeDirectory` for one
- * that genuinely is. Falls back to `dir` unchanged when it doesn't exist yet (the preflight
- * runs before `mkdir` creates it) or can't be resolved for another reason — there's nothing to
- * canonicalize about a location that isn't on disk.
+ * that genuinely is. `dir` (or a deeper descendant of it the preflight runs against before
+ * `mkdir` creates it) may not exist yet, so `realpath` can fail on the full path even though an
+ * ancestor — the junction itself — does exist and would still redirect it: walk up to the
+ * nearest ancestor `realpath` can resolve and reapply the unresolved tail on top of that,
+ * instead of giving up and handing back the lexical path a junction earlier in it could still
+ * make misleading. Stops at the root once there's no further ancestor to try.
  */
 export async function realDir(dir: string): Promise<string> {
   try {
     return await realpath(dir);
   } catch {
-    return dir;
+    const parent = dirname(dir);
+    if (parent === dir) return dir;
+    return join(await realDir(parent), basename(dir));
   }
 }
 

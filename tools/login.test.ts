@@ -8,7 +8,7 @@ vi.mock('node:child_process', () => ({ execFileSync: execFileSyncMock }));
 
 vi.mock('node:fs/promises', async (importOriginal) => {
   const actual = await importOriginal<typeof import('node:fs/promises')>();
-  return { ...actual, readdir: vi.fn(actual.readdir), stat: vi.fn(actual.stat) };
+  return { ...actual, readdir: vi.fn(actual.readdir), stat: vi.fn(actual.stat), realpath: vi.fn(actual.realpath) };
 });
 
 const {
@@ -525,9 +525,25 @@ describe('realDir', () => {
     }
   });
 
-  it('falls back to the given path unchanged when it does not exist yet', async () => {
-    const dir = join(tmpdir(), 'heb-realdir-missing-does-not-exist');
-    expect(await realDir(dir)).toBe(dir);
+  it('joins the unresolved name onto the resolved parent, when the directory itself does not exist yet', async () => {
+    const parent = await mkdtemp(join(tmpdir(), 'heb-realdir-'));
+    try {
+      const missing = join(parent, 'does-not-exist');
+      expect(await realDir(missing)).toBe(join(await realpath(parent), 'does-not-exist'));
+    } finally {
+      await rm(parent, { recursive: true, force: true });
+    }
+  });
+
+  it('resolves through a junction even when a not-yet-created directory sits beneath it', async () => {
+    const link = join(tmpdir(), 'heb-realdir-link');
+    const target = join(tmpdir(), 'heb-realdir-target');
+    const missing = join(link, 'new');
+    vi.mocked(realpath)
+      .mockRejectedValueOnce(Object.assign(new Error('missing'), { code: 'ENOENT' })) // realpath(missing)
+      .mockResolvedValueOnce(target); // realpath(link) — the junction's real target
+
+    expect(await realDir(missing)).toBe(join(target, 'new'));
   });
 });
 

@@ -18,7 +18,7 @@
 
 import { execFileSync } from 'node:child_process';
 import { realpathSync } from 'node:fs';
-import { readdir, rm, stat } from 'node:fs/promises';
+import { readdir, realpath, rm, stat } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { basename, dirname, join, posix, resolve, win32 } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -362,13 +362,15 @@ async function checkOwnerOnly(path: string): Promise<boolean | null> {
  * written anything. Any other read failure (e.g. permission denied) is treated as "not
  * dedicated" — the safer assumption when it can't be verified.
  *
- * `shell` decides whether the default-directory comparison, and the entry-name comparison
- * against `allowed`, are case-insensitive: both native Windows (`'powershell'`) and WSL on a
- * Windows drive (`'wsl-powershell'`) sit on a case-insensitive filesystem, so `.Session` and
- * `.session` are the same directory on disk either way, and a `Session.json` written by one
- * run is the same file a later run names `session.json` — deriving this from `process.platform`
- * alone missed the WSL case, since WSL reports `linux` even when `windowsPathFor` has already
- * confirmed it's on a DrvFS mount.
+ * `shell` decides whether the default-directory comparison is case-insensitive: both native
+ * Windows (`'powershell'`) and WSL on a Windows drive (`'wsl-powershell'`) normally sit on a
+ * case-insensitive filesystem, so `.Session` and `.session` are usually the same directory on
+ * disk — deriving this from `process.platform` alone missed the WSL case, since WSL reports
+ * `linux` even when `windowsPathFor` has already confirmed it's on a DrvFS mount. Entry names
+ * inside the directory are verified with `sameFileCaseFolded` rather than assumed
+ * case-insensitive outright: NTFS/DrvFS can enable per-directory case sensitivity (a real WSL
+ * feature), where `Session.json` and `session.json` are two distinct files despite sitting on
+ * an otherwise "case-insensitive" shell.
  */
 export async function isDedicatedDirectory(
   dir: string,
@@ -390,16 +392,35 @@ export async function isDedicatedDirectory(
     allowed.add(defaultEntry);
     allowed.add(`${defaultEntry}.tmp`);
   }
-  const allowedForComparison = caseInsensitive
-    ? new Set([...allowed].map((entry) => entry.toLowerCase()))
-    : allowed;
   try {
     const entries = await readdir(dir);
-    return entries.every((entry) =>
-      allowedForComparison.has(caseInsensitive ? entry.toLowerCase() : entry),
-    );
+    for (const entry of entries) {
+      if (allowed.has(entry)) continue;
+      if (!caseInsensitive || !(await sameFileCaseFolded(dir, entry, allowed))) return false;
+    }
+    return true;
   } catch (error) {
     return (error as NodeJS.ErrnoException).code === 'ENOENT';
+  }
+}
+
+/**
+ * Whether `entry`, exactly as listed on disk, is really the same file as one of `allowed`'s
+ * names once case is folded — confirmed by comparing inode identity, not just the folded
+ * strings. On an ordinary case-insensitive Windows/DrvFS directory they're always the same
+ * file, but a directory with per-directory case sensitivity turned on can hold `Session.json`
+ * and `session.json` as two distinct files; trusting the string fold alone there would let a
+ * directory that genuinely holds a foreign file pass as dedicated.
+ */
+async function sameFileCaseFolded(dir: string, entry: string, allowed: Set<string>): Promise<boolean> {
+  const lower = entry.toLowerCase();
+  const match = [...allowed].find((name) => name.toLowerCase() === lower);
+  if (match === undefined) return false;
+  try {
+    const [a, b] = await Promise.all([stat(join(dir, entry)), stat(join(dir, match))]);
+    return a.dev === b.dev && a.ino === b.ino;
+  } catch {
+    return false;
   }
 }
 
@@ -500,22 +521,20 @@ export function homeDirFor(shell: ReturnType<typeof windowsPathFor>['shell']): s
 }
 
 /**
- * Whether a custom `--session` directory needs no icacls fix because it is the user's own home
- * directory (or under it) — the "nothing to do" exemption docs/setup.md already describes. The
- * exemption is specifically about Windows ACL inheritance, so it never applies to the default
- * `.session` path (which gets its own directory-level fix instead) or when `shell === null`
+ * Whether a `--session` directory needs no icacls fix because it is the user's own home
+ * directory (or under it) — the "nothing to do" exemption docs/setup.md already describes for
+ * that placement, default `.session` path included. It never applies when `shell === null`
  * (native POSIX, or a WSL mount `windowsPathFor` couldn't translate) — there, a directly measured
  * permission failure is real evidence, not something a location heuristic should override. Pulled
  * out as a pure function, like `isUnderOwnHomeDirectory` itself, so this composition is
  * unit-tested instead of only reachable through `main()`.
  */
 export function sessionAlreadySafe(
-  isDefaultSessionPath: boolean,
   shell: ReturnType<typeof windowsPathFor>['shell'],
   dirIcaclsPath: string,
   home: string | null,
 ): boolean {
-  if (isDefaultSessionPath || shell === null || home === null) return false;
+  if (shell === null || home === null) return false;
   return isUnderOwnHomeDirectory(dirIcaclsPath, home, shell);
 }
 
@@ -543,6 +562,22 @@ export function customSessionParentAction(
 }
 
 /**
+ * Resolves `dir` through any symlinks/junctions to its real on-disk location, so a directory
+ * that merely *looks* like it's under the user's home profile — because a junction planted
+ * there points somewhere else entirely — isn't mistaken by `isUnderOwnHomeDirectory` for one
+ * that genuinely is. Falls back to `dir` unchanged when it doesn't exist yet (the preflight
+ * runs before `mkdir` creates it) or can't be resolved for another reason — there's nothing to
+ * canonicalize about a location that isn't on disk.
+ */
+export async function realDir(dir: string): Promise<string> {
+  try {
+    return await realpath(dir);
+  } catch {
+    return dir;
+  }
+}
+
+/**
  * Checked before login starts, not just after writing. `store.putSession()` persists the
  * credential as soon as a usable session shows up, so a check that only ran afterward — the
  * prior shape of this code — meant the very first write into a shared or unlocked Windows/WSL
@@ -555,7 +590,7 @@ export function customSessionParentAction(
  * a genuinely dedicated directory is a real, checkable way out.
  */
 async function ensureCustomSessionParentReady(sessionPath: string): Promise<void> {
-  const dir = dirname(sessionPath);
+  const dir = await realDir(dirname(sessionPath));
   const { path: dirIcaclsPath, shell } = windowsPathFor(dir);
   if (shell === null) return;
 
@@ -682,13 +717,16 @@ async function main(): Promise<void> {
   const ownerOnly = await checkOwnerOnly(options.sessionPath);
   const { path: icaclsPath, shell } = windowsPathFor(options.sessionPath);
   const trusted = ownerOnly !== null && isSessionTrusted(ownerOnly, shell);
-  // A custom --session path under the user's own home profile needs no icacls fix at all — the
-  // same exemption the preflight (`ensureCustomSessionParentReady`) already grants via
-  // `sessionAlreadySafe` — so it must not be told afterward to lock a directory that was already
-  // judged safe moments earlier.
-  const dirIcaclsPath = windowsPathFor(dirname(options.sessionPath)).path;
-  const home = isDefaultSessionPath || shell === null ? null : homeDirFor(shell);
-  const alreadySafe = sessionAlreadySafe(isDefaultSessionPath, shell, dirIcaclsPath, home);
+  // A --session path under the user's own home profile needs no icacls fix at all — the same
+  // "nothing to do" exemption docs/setup.md gives that placement generally applies just as
+  // much to the default .session path as to a custom one, so it must not be told afterward to
+  // lock a directory judged safe moments earlier (the preflight grants the same exemption for
+  // custom paths via `sessionAlreadySafe`; the default path skips the preflight entirely, since
+  // it can never collide with another file).
+  const dir = await realDir(dirname(options.sessionPath));
+  const dirIcaclsPath = windowsPathFor(dir).path;
+  const home = shell === null ? null : homeDirFor(shell);
+  const alreadySafe = sessionAlreadySafe(shell, dirIcaclsPath, home);
   console.log(`\n✅ Session written to ${options.sessionPath}` + (trusted ? ' (mode 0600).' : '.'));
   if (ownerOnly === null) {
     console.log(
@@ -708,8 +746,7 @@ async function main(): Promise<void> {
     if (profileNote !== null) console.log(profileNote);
   } else {
     const dedicated =
-      isDefaultSessionPath ||
-      (await isDedicatedDirectory(dirname(options.sessionPath), basename(options.sessionPath), shell));
+      isDefaultSessionPath || (await isDedicatedDirectory(dir, basename(options.sessionPath), shell));
     const note = untrustedSessionNote(ownerOnly, shell, icaclsPath, isDefaultSessionPath, dirIcaclsPath, dedicated);
     if (note !== null) console.log(note);
   }

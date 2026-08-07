@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { mkdir, mkdtemp, readdir, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readdir, realpath, rm, stat, writeFile } from 'node:fs/promises';
 import { homedir, tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 
@@ -8,7 +8,7 @@ vi.mock('node:child_process', () => ({ execFileSync: execFileSyncMock }));
 
 vi.mock('node:fs/promises', async (importOriginal) => {
   const actual = await importOriginal<typeof import('node:fs/promises')>();
-  return { ...actual, readdir: vi.fn(actual.readdir) };
+  return { ...actual, readdir: vi.fn(actual.readdir), stat: vi.fn(actual.stat) };
 });
 
 const {
@@ -18,6 +18,7 @@ const {
   isDedicatedDirectory,
   isSessionTrusted,
   isUnderOwnHomeDirectory,
+  realDir,
   sessionAlreadySafe,
   untrustedProfileNote,
   untrustedSessionNote,
@@ -357,6 +358,22 @@ describe('isDedicatedDirectory', () => {
     }
   });
 
+  it('does not conflate two distinct files that only differ in case, e.g. a directory with per-directory case sensitivity enabled', async () => {
+    vi.mocked(readdir).mockResolvedValueOnce(['Session.json'] as never);
+    vi.mocked(stat)
+      .mockResolvedValueOnce({ dev: 1, ino: 111 } as never) // Session.json
+      .mockResolvedValueOnce({ dev: 1, ino: 222 } as never); // session.json — a different file
+    await expect(isDedicatedDirectory('/some/dir', 'session.json', 'powershell')).resolves.toBe(false);
+  });
+
+  it('still recognizes a differently-cased entry as the same file when it genuinely is one, via inode identity', async () => {
+    vi.mocked(readdir).mockResolvedValueOnce(['Session.json'] as never);
+    vi.mocked(stat)
+      .mockResolvedValueOnce({ dev: 1, ino: 111 } as never)
+      .mockResolvedValueOnce({ dev: 1, ino: 111 } as never);
+    await expect(isDedicatedDirectory('/some/dir', 'session.json', 'powershell')).resolves.toBe(true);
+  });
+
   it('does not case-fold entry names on native POSIX', async () => {
     const dir = await mkdtemp(join(tmpdir(), 'heb-dedicated-case-posix-'));
     try {
@@ -476,27 +493,43 @@ describe('homeDirFor', () => {
 
 describe('sessionAlreadySafe', () => {
   it('is safe for a custom directory under the home directory on native Windows', () => {
-    expect(sessionAlreadySafe(false, 'powershell', 'C:\\Users\\randy\\creds', 'C:\\Users\\randy')).toBe(true);
+    expect(sessionAlreadySafe('powershell', 'C:\\Users\\randy\\creds', 'C:\\Users\\randy')).toBe(true);
   });
 
   it('is safe for a custom directory under the home directory on WSL', () => {
-    expect(sessionAlreadySafe(false, 'wsl-powershell', 'C:\\Users\\randy\\creds', 'C:\\Users\\randy')).toBe(true);
+    expect(sessionAlreadySafe('wsl-powershell', 'C:\\Users\\randy\\creds', 'C:\\Users\\randy')).toBe(true);
   });
 
   it('is not safe for a custom directory outside the home directory', () => {
-    expect(sessionAlreadySafe(false, 'powershell', 'C:\\shared', 'C:\\Users\\randy')).toBe(false);
+    expect(sessionAlreadySafe('powershell', 'C:\\shared', 'C:\\Users\\randy')).toBe(false);
   });
 
-  it('is never safe for the default .session path, even if it happens to sit under home', () => {
-    expect(sessionAlreadySafe(true, 'powershell', 'C:\\Users\\randy\\.session', 'C:\\Users\\randy')).toBe(false);
+  it('is safe for the default .session path too, when it sits under home — docs/setup.md makes no distinction', () => {
+    expect(sessionAlreadySafe('powershell', 'C:\\Users\\randy\\.session', 'C:\\Users\\randy')).toBe(true);
   });
 
   it('is never safe when icacls cannot help (native POSIX), even under the home directory — a directly measured permission failure must still warn', () => {
-    expect(sessionAlreadySafe(false, null, '/srv/randy/creds', '/srv/randy')).toBe(false);
+    expect(sessionAlreadySafe(null, '/srv/randy/creds', '/srv/randy')).toBe(false);
   });
 
   it('is not safe when the home directory could not be determined', () => {
-    expect(sessionAlreadySafe(false, 'wsl-powershell', 'C:\\Users\\randy\\creds', null)).toBe(false);
+    expect(sessionAlreadySafe('wsl-powershell', 'C:\\Users\\randy\\creds', null)).toBe(false);
+  });
+});
+
+describe('realDir', () => {
+  it('resolves an existing directory to its real, canonical path', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'heb-realdir-'));
+    try {
+      expect(await realDir(dir)).toBe(await realpath(dir));
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('falls back to the given path unchanged when it does not exist yet', async () => {
+    const dir = join(tmpdir(), 'heb-realdir-missing-does-not-exist');
+    expect(await realDir(dir)).toBe(dir);
   });
 });
 

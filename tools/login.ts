@@ -181,14 +181,21 @@ export function untrustedSessionNote(
   // A per-file fix here would be undone by the very next login (the replacement temp file
   // inherits the directory's ACL, not the file's) before the user ever gets a chance to
   // re-run it — presenting that as the remedy leaves the file briefly exposed on every
-  // single login. Lock the directory instead, so future writes inherit safety for free.
+  // single login. Lock the directory instead, so future writes inherit safety for free —
+  // but only a directory dedicated to this file: unlike the file-level fix above,
+  // `/inheritance:r` on a directory removes every inherited ACE and `/grant:r` leaves only
+  // the named account, so it strips every other account's access to the directory itself
+  // (and its existing contents), not just what future files inherit.
   return (
     reason +
     ' A fix on just this file would not last — the next\n' +
     "   login replaces it with a fresh temp file that inherits its directory's ACL, not\n" +
-    "   the file's. Lock the directory that holds it instead (safe even if it holds other\n" +
-    "   files you don't want touched — this only changes what *future* files inherit),\n" +
-    `   from a Windows PowerShell prompt${wslSuffix}:\n` +
+    "   the file's. Lock the directory that holds it instead — but only if it's dedicated\n" +
+    "   to this file: this strips every other account's access to the directory and to\n" +
+    "   anything already in it, not just to files created later, so it isn't safe on a\n" +
+    "   directory anything else depends on. If this one holds anything else, move this\n" +
+    "   file into a new, dedicated directory first (point --session there and run this\n" +
+    `   again), then lock it down from a Windows PowerShell prompt${wslSuffix}:\n` +
     `   icacls ${quote(dirIcaclsPath)} /reset\n` +
     `   icacls ${quote(dirIcaclsPath)} /inheritance:r /grant:r "\${env:USERDOMAIN}\\\${env:USERNAME}:(OI)(CI)F"\n` +
     '   That protects every future login automatically. It leaves the file this run\n' +
@@ -291,11 +298,22 @@ export function untrustedProfileNote(
   profileShell: ReturnType<typeof windowsPathFor>['shell'],
 ): string | null {
   if (profileOwnerOnly !== null && isSessionTrusted(profileOwnerOnly, profileShell)) return null;
-  return (
+  const intro =
     `\n   ${PROFILE_DIR} is a separate live credential (the logged-in browser profile)\n` +
-    "   and wasn't covered by the check above — see the Windows note above Step 5 in\n" +
-    '   docs/setup.md to check and, if needed, restrict it.'
-  );
+    "   and wasn't covered by the check above";
+  // A permissionless mount (CIFS, FAT, ...) with no Windows/WSL shell to run icacls from
+  // isn't fixed by the Windows note this otherwise points to — same case `untrustedSessionNote`
+  // handles for the session file itself.
+  if (profileShell === null && profileOwnerOnly === false) {
+    return (
+      intro +
+      " — this filesystem didn't enforce the owner-only\n" +
+      "   permission either, and it isn't a Windows filesystem `icacls` can secure. Move\n" +
+      '   the repository, or just that profile, to a permission-capable filesystem, or\n' +
+      "   restrict that mount's ACLs directly; there is no command this tool can print here."
+    );
+  }
+  return intro + ' — see the Windows note above Step 5 in\n   docs/setup.md to check and, if needed, restrict it.';
 }
 
 async function main(): Promise<void> {

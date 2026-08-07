@@ -161,6 +161,13 @@ describe('untrustedSessionNote', () => {
     const atDefault = untrustedSessionNote(false, 'powershell', 'C:\\repo\\.session\\session.json', true, 'C:\\repo\\.session');
     expect(atDefault).toContain('re-run that command after every login');
   });
+
+  it('requires the custom --session parent to be a dedicated directory before locking it', () => {
+    const atCustom = untrustedSessionNote(false, 'powershell', 'C:\\shared\\foo.json', false, 'C:\\shared');
+    expect(atCustom).not.toContain('safe even if it holds other files');
+    expect(atCustom).toContain("strips every other account's access");
+    expect(atCustom).toContain('move this\n   file into a new, dedicated directory first');
+  });
 });
 
 describe('untrustedProfileNote', () => {
@@ -181,5 +188,11 @@ describe('untrustedProfileNote', () => {
 
   it('never trusts the mode bit alone on WSL, even when it reports owner-only', () => {
     expect(untrustedProfileNote(true, 'wsl-powershell')).not.toBeNull();
+  });
+
+  it('gives a POSIX remediation instead of the Windows note on a permissionless mount', () => {
+    const note = untrustedProfileNote(false, null);
+    expect(note).toContain('there is no command this tool can print here');
+    expect(note).not.toContain('the Windows note above Step 5');
   });
 });

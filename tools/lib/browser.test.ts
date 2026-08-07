@@ -71,6 +71,9 @@ describe('ensureOwnerOnlyDir', () => {
     const dir = join(parent, 'profile');
     try {
       await mkdir(dir, { mode: 0o755 });
+      // mkdir's mode is masked by the umask; chmod is not. Without this the fixture is 0700
+      // under `umask 077` and the test stops exercising the already-looser directory at all.
+      await chmod(dir, 0o755);
       await ensureOwnerOnlyDir(dir);
       const mode = (await stat(dir)).mode & 0o777;
       expect(mode).toBe(0o700);
@@ -185,6 +188,7 @@ describe('checkOwnerOnly', () => {
     const target = join(parent, 'file');
     try {
       await writeFile(target, 'x', { mode: 0o644 });
+      await chmod(target, 0o644);
       expect(await checkOwnerOnly(target)).toBe(false);
     } finally {
       await rm(parent, { recursive: true, force: true });
@@ -353,6 +357,7 @@ describe('warnIfUntrustedDir', () => {
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
     try {
       await mkdir(dir, { mode: 0o755 });
+      await chmod(dir, 0o755);
       await warnIfUntrustedDir(dir);
       expect(warn).toHaveBeenCalledTimes(1);
       expect(warn.mock.calls[0]?.[0]).toContain(dir);

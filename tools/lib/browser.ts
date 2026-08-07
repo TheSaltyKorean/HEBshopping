@@ -10,7 +10,7 @@
 
 import { chromium, type BrowserContext } from 'playwright';
 import { execFileSync } from 'node:child_process';
-import { chmod, mkdir, realpath, stat, writeFile } from 'node:fs/promises';
+import { chmod, mkdir, realpath, stat, statfs, writeFile } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { basename, dirname, join, posix, resolve, win32 } from 'node:path';
 import { filterHebStorageState, isGraphqlUrl, parseGraphqlPost } from '@heb/core';
@@ -96,10 +96,24 @@ export function isSessionTrusted(ownerOnly: boolean, shell: ReturnType<typeof wi
   return ownerOnly && shell !== 'wsl-powershell';
 }
 
-/** Owner-only mode on POSIX, or `null` when it can't be determined (missing, or stat failed). */
+/** `statfs().type` for Linux's SMB/CIFS client, the same value for every SMB dialect. */
+const CIFS_SUPER_MAGIC = 0xff534d42;
+
+/**
+ * Owner-only mode on POSIX, or `null` when it can't be determined (missing, or stat failed).
+ *
+ * A mode bit is only evidence on a filesystem that stores one. An SMB/CIFS mount synthesizes
+ * every mode from its `file_mode`/`dir_mode` options and swallows `chmod` silently, so 0600
+ * there reports what the mount was told to say, not whether the share's own ACL keeps other
+ * accounts (or other SMB clients) out — the same reason `isSessionTrusted` won't take a mode
+ * at face value under WSL. Report those as not owner-only, which is what the callers'
+ * permissionless-mount advice already exists to cover. `statfs` answers this only on Linux;
+ * anywhere it can't, the mode stands as before.
+ */
 export async function checkOwnerOnly(path: string): Promise<boolean | null> {
   try {
-    return ((await stat(path)).mode & 0o077) === 0;
+    if (((await stat(path)).mode & 0o077) !== 0) return false;
+    return (await statfs(path).catch(() => null))?.type !== CIFS_SUPER_MAGIC;
   } catch {
     return null;
   }
@@ -344,7 +358,12 @@ export async function saveCapture(
     await Promise.allSettled([...capture.pending]);
   }
 
+  // Locked and checked before the first write, not after: `storage-state.json` below is a live
+  // cookie jar, and `ensureOwnerOnlyDir`'s chmod can't touch a Windows DACL — so a caller whose
+  // `captures/` inherited a broad ACL has to hear about it while the credential still isn't
+  // there. Same order `capture.ts`'s `flush()` uses for the same reason.
   await ensureOwnerOnlyDir(CAPTURE_DIR);
+  await warnIfUntrustedDir(CAPTURE_DIR);
 
   // `label` reaches here from a raw CLI argument (see `drive.ts`). Without stripping path
   // separators, a label like `../debug` writes `debug-operations.json` and

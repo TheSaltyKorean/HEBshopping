@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { chmod, mkdir, mkdtemp, realpath, rm, stat, writeFile } from 'node:fs/promises';
+import { chmod, mkdir, mkdtemp, realpath, rm, stat, statfs, writeFile } from 'node:fs/promises';
 import { homedir, tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 
@@ -8,7 +8,7 @@ vi.mock('node:child_process', () => ({ execFileSync: execFileSyncMock }));
 
 vi.mock('node:fs/promises', async (importOriginal) => {
   const actual = await importOriginal<typeof import('node:fs/promises')>();
-  return { ...actual, realpath: vi.fn(actual.realpath) };
+  return { ...actual, realpath: vi.fn(actual.realpath), stat: vi.fn(actual.stat), statfs: vi.fn(actual.statfs) };
 });
 
 const {
@@ -198,6 +198,18 @@ describe('checkOwnerOnly', () => {
     } finally {
       await rm(parent, { recursive: true, force: true });
     }
+  });
+
+  // stat/statfs are mocked rather than driven off a real file so this runs on every platform:
+  // the case it describes is a Linux CIFS mount, which no CI host has to hand.
+  it('does not trust an owner-only mode a CIFS mount synthesized from its mount options', async () => {
+    vi.mocked(stat).mockResolvedValueOnce({ mode: 0o600 } as never);
+    vi.mocked(statfs).mockResolvedValueOnce({ type: 0xff534d42 } as never); // CIFS_SUPER_MAGIC
+    expect(await checkOwnerOnly('/mnt/share/session.json')).toBe(false);
+
+    vi.mocked(stat).mockResolvedValueOnce({ mode: 0o600 } as never);
+    vi.mocked(statfs).mockResolvedValueOnce({ type: 0x01021994 } as never); // tmpfs
+    expect(await checkOwnerOnly('/tmp/session.json')).toBe(true);
   });
 });
 

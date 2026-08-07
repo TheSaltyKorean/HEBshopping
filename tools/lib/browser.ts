@@ -36,8 +36,21 @@ export async function writeSecret(path: string, contents: string): Promise<void>
 export const PROFILE_DIR = resolve('.playwright-profile');
 export const CAPTURE_DIR = resolve('captures');
 
-/** Owner-only: holds a live, already-authenticated H-E-B session. */
-const PROFILE_DIR_MODE = 0o700;
+/** Owner-only: these directories hold a live, already-authenticated H-E-B session. */
+const OWNER_ONLY_DIR_MODE = 0o700;
+
+/**
+ * Create a directory, or lock down its permissions if it already exists.
+ *
+ * `mkdir` only applies a mode on creation, and leaves an existing directory's permissions
+ * untouched — same reason `writeSecret` chmods after writing, not just on creation. Default
+ * umask would often leave it group/other-readable, so set it explicitly rather than assume;
+ * on Windows this is a no-op (see `writeSecret`'s own note).
+ */
+export async function ensureOwnerOnlyDir(dir: string): Promise<void> {
+  await mkdir(dir, { recursive: true });
+  await chmod(dir, OWNER_ONLY_DIR_MODE);
+}
 
 export interface CapturedCall {
   operationName: string;
@@ -77,12 +90,7 @@ export interface Capture {
  * expects to see.
  */
 export async function launchBrowser(): Promise<BrowserContext> {
-  // `launchPersistentContext` creates this directory if it's missing but leaves an existing
-  // one's permissions untouched — same reason `writeSecret` chmods after writing, not just on
-  // creation. Default umask would often leave it group/other-readable, so set it explicitly
-  // rather than assume; on Windows this is a no-op (see `writeSecret`'s own note).
-  await mkdir(PROFILE_DIR, { recursive: true });
-  await chmod(PROFILE_DIR, PROFILE_DIR_MODE);
+  await ensureOwnerOnlyDir(PROFILE_DIR);
   return chromium.launchPersistentContext(PROFILE_DIR, {
     headless: false,
     viewport: { width: 1400, height: 900 },
@@ -168,7 +176,7 @@ export async function saveCapture(
     await Promise.allSettled([...capture.pending]);
   }
 
-  await mkdir(CAPTURE_DIR, { recursive: true });
+  await ensureOwnerOnlyDir(CAPTURE_DIR);
 
   // `label` reaches here from a raw CLI argument (see `drive.ts`). Without stripping path
   // separators, a label like `../debug` writes `debug-operations.json` and

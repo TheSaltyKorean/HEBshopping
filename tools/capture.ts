@@ -17,10 +17,9 @@
  */
 
 import type { BrowserContext } from 'playwright';
-import { mkdir } from 'node:fs/promises';
 import { resolve } from 'node:path';
 import { filterHebStorageState, isGraphqlUrl, type StorageStateLike } from '@heb/core';
-import { launchBrowser, writeSecret } from './lib/browser.js';
+import { ensureOwnerOnlyDir, launchBrowser, writeSecret } from './lib/browser.js';
 
 const CAPTURE_DIR = resolve('captures');
 const START_URL = 'https://www.heb.com/shopping-list';
@@ -183,7 +182,7 @@ async function flush(context: BrowserContext): Promise<void> {
     await Promise.allSettled([...pending]);
   }
 
-  await mkdir(CAPTURE_DIR, { recursive: true });
+  await ensureOwnerOnlyDir(CAPTURE_DIR);
 
   await writeSecret(resolve(CAPTURE_DIR, 'operations.json'),
     JSON.stringify(Object.fromEntries(operations), null, 2));
@@ -280,7 +279,7 @@ async function main(): Promise<void> {
     const previous = autosave ?? Promise.resolve();
     autosave = previous
       .catch(() => undefined)
-      .then(() => mkdir(CAPTURE_DIR, { recursive: true }))
+      .then(() => ensureOwnerOnlyDir(CAPTURE_DIR))
       .then(() =>
         writeSecret(resolve(CAPTURE_DIR, 'operations.json'),
           JSON.stringify(Object.fromEntries(operations), null, 2)),

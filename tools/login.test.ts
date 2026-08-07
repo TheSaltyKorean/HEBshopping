@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { mkdir, mkdtemp, readdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { join, resolve } from 'node:path';
 
 const execFileSyncMock = vi.hoisted(() => vi.fn());
 vi.mock('node:child_process', () => ({ execFileSync: execFileSyncMock }));
@@ -313,6 +313,26 @@ describe('isDedicatedDirectory', () => {
     const error = Object.assign(new Error('permission denied'), { code: 'EACCES' });
     vi.mocked(readdir).mockRejectedValueOnce(error);
     await expect(isDedicatedDirectory('/some/dir', 'session.json')).resolves.toBe(false);
+  });
+
+  it('treats the default .session directory as dedicated to a second session file too', async () => {
+    vi.mocked(readdir).mockResolvedValueOnce(['session.json'] as never);
+    await expect(isDedicatedDirectory(resolve('.session'), 'second.json')).resolves.toBe(true);
+  });
+
+  it('still rejects a directory holding an unrelated file, even if it is the default .session directory', async () => {
+    vi.mocked(readdir).mockResolvedValueOnce(['session.json', 'other.txt'] as never);
+    await expect(isDedicatedDirectory(resolve('.session'), 'second.json')).resolves.toBe(false);
+  });
+
+  it('does not extend the default-session exception to an unrelated directory', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'heb-dedicated-not-default-'));
+    try {
+      await writeFile(join(dir, 'session.json'), '{}');
+      await expect(isDedicatedDirectory(dir, 'second.json')).resolves.toBe(false);
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
   });
 });
 

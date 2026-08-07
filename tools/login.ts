@@ -345,20 +345,26 @@ async function checkOwnerOnly(path: string): Promise<boolean | null> {
 }
 
 /**
- * Whether `dir` holds nothing but `expectedEntry`, or doesn't exist yet at all. Gates the
- * custom-`--session` icacls remediation: locking a directory that holds anything else would
- * strip every other account's access to files this tool has no business touching, so that
- * fix must only ever be offered for a directory the session file has entirely to itself. A
- * directory that doesn't exist yet — or exists but is empty — is trivially dedicated, since
- * it will be created with nothing else in it; that's what lets the preflight in `main()` call
- * this *before* `store.putSession()` has written anything. Any other read failure (e.g.
- * permission denied) is treated as "not dedicated" — the safer assumption when it can't be
- * verified.
+ * Whether `dir` holds nothing but `expectedEntry` (and, when `dir` is the default `.session`
+ * directory, the default session file too) — or doesn't exist yet at all. Gates the custom-
+ * `--session` icacls remediation: locking a directory that holds anything else would strip
+ * every other account's access to files this tool has no business touching, so that fix must
+ * only ever be offered for a directory the session file has entirely to itself. The default
+ * `.session` directory is the one exception: `docs/setup.md` already has the reader lock it
+ * down before Step 5, covering every file this tool writes there, so a custom `--session` path
+ * pointed inside it (e.g. `.session/second.json`, alongside the default `session.json`) isn't
+ * sharing the directory with a foreign file. A directory that doesn't exist yet — or exists
+ * but is empty — is trivially dedicated, since it will be created with nothing else in it;
+ * that's what lets the preflight in `main()` call this *before* `store.putSession()` has
+ * written anything. Any other read failure (e.g. permission denied) is treated as "not
+ * dedicated" — the safer assumption when it can't be verified.
  */
 export async function isDedicatedDirectory(dir: string, expectedEntry: string): Promise<boolean> {
+  const allowed = new Set([expectedEntry]);
+  if (resolve(dir) === dirname(resolve(DEFAULT_SESSION_PATH))) allowed.add(basename(DEFAULT_SESSION_PATH));
   try {
     const entries = await readdir(dir);
-    return entries.length === 0 || (entries.length === 1 && entries[0] === expectedEntry);
+    return entries.every((entry) => allowed.has(entry));
   } catch (error) {
     return (error as NodeJS.ErrnoException).code === 'ENOENT';
   }

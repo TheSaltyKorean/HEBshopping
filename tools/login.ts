@@ -110,6 +110,23 @@ export function isSessionTrusted(ownerOnly: boolean, shell: ReturnType<typeof wi
   return ownerOnly && shell !== 'wsl-powershell';
 }
 
+const quotePowerShell = (path: string): string => `'${path.replace(/'/g, "''")}'`;
+
+/**
+ * The `mkdir` + `icacls` lines that lock a directory down for the current user only, so
+ * anything written into it afterward inherits a safe ACL. Shared between `untrustedSessionNote`
+ * (told to a reader after a write already landed under the old ACL) and the `main()` preflight
+ * for a custom `--session` parent (told *before* anything is written) — both need the exact
+ * same command, and a second, drifted copy is how a typo in one goes unnoticed in the other.
+ */
+function lockDirectoryCommand(dirIcaclsPath: string): string {
+  return (
+    `   mkdir -Force ${quotePowerShell(dirIcaclsPath)}\n` +
+    `   icacls ${quotePowerShell(dirIcaclsPath)} /reset\n` +
+    `   icacls ${quotePowerShell(dirIcaclsPath)} /inheritance:r /grant:r "\${env:USERDOMAIN}\\\${env:USERNAME}:(OI)(CI)F"\n`
+  );
+}
+
 /**
  * The remediation note to print for an untrusted session write, or null when there's nothing
  * to add. Pulled out as a pure function — like `windowsPathFor` and `isSessionTrusted` — so
@@ -170,10 +187,9 @@ export function untrustedSessionNote(
       : "   This file's permissions could not be verified, so treat it as unprotected until\n" +
         '   you confirm otherwise.';
   const wslSuffix = shell === 'wsl-powershell' ? ' (not this WSL shell)' : '';
-  const quote = (path: string): string => `'${path.replace(/'/g, "''")}'`;
   const fileFix =
-    `   icacls ${quote(icaclsPath)} /reset\n` +
-    `   icacls ${quote(icaclsPath)} /inheritance:r /grant:r "\${env:USERDOMAIN}\\\${env:USERNAME}:F"\n`;
+    `   icacls ${quotePowerShell(icaclsPath)} /reset\n` +
+    `   icacls ${quotePowerShell(icaclsPath)} /inheritance:r /grant:r "\${env:USERDOMAIN}\\\${env:USERNAME}:F"\n`;
 
   if (isDefaultSessionPath) {
     return (
@@ -239,9 +255,7 @@ export function untrustedSessionNote(
   return (
     cautionary +
     `   Lock this one now, from a Windows PowerShell prompt${wslSuffix}:\n` +
-    `   mkdir -Force ${quote(dirIcaclsPath)}\n` +
-    `   icacls ${quote(dirIcaclsPath)} /reset\n` +
-    `   icacls ${quote(dirIcaclsPath)} /inheritance:r /grant:r "\${env:USERDOMAIN}\\\${env:USERNAME}:(OI)(CI)F"\n` +
+    lockDirectoryCommand(dirIcaclsPath) +
     "   Windows can't confirm from here whether this file already picked up that ACL\n" +
     '   or still carries whatever it inherited before the directory was locked, so lock\n' +
     '   the file itself too, every time you see this:\n' +
@@ -331,18 +345,22 @@ async function checkOwnerOnly(path: string): Promise<boolean | null> {
 }
 
 /**
- * Whether `dir` holds nothing but `expectedEntry`. Gates the custom-`--session` icacls
- * remediation: locking a directory that holds anything else would strip every other
- * account's access to files this tool has no business touching, so that fix must only ever
- * be offered for a directory the session file has entirely to itself. Treated as "not
- * dedicated" when the listing itself fails — the safer assumption when it can't be verified.
+ * Whether `dir` holds nothing but `expectedEntry`, or doesn't exist yet at all. Gates the
+ * custom-`--session` icacls remediation: locking a directory that holds anything else would
+ * strip every other account's access to files this tool has no business touching, so that
+ * fix must only ever be offered for a directory the session file has entirely to itself. A
+ * directory that doesn't exist yet — or exists but is empty — is trivially dedicated, since
+ * it will be created with nothing else in it; that's what lets the preflight in `main()` call
+ * this *before* `store.putSession()` has written anything. Any other read failure (e.g.
+ * permission denied) is treated as "not dedicated" — the safer assumption when it can't be
+ * verified.
  */
-async function isDedicatedDirectory(dir: string, expectedEntry: string): Promise<boolean> {
+export async function isDedicatedDirectory(dir: string, expectedEntry: string): Promise<boolean> {
   try {
     const entries = await readdir(dir);
-    return entries.length === 1 && entries[0] === expectedEntry;
-  } catch {
-    return false;
+    return entries.length === 0 || (entries.length === 1 && entries[0] === expectedEntry);
+  } catch (error) {
+    return (error as NodeJS.ErrnoException).code === 'ENOENT';
   }
 }
 
@@ -393,8 +411,58 @@ export async function clearDirectoryContents(dir: string): Promise<void> {
   await Promise.all(entries.map((entry) => rm(join(dir, entry), { recursive: true, force: true })));
 }
 
+/**
+ * Checked before login starts, not just after writing. `store.putSession()` persists the
+ * credential as soon as a usable session shows up, so a check that only ran afterward — the
+ * prior shape of this code — meant the very first write into a shared or unlocked Windows/WSL
+ * directory was already exposed by the time the user ever saw an instruction about it.
+ *
+ * A directory shared with other files is refused outright: there's no ACL fix to offer for
+ * it (locking it would strip access this tool has no business taking away), so there's no
+ * point letting login proceed only to say so afterward. A dedicated directory only gets a
+ * reminder, not a hard requirement — Windows never lets `stat()` confirm an ACL is actually
+ * locked down (see `isSessionTrusted`), so a hard requirement here would block every
+ * native-Windows login, not just the unlocked ones.
+ */
+async function ensureCustomSessionParentReady(sessionPath: string): Promise<void> {
+  const dir = dirname(sessionPath);
+  const { path: dirIcaclsPath, shell } = windowsPathFor(dir);
+  if (shell === null) return;
+
+  if (!(await isDedicatedDirectory(dir, basename(sessionPath)))) {
+    console.error(
+      `\n⛔ ${dir} holds other files, so this tool won't write a live credential there —\n` +
+        "   locking it down would strip access that isn't this tool's to take away. Point\n" +
+        '   --session at a new, empty directory of your own choosing, lock that directory\n' +
+        '   first (see the Windows note above Step 5 in docs/setup.md for the mkdir + icacls\n' +
+        '   commands), then run again.',
+    );
+    process.exit(1);
+  }
+
+  // Unlike the post-write reminder in main() — which also re-locks the file itself, since a
+  // file written before this cycle's dir-lock landed may still carry the old ACL — there's no
+  // file to re-lock here yet: on a first run into this directory, `sessionPath` doesn't exist
+  // until the login that follows this check writes it, and `icacls` on a path that doesn't
+  // exist just fails.
+  const wslSuffix = shell === 'wsl-powershell' ? ' (not this WSL shell)' : '';
+  console.log(
+    `\nBefore logging in — ${dir} isn't yet known to be locked down for Windows access\n` +
+      "   (stat() can't confirm an ACL fix already ran; see isSessionTrusted). If you haven't\n" +
+      `   already, lock it now, from a Windows PowerShell prompt${wslSuffix}:\n` +
+      lockDirectoryCommand(dirIcaclsPath) +
+      "   Locking it first means this login's write inherits a safe ACL from the moment it\n" +
+      '   happens, instead of landing under whatever this directory currently inherits.',
+  );
+}
+
 async function main(): Promise<void> {
   const options = parseArgs(process.argv.slice(2));
+  const isDefaultSessionPath = options.sessionPath === resolve(DEFAULT_SESSION_PATH);
+
+  if (!isDefaultSessionPath) {
+    await ensureCustomSessionParentReady(options.sessionPath);
+  }
 
   if (options.switchAccount) {
     console.log(`Forgetting the current account (clearing ${PROFILE_DIR}) …`);
@@ -490,7 +558,6 @@ async function main(): Promise<void> {
     );
   }
   if (!trusted) {
-    const isDefaultSessionPath = options.sessionPath === resolve(DEFAULT_SESSION_PATH);
     const dirIcaclsPath = windowsPathFor(dirname(options.sessionPath)).path;
     const dedicated =
       isDefaultSessionPath ||

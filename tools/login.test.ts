@@ -11,8 +11,14 @@ vi.mock('node:fs/promises', async (importOriginal) => {
   return { ...actual, readdir: vi.fn(actual.readdir) };
 });
 
-const { clearDirectoryContents, isSessionTrusted, untrustedProfileNote, untrustedSessionNote, windowsPathFor } =
-  await import('./login.js');
+const {
+  clearDirectoryContents,
+  isDedicatedDirectory,
+  isSessionTrusted,
+  untrustedProfileNote,
+  untrustedSessionNote,
+  windowsPathFor,
+} = await import('./login.js');
 
 const originalPlatform = process.platform;
 
@@ -263,6 +269,49 @@ describe('untrustedSessionNote', () => {
     // dedicated directory — a fix command targeting that old path would just fail to find it.
     expect(atCustom).not.toContain("icacls 'C:\\shared\\foo.json'");
     expect(atCustom).not.toContain('already wrote the file under the old ACL');
+  });
+});
+
+describe('isDedicatedDirectory', () => {
+  it('treats a directory that does not exist yet as dedicated — it will be created fresh', async () => {
+    const dir = join(tmpdir(), 'heb-dedicated-missing-does-not-exist');
+    await expect(isDedicatedDirectory(dir, 'session.json')).resolves.toBe(true);
+  });
+
+  it('treats an empty existing directory as dedicated', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'heb-dedicated-empty-'));
+    try {
+      await expect(isDedicatedDirectory(dir, 'session.json')).resolves.toBe(true);
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('treats a directory holding only the expected entry as dedicated', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'heb-dedicated-solo-'));
+    try {
+      await writeFile(join(dir, 'session.json'), '{}');
+      await expect(isDedicatedDirectory(dir, 'session.json')).resolves.toBe(true);
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('treats a directory holding other files as not dedicated', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'heb-dedicated-shared-'));
+    try {
+      await writeFile(join(dir, 'session.json'), '{}');
+      await writeFile(join(dir, 'other.txt'), 'x');
+      await expect(isDedicatedDirectory(dir, 'session.json')).resolves.toBe(false);
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('treats an unreadable directory as not dedicated, the safer assumption', async () => {
+    const error = Object.assign(new Error('permission denied'), { code: 'EACCES' });
+    vi.mocked(readdir).mockRejectedValueOnce(error);
+    await expect(isDedicatedDirectory('/some/dir', 'session.json')).resolves.toBe(false);
   });
 });
 

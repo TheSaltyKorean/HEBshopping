@@ -361,15 +361,25 @@ async function checkOwnerOnly(path: string): Promise<boolean | null> {
  * that's what lets the preflight in `main()` call this *before* `store.putSession()` has
  * written anything. Any other read failure (e.g. permission denied) is treated as "not
  * dedicated" — the safer assumption when it can't be verified.
+ *
+ * `shell` decides whether the default-directory comparison is case-insensitive: both native
+ * Windows (`'powershell'`) and WSL on a Windows drive (`'wsl-powershell'`) sit on a
+ * case-insensitive filesystem, so `.Session` and `.session` are the same directory on disk
+ * either way — deriving this from `process.platform` alone missed the WSL case, since WSL
+ * reports `linux` even when `windowsPathFor` has already confirmed it's on a DrvFS mount.
  */
-export async function isDedicatedDirectory(dir: string, expectedEntry: string): Promise<boolean> {
+export async function isDedicatedDirectory(
+  dir: string,
+  expectedEntry: string,
+  shell: ReturnType<typeof windowsPathFor>['shell'],
+): Promise<boolean> {
   const allowed = new Set([expectedEntry]);
   const resolvedDir = resolve(dir);
   const resolvedDefaultDir = dirname(resolve(DEFAULT_SESSION_PATH));
-  const sameAsDefaultDir =
-    process.platform === 'win32'
-      ? resolvedDir.toLowerCase() === resolvedDefaultDir.toLowerCase()
-      : resolvedDir === resolvedDefaultDir;
+  const caseInsensitive = shell === 'powershell' || shell === 'wsl-powershell';
+  const sameAsDefaultDir = caseInsensitive
+    ? resolvedDir.toLowerCase() === resolvedDefaultDir.toLowerCase()
+    : resolvedDir === resolvedDefaultDir;
   if (sameAsDefaultDir) allowed.add(basename(DEFAULT_SESSION_PATH));
   try {
     const entries = await readdir(dir);
@@ -487,7 +497,7 @@ async function ensureCustomSessionParentReady(sessionPath: string): Promise<void
   if (shell === null) return;
 
   const alreadySafe = isUnderOwnHomeDirectory(dir, homedir());
-  const dedicated = await isDedicatedDirectory(dir, basename(sessionPath));
+  const dedicated = await isDedicatedDirectory(dir, basename(sessionPath), shell);
   const action = customSessionParentAction(shell, dedicated, alreadySafe);
   if (action === 'skip') return;
 
@@ -634,7 +644,7 @@ async function main(): Promise<void> {
     const dirIcaclsPath = windowsPathFor(dirname(options.sessionPath)).path;
     const dedicated =
       isDefaultSessionPath ||
-      (await isDedicatedDirectory(dirname(options.sessionPath), basename(options.sessionPath)));
+      (await isDedicatedDirectory(dirname(options.sessionPath), basename(options.sessionPath), shell));
     const note = untrustedSessionNote(ownerOnly, shell, icaclsPath, isDefaultSessionPath, dirIcaclsPath, dedicated);
     if (note !== null) console.log(note);
   }

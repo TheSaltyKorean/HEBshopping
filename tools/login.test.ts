@@ -281,13 +281,13 @@ describe('untrustedSessionNote', () => {
 describe('isDedicatedDirectory', () => {
   it('treats a directory that does not exist yet as dedicated — it will be created fresh', async () => {
     const dir = join(tmpdir(), 'heb-dedicated-missing-does-not-exist');
-    await expect(isDedicatedDirectory(dir, 'session.json')).resolves.toBe(true);
+    await expect(isDedicatedDirectory(dir, 'session.json', null)).resolves.toBe(true);
   });
 
   it('treats an empty existing directory as dedicated', async () => {
     const dir = await mkdtemp(join(tmpdir(), 'heb-dedicated-empty-'));
     try {
-      await expect(isDedicatedDirectory(dir, 'session.json')).resolves.toBe(true);
+      await expect(isDedicatedDirectory(dir, 'session.json', null)).resolves.toBe(true);
     } finally {
       await rm(dir, { recursive: true, force: true });
     }
@@ -297,7 +297,7 @@ describe('isDedicatedDirectory', () => {
     const dir = await mkdtemp(join(tmpdir(), 'heb-dedicated-solo-'));
     try {
       await writeFile(join(dir, 'session.json'), '{}');
-      await expect(isDedicatedDirectory(dir, 'session.json')).resolves.toBe(true);
+      await expect(isDedicatedDirectory(dir, 'session.json', null)).resolves.toBe(true);
     } finally {
       await rm(dir, { recursive: true, force: true });
     }
@@ -308,7 +308,7 @@ describe('isDedicatedDirectory', () => {
     try {
       await writeFile(join(dir, 'session.json'), '{}');
       await writeFile(join(dir, 'other.txt'), 'x');
-      await expect(isDedicatedDirectory(dir, 'session.json')).resolves.toBe(false);
+      await expect(isDedicatedDirectory(dir, 'session.json', null)).resolves.toBe(false);
     } finally {
       await rm(dir, { recursive: true, force: true });
     }
@@ -317,30 +317,39 @@ describe('isDedicatedDirectory', () => {
   it('treats an unreadable directory as not dedicated, the safer assumption', async () => {
     const error = Object.assign(new Error('permission denied'), { code: 'EACCES' });
     vi.mocked(readdir).mockRejectedValueOnce(error);
-    await expect(isDedicatedDirectory('/some/dir', 'session.json')).resolves.toBe(false);
+    await expect(isDedicatedDirectory('/some/dir', 'session.json', null)).resolves.toBe(false);
   });
 
   it('treats the default .session directory as dedicated to a second session file too', async () => {
     vi.mocked(readdir).mockResolvedValueOnce(['session.json'] as never);
-    await expect(isDedicatedDirectory(resolve('.session'), 'second.json')).resolves.toBe(true);
+    await expect(isDedicatedDirectory(resolve('.session'), 'second.json', 'powershell')).resolves.toBe(true);
   });
 
   it('still rejects a directory holding an unrelated file, even if it is the default .session directory', async () => {
     vi.mocked(readdir).mockResolvedValueOnce(['session.json', 'other.txt'] as never);
-    await expect(isDedicatedDirectory(resolve('.session'), 'second.json')).resolves.toBe(false);
+    await expect(isDedicatedDirectory(resolve('.session'), 'second.json', 'powershell')).resolves.toBe(false);
   });
 
-  it('recognizes the default .session directory case-insensitively on Windows', async () => {
-    setPlatform('win32');
+  it('recognizes the default .session directory case-insensitively on native Windows', async () => {
     vi.mocked(readdir).mockResolvedValueOnce(['session.json'] as never);
-    await expect(isDedicatedDirectory(resolve('.SESSION'), 'second.json')).resolves.toBe(true);
+    await expect(isDedicatedDirectory(resolve('.SESSION'), 'second.json', 'powershell')).resolves.toBe(true);
+  });
+
+  it('recognizes the default .session directory case-insensitively on WSL over a Windows drive', async () => {
+    vi.mocked(readdir).mockResolvedValueOnce(['session.json'] as never);
+    await expect(isDedicatedDirectory(resolve('.SESSION'), 'second.json', 'wsl-powershell')).resolves.toBe(true);
+  });
+
+  it('does not case-fold the default-directory comparison on native POSIX', async () => {
+    vi.mocked(readdir).mockResolvedValueOnce(['session.json'] as never);
+    await expect(isDedicatedDirectory(resolve('.SESSION'), 'second.json', null)).resolves.toBe(false);
   });
 
   it('does not extend the default-session exception to an unrelated directory', async () => {
     const dir = await mkdtemp(join(tmpdir(), 'heb-dedicated-not-default-'));
     try {
       await writeFile(join(dir, 'session.json'), '{}');
-      await expect(isDedicatedDirectory(dir, 'second.json')).resolves.toBe(false);
+      await expect(isDedicatedDirectory(dir, 'second.json', null)).resolves.toBe(false);
     } finally {
       await rm(dir, { recursive: true, force: true });
     }

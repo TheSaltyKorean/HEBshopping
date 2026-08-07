@@ -126,6 +126,11 @@ That last line is the proof: it made a real authenticated call and saw your real
 >
 > The same applies to `captures/` if you ever run `npm run capture`, which writes raw cookie
 > jars and request bodies.
+>
+> `npm run login -- --switch` deletes `.playwright-profile/` to forget the old account, and
+> Playwright recreates it from scratch on the next login — back under the parent directory's
+> inherited ACL. Re-run the `.playwright-profile` commands above after switching accounts;
+> `.session/` isn't touched by `--switch` and doesn't need repeating.
 
 ### Step 6. Confirm it works
 

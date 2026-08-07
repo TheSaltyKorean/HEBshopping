@@ -17,7 +17,7 @@
  */
 
 import { rm } from 'node:fs/promises';
-import { resolve } from 'node:path';
+import { dirname, resolve } from 'node:path';
 import {
   FileStore,
   HebClient,
@@ -224,11 +224,13 @@ async function main(): Promise<void> {
       (process.platform === 'win32' ? '.' : ' (mode 0600).'),
   );
   if (process.platform === 'win32') {
+    const sessionDir = dirname(options.sessionPath);
     console.log(
       '   Windows has no POSIX file modes, so this file is protected only by the ACL it\n' +
         '   inherits from its directory. Inside your user profile that is already user-only.\n' +
         '   Outside it (a repo under C:\\git\\, say) local `Users` can read it — see the\n' +
-        '   Windows note in docs/setup.md for the `icacls` fix.',
+        '   Windows note in docs/setup.md for the `icacls` fix, run against\n' +
+        `   ${sessionDir} (substitute it for \`.session\` in that note if you passed --session).`,
     );
   }
   describe(session);

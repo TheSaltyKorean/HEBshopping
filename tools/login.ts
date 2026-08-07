@@ -271,7 +271,13 @@ async function main(): Promise<void> {
   const { path: icaclsPath, shell } = windowsPathFor(options.sessionPath);
   const trusted = ownerOnly !== null && isSessionTrusted(ownerOnly, shell);
   console.log(`\n✅ Session written to ${options.sessionPath}` + (trusted ? ' (mode 0600).' : '.'));
-  if (ownerOnly !== null && !trusted) {
+  if (ownerOnly === null) {
+    console.log(
+      "   Could not verify this file's permissions after writing it (e.g. antivirus briefly\n" +
+        '   locking the freshly-renamed file). Treat it as unverified and check manually that\n' +
+        "   it isn't readable by other accounts before trusting it.",
+    );
+  } else if (!trusted) {
     if (shell === null) {
       console.log(
         "   This filesystem didn't enforce the owner-only permission, and it isn't a Windows\n" +

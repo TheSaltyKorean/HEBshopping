@@ -884,8 +884,22 @@ export function parseSpokenRequest(text: string): SpokenRequest {
     .slice(rawIndexOfMeaningful(consumed - 1) + 1, rawIndexOfMeaningful(fractionCursor))
     .includes('and');
 
+  // "three quarters of a banana" / "one half of a banana" — no "and" joins these, but "of"
+  // right after the fraction word marks the leading number as the fraction's own numerator
+  // ("three-quarters"), the same construction `isLeadingFractionPhrase` above already reads
+  // when there is no leading number at all. Without this, the fraction is left unconsumed,
+  // the leading number is read as a plain count, and the request resolves to that many whole
+  // items instead of refusing the unsupported fractional amount — "three quarters of a
+  // banana" would add three bananas. This is deliberately distinct from the no-"of" package
+  // form just above ("two half-gallon milks"): "of" is what tells the two apart.
+  const hasOfAfterFraction =
+    fraction !== undefined && raw[rawIndexOfMeaningful(fractionCursor) + 1] === 'of';
+
   if (numeric !== undefined && numeric >= 1 && fraction !== undefined && hasAndBeforeFraction) {
     numeric += fraction * (fractionLeadingOnes ?? 1);
+    consumed = fractionCursor + 1;
+  } else if (numeric !== undefined && numeric >= 1 && fraction !== undefined && hasOfAfterFraction) {
+    numeric *= fraction;
     consumed = fractionCursor + 1;
   }
 

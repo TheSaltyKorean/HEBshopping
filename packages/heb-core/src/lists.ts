@@ -703,16 +703,19 @@ export class HebListOps implements ListOps {
       // asked for so the caller can report the contribution and the merged total separately,
       // instead of crediting the whole merged weight to this request.
       //
-      // Checked *before* the ladder-shortfall case, not after: when the ladder is also
-      // capped, `requested` is the merged total (their weight plus this request's), not
-      // anything this request itself asked for, and reporting it as `weightRequested` would
-      // have Alexa/MCP claim this request asked for the merged total rather than its own
-      // share.
-      const shortfall = merged
-        ? { weightRequested: input.weight }
-        : increments !== undefined && increments.length > 0 && requested > increments[increments.length - 1]!
+      // The ladder-shortfall case is checked *first*, not the merge case: when the concurrent
+      // add already sat the line on its last rung, `target` cannot move — `snapWeight` clamps
+      // `requested` right back down to `added.weight` — so none of this request's own weight
+      // landed either. Reporting `input.weight` there would have `weightMergedNotice` claim
+      // this request's own share was written when it was not; reporting the merged `requested`
+      // total instead — the same shape the existing-line ladder-shortfall case above uses —
+      // makes `weightCappedNotice` fire the correct "could not bring it up to" wording.
+      const shortfall =
+        increments !== undefined && increments.length > 0 && requested > increments[increments.length - 1]!
           ? { weightRequested: requested }
-          : {};
+          : merged
+            ? { weightRequested: input.weight }
+            : {};
       return {
         status,
         item: await this.adjustWeight(listId, added, target, !wasPresent && !merged),

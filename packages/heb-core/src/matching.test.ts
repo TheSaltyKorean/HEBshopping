@@ -331,6 +331,21 @@ describe('parseSpokenRequest', () => {
       expect(parsed.query).toBe(query);
     });
 
+    // With "of" instead of "and", the leading number is the fraction's own numerator, not a
+    // separate whole-number count — "three quarters of a banana" is 0.75 of a banana, not
+    // three bananas. Without reading it here, "quarters" was left unconsumed and the leading
+    // number was read as a plain count: confirming the resolved product would have added
+    // three whole items for an unsupported 0.75-item request.
+    it.each([
+      ['one half of a banana', 0.5, 'one half banana'],
+      ['three quarters of a banana', 0.75, 'three quarters banana'],
+    ])('refuses a multiplied leading fractional count (%s)', (input, refused, query) => {
+      const parsed = parseSpokenRequest(input);
+      expect(parsed.quantity).toBe(1);
+      expect(parsed.quantityRefused).toBe(refused);
+      expect(parsed.query).toBe(query);
+    });
+
     it('refuses a bare leading spelled fraction ("half of a banana")', () => {
       const parsed = parseSpokenRequest('half of a banana');
       expect(parsed.quantity).toBe(1);

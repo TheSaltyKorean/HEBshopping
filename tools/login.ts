@@ -258,11 +258,20 @@ async function main(): Promise<void> {
   // Say what actually happened, not what the platform is expected to do. A WSL checkout on
   // a Windows drive reports `linux` but can silently drop the owner-only permission just
   // like Windows does, so check the mode `putSession` actually produced.
-  const ownerOnly = ((await stat(options.sessionPath)).mode & 0o077) === 0;
+  //
+  // The credential is already durably written by this point (temp-file-then-rename), so a
+  // stat() failure here — e.g. AV briefly locking the freshly-renamed file — must not be
+  // reported as a failed login; fall back to the plain success line instead.
+  let ownerOnly: boolean | null;
+  try {
+    ownerOnly = ((await stat(options.sessionPath)).mode & 0o077) === 0;
+  } catch {
+    ownerOnly = null;
+  }
   const { path: icaclsPath, shell } = windowsPathFor(options.sessionPath);
-  const trusted = isSessionTrusted(ownerOnly, shell);
+  const trusted = ownerOnly !== null && isSessionTrusted(ownerOnly, shell);
   console.log(`\n✅ Session written to ${options.sessionPath}` + (trusted ? ' (mode 0600).' : '.'));
-  if (!trusted) {
+  if (ownerOnly !== null && !trusted) {
     if (shell === null) {
       console.log(
         "   This filesystem didn't enforce the owner-only permission, and it isn't a Windows\n" +

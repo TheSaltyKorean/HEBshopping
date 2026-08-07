@@ -230,8 +230,12 @@ async function main(): Promise<void> {
         '   WSL mounts of a Windows drive. Restrict just this file (safe even if its\n' +
         "   directory holds other files you don't want touched):\n" +
         `   icacls "${options.sessionPath}" /inheritance:r /grant:r "\${env:USERNAME}:F"\n` +
+        '   Every login replaces this file (writes a temp file, then renames it over the\n' +
+        "   old one), and the replacement inherits the directory's ACL rather than the file\n" +
+        '   you just locked — so re-run that command after every login, not just the first.\n' +
         '   For the default .session directory (and .playwright-profile), see the Windows\n' +
-        '   note above Step 5 in docs/setup.md, which also keeps future logins protected.',
+        '   note above Step 5 in docs/setup.md instead: locking the directory protects every\n' +
+        '   future login automatically, with nothing to repeat.',
     );
   }
   describe(session);

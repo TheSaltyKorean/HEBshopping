@@ -85,8 +85,9 @@ install is good.
 > ```
 >
 > Already ran `npm run login` before reading this? Those directories exist already and may
-> hold a session written under the old, wider ACL. Run the two commands above, then also
-> re-ACL what's already inside them — this is the only case that needs it:
+> hold a session written under the old, wider ACL. Run the two `icacls` commands above
+> (skip `mkdir` — the directories already exist), then also re-ACL what's already inside
+> them — this is the only case that needs it:
 >
 > ```powershell
 > icacls .session /T /inheritance:r /grant:r "${env:USERNAME}:F"

@@ -345,6 +345,26 @@ describe('isDedicatedDirectory', () => {
     await expect(isDedicatedDirectory(resolve('.SESSION'), 'second.json', null)).resolves.toBe(false);
   });
 
+  it('recognizes an existing entry that only differs in case on a case-insensitive filesystem', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'heb-dedicated-case-'));
+    try {
+      await writeFile(join(dir, 'Session.json'), '{}');
+      await expect(isDedicatedDirectory(dir, 'session.json', 'powershell')).resolves.toBe(true);
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('does not case-fold entry names on native POSIX', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'heb-dedicated-case-posix-'));
+    try {
+      await writeFile(join(dir, 'Session.json'), '{}');
+      await expect(isDedicatedDirectory(dir, 'session.json', null)).resolves.toBe(false);
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
   it('does not extend the default-session exception to an unrelated directory', async () => {
     const dir = await mkdtemp(join(tmpdir(), 'heb-dedicated-not-default-'));
     try {

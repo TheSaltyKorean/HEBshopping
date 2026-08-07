@@ -362,11 +362,13 @@ async function checkOwnerOnly(path: string): Promise<boolean | null> {
  * written anything. Any other read failure (e.g. permission denied) is treated as "not
  * dedicated" — the safer assumption when it can't be verified.
  *
- * `shell` decides whether the default-directory comparison is case-insensitive: both native
- * Windows (`'powershell'`) and WSL on a Windows drive (`'wsl-powershell'`) sit on a
- * case-insensitive filesystem, so `.Session` and `.session` are the same directory on disk
- * either way — deriving this from `process.platform` alone missed the WSL case, since WSL
- * reports `linux` even when `windowsPathFor` has already confirmed it's on a DrvFS mount.
+ * `shell` decides whether the default-directory comparison, and the entry-name comparison
+ * against `allowed`, are case-insensitive: both native Windows (`'powershell'`) and WSL on a
+ * Windows drive (`'wsl-powershell'`) sit on a case-insensitive filesystem, so `.Session` and
+ * `.session` are the same directory on disk either way, and a `Session.json` written by one
+ * run is the same file a later run names `session.json` — deriving this from `process.platform`
+ * alone missed the WSL case, since WSL reports `linux` even when `windowsPathFor` has already
+ * confirmed it's on a DrvFS mount.
  */
 export async function isDedicatedDirectory(
   dir: string,
@@ -381,9 +383,14 @@ export async function isDedicatedDirectory(
     ? resolvedDir.toLowerCase() === resolvedDefaultDir.toLowerCase()
     : resolvedDir === resolvedDefaultDir;
   if (sameAsDefaultDir) allowed.add(basename(DEFAULT_SESSION_PATH));
+  const allowedForComparison = caseInsensitive
+    ? new Set([...allowed].map((entry) => entry.toLowerCase()))
+    : allowed;
   try {
     const entries = await readdir(dir);
-    return entries.every((entry) => allowed.has(entry));
+    return entries.every((entry) =>
+      allowedForComparison.has(caseInsensitive ? entry.toLowerCase() : entry),
+    );
   } catch (error) {
     return (error as NodeJS.ErrnoException).code === 'ENOENT';
   }

@@ -94,6 +94,22 @@ That last line is the proof: it made a real authenticated call and saw your real
 > as you, on an account with a saved payment method. It's written owner-only (mode 0600)
 > and gitignored. Don't copy it around, don't paste it anywhere.
 
+> **On Windows, mode 0600 does nothing.** Node maps `chmod` onto the single read-only
+> attribute and ignores the rest, so the file gets whatever NTFS ACL it inherits from its
+> directory. That matters because of *where you cloned*: a repo under `C:\git\` inherits
+> `C:\`'s default ACL, which grants local `Users` read access — so on a machine with more
+> than one account, another user can read your session. Under your own profile
+> (`C:\Users\<you>\...`) the inherited ACL is already user-only and there is nothing to fix.
+>
+> If the repo lives outside your profile, restrict the directory once:
+>
+> ```powershell
+> icacls .session /inheritance:r /grant:r "$env:USERNAME:(OI)(CI)F"
+> ```
+>
+> The same applies to `captures/` if you ever run `npm run capture`, which writes raw cookie
+> jars and request bodies.
+
 ### Step 6. Confirm it works
 
 ```bash

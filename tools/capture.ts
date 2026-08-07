@@ -35,6 +35,11 @@ const SECRET_FILE_MODE = 0o600;
  * leaves whatever permissions it already had — so a capture restored from elsewhere, or
  * created before this rule existed, keeps a live H-E-B cookie jar world-readable while the
  * code claims otherwise. The chmod is the part that actually holds the guarantee.
+ *
+ * On Windows it holds nothing: Node maps `chmod` onto the read-only attribute alone, so
+ * these files get whatever ACL their directory hands them. The name of this function is a
+ * POSIX promise, and saying so here is cheaper than someone trusting it on the wrong
+ * platform — see docs/setup.md.
  */
 async function writeSecret(path: string, contents: string): Promise<void> {
   await writeFile(path, contents, { mode: SECRET_FILE_MODE });

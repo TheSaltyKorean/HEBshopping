@@ -216,7 +216,21 @@ async function main(): Promise<void> {
   }
 
   await store.putSession(session);
-  console.log(`\n✅ Session written to ${options.sessionPath} (mode 0600).`);
+  // Say what actually happened, per platform. "mode 0600" on Windows is a claim the OS did
+  // not honour — Node maps `chmod` onto the read-only attribute alone — and a false
+  // reassurance about a live credential is worse than no line at all.
+  console.log(
+    `\n✅ Session written to ${options.sessionPath}` +
+      (process.platform === 'win32' ? '.' : ' (mode 0600).'),
+  );
+  if (process.platform === 'win32') {
+    console.log(
+      '   Windows has no POSIX file modes, so this file is protected only by the ACL it\n' +
+        '   inherits from its directory. Inside your user profile that is already user-only.\n' +
+        '   Outside it (a repo under C:\\git\\, say) local `Users` can read it — see the\n' +
+        '   Windows note in docs/setup.md for the one-line `icacls` fix.',
+    );
+  }
   describe(session);
 
   // Writing a session that cannot actually authenticate would be a silent failure that

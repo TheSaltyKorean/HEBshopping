@@ -10,11 +10,18 @@ import { dirname } from 'node:path';
 import type { SessionState, Store } from '../types.js';
 
 /**
- * Owner-read/write only.
+ * Owner-read/write only — **on POSIX**.
  *
  * The session file contains live authentication cookies for an account with a saved
  * payment method. Default umask would often make it world-readable, which on a shared or
  * multi-user machine is a real exposure, so the mode is set explicitly rather than assumed.
+ *
+ * On Windows this constant does nothing. Node maps `chmod` onto the single read-only
+ * attribute there and ignores the rest, so the file ends up with whatever ACL it inherits
+ * from its directory — and a repo checked out under `C:\` inherits an ACL that grants local
+ * `Users` read access. Stated here because silence would read as "protected everywhere":
+ * the mitigation is where the file lives, not what this constant says, and docs/setup.md
+ * carries the instruction.
  */
 const SECRET_FILE_MODE = 0o600;
 

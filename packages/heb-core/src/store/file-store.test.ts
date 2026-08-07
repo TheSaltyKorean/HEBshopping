@@ -17,7 +17,16 @@ async function harness() {
 runStoreContract('FileStore', harness);
 
 describe('FileStore specifics', () => {
-  it('writes the session owner-only', async () => {
+  // POSIX only, and skipped rather than loosened.
+  //
+  // Windows has no POSIX mode bits: `fs.chmod` there can toggle the read-only attribute and
+  // nothing else, so `stat().mode & 0o777` reads 0o666 for any writable file no matter what
+  // was requested. Relaxing the assertion to accept 0o666 would make it pass everywhere
+  // while checking nothing, and asserting 0o666 on Windows would pin Node's own quirk as if
+  // it were the guarantee. Neither is the guarantee, so the check runs where it is real and
+  // is honest about not running where it is not — see `SECRET_FILE_MODE` and docs/setup.md
+  // for what protects the file on Windows instead.
+  it.skipIf(process.platform === 'win32')('writes the session owner-only', async () => {
     // The file holds live auth cookies for an account with a saved payment method, so a
     // default-umask world-readable file would be a real exposure on a shared machine.
     const { store, cleanup, directory } = await harness();

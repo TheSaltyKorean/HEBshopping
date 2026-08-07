@@ -17,8 +17,9 @@
  */
 
 import { execFileSync } from 'node:child_process';
-import { rm, stat } from 'node:fs/promises';
-import { dirname, resolve } from 'node:path';
+import { realpathSync } from 'node:fs';
+import { readdir, rm, stat } from 'node:fs/promises';
+import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
   FileStore,
@@ -173,8 +174,8 @@ export function untrustedSessionNote(
       '   you just locked — so re-run that command after every login, not just the first.\n' +
       '   For the default .session directory, see the Windows note above Step 5 in\n' +
       '   docs/setup.md instead: locking the directory protects every future login\n' +
-      "   automatically. The same applies to .playwright-profile, except `--switch`\n" +
-      '   recreates it under the parent ACL — re-apply that fix after switching accounts.'
+      "   automatically. The same applies to .playwright-profile — `--switch` only clears\n" +
+      "   its contents, not the directory itself, so that lock survives a switch too."
     );
   }
 
@@ -193,13 +194,14 @@ export function untrustedSessionNote(
     "   the file's. Lock the directory that holds it instead — but only if it's dedicated\n" +
     "   to this file: this strips every other account's access to the directory and to\n" +
     "   anything already in it, not just to files created later, so it isn't safe on a\n" +
-    "   directory anything else depends on. If this one holds anything else, move this\n" +
-    "   file into a new, dedicated directory first (point --session there and run this\n" +
-    `   again), then lock it down from a Windows PowerShell prompt${wslSuffix}:\n` +
+    "   directory anything else depends on. If this one holds anything else, create a new,\n" +
+    `   dedicated directory and lock it down first, from a Windows PowerShell prompt${wslSuffix}:\n` +
     `   icacls ${quote(dirIcaclsPath)} /reset\n` +
     `   icacls ${quote(dirIcaclsPath)} /inheritance:r /grant:r "\${env:USERDOMAIN}\\\${env:USERNAME}:(OI)(CI)F"\n` +
-    '   That protects every future login automatically. It leaves the file this run\n' +
-    '   already wrote under the old ACL though, so fix that one file too, once:\n' +
+    '   Only then move this file into it and point --session there for the next login —\n' +
+    "   locking before the move means that write inherits the safe ACL from the moment\n" +
+    '   it happens, instead of landing under the old one first. This run already wrote\n' +
+    '   the file under the old ACL though, so fix that one file too, once:\n' +
     fileFix +
     `   ${PROFILE_DIR} holds a live logged-in browser profile from this same login.\n` +
     "   It isn't relocated by --session, so it stays exposed under its inherited ACL\n" +
@@ -322,8 +324,12 @@ async function main(): Promise<void> {
   const options = parseArgs(process.argv.slice(2));
 
   if (options.switchAccount) {
-    console.log(`Forgetting the current account (removing ${PROFILE_DIR}) …`);
-    await rm(PROFILE_DIR, { recursive: true, force: true });
+    console.log(`Forgetting the current account (clearing ${PROFILE_DIR}) …`);
+    // Removing the directory itself would drop a Windows ACL locked onto it per the setup
+    // docs, and Playwright would recreate it fresh under the parent's (often broader)
+    // inherited ACL. Clearing its contents instead keeps that lock in place across a switch.
+    const entries = await readdir(PROFILE_DIR).catch(() => []);
+    await Promise.all(entries.map((entry) => rm(join(PROFILE_DIR, entry), { recursive: true, force: true })));
   }
 
   const store = new FileStore(options.sessionPath);
@@ -462,7 +468,13 @@ async function main(): Promise<void> {
 
 // Guarded so the test suite can import the pure helpers above (`windowsPathFor`,
 // `isSessionTrusted`) without launching a real browser and waiting on a human to log in.
-if (process.argv[1] !== undefined && fileURLToPath(import.meta.url) === resolve(process.argv[1])) {
+// Resolved through realpathSync, not just resolve(): Node's loader already resolves
+// import.meta.url through any symlink, but process.argv[1] keeps whatever path was typed,
+// so a symlinked launcher would otherwise never match and main() would silently not run.
+if (
+  process.argv[1] !== undefined &&
+  fileURLToPath(import.meta.url) === realpathSync(resolve(process.argv[1]))
+) {
   main().catch((error: unknown) => {
     console.error(error);
     process.exit(1);

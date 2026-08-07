@@ -116,12 +116,18 @@ entirely offline, so if they pass, your install is good.
 > write still inherits a safe ACL instead of the process's default one.
 >
 > The same applies to `captures/` if you ever run `npm run capture`, which writes raw cookie
-> jars and request bodies.
+> jars and request bodies the first time it runs — lock it down the same way, before that
+> first run:
 >
-> `npm run login -- --switch` deletes `.playwright-profile/` to forget the old account, and
-> Playwright recreates it from scratch on the next login — back under the parent directory's
-> inherited ACL. Re-run the `.playwright-profile` commands above after switching accounts;
-> `.session/` isn't touched by `--switch` and doesn't need repeating.
+> ```powershell
+> mkdir captures
+> icacls captures /reset
+> icacls captures /inheritance:r /grant:r "${env:USERDOMAIN}\${env:USERNAME}:(OI)(CI)F"
+> ```
+>
+> `npm run login -- --switch` clears `.playwright-profile/`'s contents to forget the old
+> account, but keeps the directory itself — so a lock applied above survives the switch and
+> there's nothing to re-run. `.session/` isn't touched by `--switch` either.
 
 ### Step 5. Run the login tool
 

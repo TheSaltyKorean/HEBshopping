@@ -166,7 +166,15 @@ describe('untrustedSessionNote', () => {
     const atCustom = untrustedSessionNote(false, 'powershell', 'C:\\shared\\foo.json', false, 'C:\\shared');
     expect(atCustom).not.toContain('safe even if it holds other files');
     expect(atCustom).toContain("strips every other account's access");
-    expect(atCustom).toContain('move this\n   file into a new, dedicated directory first');
+    expect(atCustom).toContain('create a new,\n   dedicated directory and lock it down first');
+  });
+
+  it('locks the new dedicated directory before telling the user to move the file in and rerun', () => {
+    const atCustom = untrustedSessionNote(false, 'powershell', 'C:\\shared\\foo.json', false, 'C:\\shared');
+    const lockIndex = atCustom!.indexOf('lock it down first');
+    const moveIndex = atCustom!.indexOf('move this file into it and point --session there');
+    expect(lockIndex).toBeGreaterThan(-1);
+    expect(moveIndex).toBeGreaterThan(lockIndex);
   });
 });
 

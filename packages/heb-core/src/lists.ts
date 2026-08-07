@@ -458,9 +458,16 @@ export class HebListOps implements ListOps {
       // so; only a match whose name does *not* mention it is the spurious one. This has to run
       // before the confidence check below: a below-threshold "zero bananas" match still hands
       // back a `needs_confirmation` whose pending add bypasses this guard entirely on "yes".
+      //
+      // Tokenized rather than a `\b0\b` scan on the raw name: a sub-unit package size like
+      // "Turkey, 0.5 lb" has a "0" bounded by a word boundary against the following "." just
+      // as a standalone "0" would be, so the naive regex reads the decimal's leading digit as
+      // the product itself saying zero and lets the refusal through as a live one-unit add.
+      const nameTokens: string[] = match.product.name.toLowerCase().match(/[a-z]+|\d+(?:\.\d+)?/g) ?? [];
       if (
         /^(?:zero|0)\b/i.test(input.query!.trim()) &&
-        !/\b(?:zero|0)\b/i.test(match.product.name)
+        !nameTokens.includes('zero') &&
+        !nameTokens.includes('0')
       ) {
         throw new HebError('PRODUCT_NOT_FOUND', `"${input.query}" asks for zero.`, {
           details: { query: input.query, zeroCount: true },
@@ -664,17 +671,28 @@ export class HebListOps implements ListOps {
       // `Math.max` is what bounds the damage. It never lowers the line below the weight the
       // add response reported, so the only value at risk is one written inside that final
       // window.
+      //
+      // But a fresh line and a merge look the same here unless quantity is checked: when a
+      // household member creates the counter line between the opening read and this call's
+      // own mutation, HEB merges by bumping only the line's quantity and leaves its weight
+      // untouched — `added.quantity` above 1 is that tell, the same one `addRemainingUnits`
+      // uses for the same reason. Treating it as fresh takes `added.weight` (their existing
+      // weight) as the floor and snaps the request on its own, so a request for 0.5 lb on
+      // top of their 2 lb never lands: `Math.max(2, 0.5) === 2`. The merged case instead adds
+      // the request to their weight, same as the pre-existing-line path above.
+      const merged = status === 'added' && added.quantity > 1;
       const increments = added.product.weightIncrements;
-      const target = Math.max(added.weight ?? 0, snapWeight(input.weight, increments));
+      const requested = merged ? (added.weight ?? 0) + input.weight : input.weight;
+      const target = Math.max(added.weight ?? 0, snapWeight(requested, increments));
       // Same shortfall reporting as the existing-line path above: the ladder's top rung is
       // not the full request.
       const shortfall =
-        increments !== undefined && increments.length > 0 && input.weight > increments[increments.length - 1]!
-          ? { weightRequested: input.weight }
+        increments !== undefined && increments.length > 0 && requested > increments[increments.length - 1]!
+          ? { weightRequested: requested }
           : {};
       return {
         status,
-        item: await this.adjustWeight(listId, added, target, !wasPresent),
+        item: await this.adjustWeight(listId, added, target, !wasPresent && !merged),
         ...shortfall,
       };
     }

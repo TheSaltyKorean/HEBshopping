@@ -284,6 +284,31 @@ describe('weight on a counter line', () => {
     expect(weightUpdates(sent)[0]).toContain('weight: 1.25');
   });
 
+  it('adds the requested weight to a counter line merged in by a concurrent add', async () => {
+    // The opening read finds no counter line, but a household member creates one (2 lb)
+    // between that read and this call's own add mutation. HEB merges the add by bumping
+    // only the line's quantity and leaves its weight untouched, so `added.weight` comes
+    // back as their 2 lb and `added.quantity` as 2 — the same merge tell
+    // `addRemainingUnits` already relies on. Treating this as a fresh line would take 2 lb
+    // as the floor and snap the requested 0.5 lb against it, landing `Math.max(2, 0.5) = 2`
+    // and silently dropping the request.
+    const { ops, lines } = scripted([]);
+    const client = (ops as unknown as { client: { execute: (d: unknown) => Promise<unknown> } })
+      .client;
+    const real = client.execute.bind(client);
+    client.execute = async (document: unknown) => {
+      if ((document as { operationName: string }).operationName === 'HebAddShoppingListItems') {
+        lines.push({ id: 'line-0', quantity: 1, weight: 2, productId: 'p-turkey' });
+      }
+      return real(document);
+    };
+
+    const result = await ops.addItem({ productId: 'p-turkey', weight: 0.5 });
+
+    expect(result.status).toBe('added');
+    expect(result.status === 'added' && result.item.weight).toBe(2.5);
+  });
+
   it('preserves a definitive refusal instead of reconciling it into a generic error', async () => {
     // A rejected union member means HEB explicitly refused the weight update, not that the
     // response was lost. Reconciling would re-read the (unchanged) line and repackage this

@@ -97,18 +97,19 @@ const NUMBER_WORDS: Readonly<Record<string, number>> = {
 
 /**
  * A single decimal digit following a spoken "point" — either the spelled-out word ("five")
- * or, when Alexa's transcription mixes words and numerals ("one point 5"), the bare numeral
- * character itself. Shared by the weight and count decimal-digit loops in `parseWeightPhrase`
- * and `parseSpokenRequest` below.
+ * or, when Alexa's transcription mixes words and numerals ("one point 5" or a grouped
+ * numeral like "one point 25"), the bare numeral token itself. Returns the digit *text*
+ * rather than a numeric value: a grouped numeral like "05" (in "one point 05 pounds") has a
+ * leading zero that `Number("05")` would silently drop, collapsing the decimal loops'
+ * `join('')` result from "05" to "5" and reading 1.5 lb for a request that asked for 1.05 lb.
+ * Shared by the weight and count decimal-digit loops in `parseWeightPhrase` and
+ * `parseSpokenRequest` below.
  */
-function spokenDigit(token: string | undefined): number | undefined {
+function spokenDigitText(token: string | undefined): string | undefined {
   if (token === undefined) return undefined;
   const word = NUMBER_WORDS[token];
-  if (word !== undefined && word <= 9) return word;
-  // A grouped numeral token ("25" in "one point 25 pounds") rather than one digit per
-  // token — Alexa's transcription mixes both forms, and without this the decimal loops
-  // below stop at the first grouped token instead of consuming its digits whole.
-  return /^[0-9]+$/.test(token) ? Number(token) : undefined;
+  if (word !== undefined && word <= 9) return String(word);
+  return /^[0-9]+$/.test(token) ? token : undefined;
 }
 
 /**
@@ -197,8 +198,13 @@ const COMPOSITION_WORDS = new Set(['cheese', 'layer', 'bean', 'meat', 'wick', 'b
  * the way there is a "six-pack" — so it multiplies whenever a number precedes it.
  *
  * `count` and `ct` are deliberately absent: they only ever describe a size.
+ *
+ * Only the plural forms count as evidence: "six pack of soda" names one singular six-pack
+ * (the singular noun already reads as a package name with "of" attached, e.g. "a pack of
+ * gum"), while "three packs of gum" is genuinely three. `pk` has no distinct plural
+ * spelling, so it stays singular-only and never multiplies via "of".
  */
-const PACKAGE_WORDS = new Set(['pack', 'packs', 'pk', 'case', 'cases', 'roll', 'rolls']);
+const PLURAL_PACKAGE_WORDS = new Set(['packs', 'cases', 'rolls']);
 
 const NUMBER_LED_BRANDS: ReadonlyArray<readonly string[]> = [
   ['two', 'good'],
@@ -389,10 +395,10 @@ function parseWeightPhrase(raw: readonly string[]): { pounds: number; rest: stri
   // same as a numeral written "0.5" or ".5" would be. `first` is then `point` itself and
   // `numeric` is undefined, so the check below must not require a preceding number.
   if (raw[index] === 'point') {
-    const digits: number[] = [];
+    const digits: string[] = [];
     let cursor = index + 1;
-    while (cursor < raw.length && spokenDigit(raw[cursor]) !== undefined) {
-      digits.push(spokenDigit(raw[cursor])!);
+    while (cursor < raw.length && spokenDigitText(raw[cursor]) !== undefined) {
+      digits.push(spokenDigitText(raw[cursor])!);
       cursor += 1;
     }
     if (digits.length > 0) {
@@ -552,6 +558,33 @@ function parseWeightPhrase(raw: readonly string[]): { pounds: number; rest: stri
   // "a pound and a half of turkey" — same fraction, on the other side of the unit.
   readAndAHalf(poundsPerUnit);
 
+  // "one pound and two ounces of turkey" — a compound naming a second unit rather than a
+  // fraction. `readAndAHalf` above already tried the fraction form and left "and" unconsumed
+  // if it didn't match; without this, "ounces" fails as a fraction lookup, "and" is left
+  // unconsumed, and the whole phrase falls through to a count-and-query parse that drops the
+  // weight and adds a counter product at H-E-B's default size instead of the requested total.
+  const readAndSecondaryUnit = (): void => {
+    let cursor = index;
+    if (raw[cursor] !== 'and') return;
+    cursor += 1;
+    while (cursor < raw.length && ARTICLES.has(raw[cursor]!)) cursor += 1;
+    const secondaryNumeric =
+      NUMBER_WORDS[raw[cursor] ?? ''] ??
+      (/^\d+(?:\.\d+)?$/.test(raw[cursor] ?? '') ? Number(raw[cursor]) : undefined);
+    if (secondaryNumeric === undefined) return;
+    const secondaryUnit = raw[cursor + 1];
+    const secondaryPoundsPerUnit =
+      secondaryUnit === undefined
+        ? undefined
+        : POUND_WORDS.has(secondaryUnit)
+          ? 1
+          : SUB_POUND_UNITS[secondaryUnit];
+    if (secondaryPoundsPerUnit === undefined) return;
+    pounds += secondaryNumeric * secondaryPoundsPerUnit;
+    index = cursor + 2;
+  };
+  readAndSecondaryUnit();
+
   skipArticles();
   // The `of` is the whole test. No exception for fractions: "half pound beef patties" is a
   // package name, and treating it as an amount both loses the size from the search and
@@ -582,7 +615,7 @@ export function parseSpokenRequest(text: string): SpokenRequest {
   // turkeys, and the count parse below would otherwise read the two as a quantity.
   const weighed = parseWeightPhrase(raw);
   if (weighed !== null) {
-    if (weighed.pounds > MAX_WEIGHT_LB || weighed.pounds <= 0) {
+    if (!Number.isFinite(weighed.pounds) || weighed.pounds > MAX_WEIGHT_LB || weighed.pounds <= 0) {
       return { quantity: 1, query: weighed.rest.join(' '), weightRefused: weighed.pounds };
     }
     return { quantity: 1, query: weighed.rest.join(' '), weight: weighed.pounds };
@@ -668,10 +701,10 @@ export function parseSpokenRequest(text: string): SpokenRequest {
   const isBarePoint = numeric === undefined && first === 'point';
   if (isBarePoint || (numeric !== undefined && tokens[1] === 'point')) {
     const digitStart = isBarePoint ? 1 : 2;
-    const digits: number[] = [];
+    const digits: string[] = [];
     let cursor = digitStart;
-    while (cursor < tokens.length && spokenDigit(tokens[cursor]) !== undefined) {
-      digits.push(spokenDigit(tokens[cursor])!);
+    while (cursor < tokens.length && spokenDigitText(tokens[cursor]) !== undefined) {
+      digits.push(spokenDigitText(tokens[cursor])!);
       cursor += 1;
     }
     if (digits.length > 0) {
@@ -812,7 +845,7 @@ export function parseSpokenRequest(text: string): SpokenRequest {
   const multiplies =
     second !== undefined &&
     (second === 'dozen' ||
-      (PACKAGE_WORDS.has(second) && secondAt >= 0 && raw[secondAt + 1] === 'of'));
+      (PLURAL_PACKAGE_WORDS.has(second) && secondAt >= 0 && raw[secondAt + 1] === 'of'));
 
   // Composition words only describe the product, rather than counting it, when the head
   // noun of the phrase is singular — see `COMPOSITION_WORDS` for why this check is scoped

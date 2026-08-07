@@ -543,6 +543,17 @@ describe('a confident zero-count match must not write', () => {
     expect(result.status).toBe('added');
   });
 
+  it('refuses "zero turkey" against a product whose name only has a decimal package size', async () => {
+    // "Turkey, 0.5 lb" has a "0" bounded by a word boundary against the following "." just
+    // as a standalone "0" token would be — the previous `\b0\b` scan on the raw name read
+    // that as the product's own name saying zero and let the refusal through as a live add.
+    const ops = opsWithSearchResult('Turkey, 0.5 lb');
+
+    await expect(ops.addItem({ query: 'zero turkey' })).rejects.toSatisfy(
+      (error: unknown) => hasCode(error, 'PRODUCT_NOT_FOUND') && error.details?.['zeroCount'] === true,
+    );
+  });
+
   it('refuses "zero bananas" even on a below-threshold match', async () => {
     // A sole search result never crosses the confidence threshold (it scores zero
     // separation), so this reaches `needs_confirmation` rather than a confident match — the

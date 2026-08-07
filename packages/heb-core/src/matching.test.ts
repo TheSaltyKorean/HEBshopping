@@ -209,6 +209,10 @@ describe('parseSpokenRequest', () => {
       ['12 count of eggs', 1, '12 count eggs'],
       // Still one carton: no number precedes `dozen`.
       ['a dozen eggs', 1, 'dozen eggs'],
+      // Only the plural package noun counts "of" as evidence of a package count. The
+      // singular "pack" here still names one six-pack, the same as "six pack soda" above —
+      // "of" alone does not flip it, or a live add performs six additions for one package.
+      ['six pack of soda', 1, 'six pack soda'],
     ])('%s → quantity %i, query "%s"', (input, quantity, query) => {
       expect(parseSpokenRequest(input)).toEqual({ quantity, query });
     });
@@ -402,6 +406,23 @@ describe('parseSpokenRequest', () => {
       expect(parsed.query).toBe('turkey');
     });
 
+    it('preserves a leading zero in a grouped spoken decimal ("one point 05 pounds")', () => {
+      // `spokenDigit` used to return the grouped token's *numeric* value ("05" → 5), so the
+      // digit-string join lost the leading zero and reconstructed 1.5 lb instead of 1.05 lb.
+      const parsed = parseSpokenRequest('one point 05 pounds of turkey');
+      expect(parsed.weight).toBe(1.05);
+      expect(parsed.query).toBe('turkey');
+    });
+
+    it('reads a compound pound-and-ounce request ("one pound and two ounces")', () => {
+      // The tail parser after "and" only accepted a fraction, so a second weight unit left
+      // "and" unconsumed and the whole phrase fell through to a count-and-query parse that
+      // dropped the weight entirely.
+      const parsed = parseSpokenRequest('one pound and two ounces of turkey');
+      expect(parsed.weight).toBeCloseTo(1.125, 5);
+      expect(parsed.query).toBe('turkey');
+    });
+
     it('reads an adjacent numeric mixed-fraction weight ("1 1/2 pounds")', () => {
       // The written mixed-fraction form: a whole number directly followed by a numeric
       // slash fraction. The adjacent-fraction branch only recognized spelled words
@@ -452,6 +473,16 @@ describe('parseSpokenRequest', () => {
 
     it('does not refuse weights below the ceiling', () => {
       expect(parseSpokenRequest('two pounds of sliced turkey').weightRefused).toBeUndefined();
+    });
+
+    it('refuses a non-finite weight from a zero-over-zero fraction', () => {
+      // "0/0 pounds" computes to NaN, and both the ceiling and non-positive comparisons are
+      // false for NaN — so it used to fall through as an actionable weight instead of a
+      // refusal, letting `snapWeight` collapse it to a live-mutation-worthy ladder rung.
+      const parsed = parseSpokenRequest('0/0 pounds of turkey');
+      expect(parsed.weight).toBeUndefined();
+      expect(parsed.weightRefused).toBeNaN();
+      expect(parsed.query).toBe('turkey');
     });
 
     it('refuses a scale amount with a multi-digit coefficient', () => {

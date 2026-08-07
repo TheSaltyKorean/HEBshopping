@@ -55,11 +55,11 @@ Confirm it's sound before going further:
 npm test
 ```
 
-Expected: every file passes. On Windows, and on some WSL mounts of a Windows drive, one
-test reports as skipped — it checks a POSIX-only file permission bit that isn't enforced
-there — so don't expect "nothing skipped" in those cases; match on `passed` instead. The
-counts grow as the project does, so match on `passed` rather than a number. These run
-entirely offline, so if they pass, your install is good.
+Expected: every file passes. On Windows, and on some WSL mounts of a Windows drive, a
+handful of tests report as skipped — they check a POSIX-only file permission bit that
+isn't enforced there — so don't expect "nothing skipped" in those cases; match on `passed`
+instead. The counts grow as the project does, so match on `passed` rather than a number.
+These run entirely offline, so if they pass, your install is good.
 
 ---
 
@@ -122,6 +122,16 @@ entirely offline, so if they pass, your install is good.
 > ```powershell
 > mkdir captures
 > icacls captures /reset
+> icacls captures /inheritance:r /grant:r "${env:USERDOMAIN}\${env:USERNAME}:(OI)(CI)F"
+> ```
+>
+> Already ran `npm run capture` before reading this? Same reasoning as `.session` and
+> `.playwright-profile` above — re-ACL what's already inside the directory, then restore its
+> own grant so the next capture still inherits a safe ACL:
+>
+> ```powershell
+> icacls captures /T /reset
+> icacls captures /T /inheritance:r /grant:r "${env:USERDOMAIN}\${env:USERNAME}:F"
 > icacls captures /inheritance:r /grant:r "${env:USERDOMAIN}\${env:USERNAME}:(OI)(CI)F"
 > ```
 >

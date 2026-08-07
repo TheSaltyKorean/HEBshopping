@@ -73,16 +73,22 @@ const sleep = (ms: number): Promise<void> => new Promise((done) => setTimeout(do
  * `options.sessionPath` is POSIX-style (e.g. `/mnt/c/repo/.session/session.json`), so
  * translate it via `wslpath` before printing a command meant to run in PowerShell.
  *
- * Whether we're actually on WSL is derived from `wslpath` succeeding, not from
- * `process.platform`: plain Linux also reports `linux`, and there `wslpath` doesn't exist,
- * so a failed translation means "not WSL" rather than "WSL but something went wrong".
+ * `shell` says where that command has to be run: `'powershell'` on native Windows,
+ * `'wsl-powershell'` on WSL (translated via `wslpath`, which only exists there — plain Linux
+ * also reports `process.platform === 'linux'` but fails the `wslpath` call), or `null` on a
+ * platform `icacls` can't help (native Linux/macOS, including permissionless mounts like
+ * CIFS or FAT) where the caller should not print an `icacls` command at all.
  */
-function windowsPathFor(path: string): { path: string; onWsl: boolean } {
-  if (process.platform !== 'linux') return { path, onWsl: false };
+function windowsPathFor(path: string): { path: string; shell: 'powershell' | 'wsl-powershell' | null } {
+  if (process.platform === 'win32') return { path, shell: 'powershell' };
+  if (process.platform !== 'linux') return { path, shell: null };
   try {
-    return { path: execFileSync('wslpath', ['-w', path], { encoding: 'utf8' }).trim(), onWsl: true };
+    return {
+      path: execFileSync('wslpath', ['-w', path], { encoding: 'utf8' }).trim(),
+      shell: 'wsl-powershell',
+    };
   } catch {
-    return { path, onWsl: false };
+    return { path, shell: null };
   }
 }
 
@@ -239,27 +245,44 @@ async function main(): Promise<void> {
   // a Windows drive reports `linux` but can silently drop the owner-only permission just
   // like Windows does, so check the mode `putSession` actually produced.
   const ownerOnly = ((await stat(options.sessionPath)).mode & 0o077) === 0;
-  console.log(
-    `\n✅ Session written to ${options.sessionPath}` + (ownerOnly ? ' (mode 0600).' : '.'),
-  );
-  if (!ownerOnly) {
-    const { path: icaclsPath, onWsl } = windowsPathFor(options.sessionPath);
-    console.log(
-      "   This filesystem didn't enforce the owner-only permission, so the file is only as\n" +
-        "   protected as the OS ACL it inherits — commonly the case on Windows, and on some\n" +
-        '   WSL mounts of a Windows drive. Restrict just this file (safe even if its\n' +
-        "   directory holds other files you don't want touched)" +
-        (onWsl ? ', from a Windows PowerShell prompt (not this WSL shell)' : '') +
-        ':\n' +
-        `   icacls "${icaclsPath}" /inheritance:r /grant:r "\${env:USERNAME}:F"\n` +
-        '   Every login replaces this file (writes a temp file, then renames it over the\n' +
-        "   old one), and the replacement inherits the directory's ACL rather than the file\n" +
-        '   you just locked — so re-run that command after every login, not just the first.\n' +
-        '   For the default .session directory, see the Windows note above Step 5 in\n' +
-        '   docs/setup.md instead: locking the directory protects every future login\n' +
-        "   automatically. The same applies to .playwright-profile, except `--switch`\n" +
-        '   recreates it under the parent ACL — re-apply that fix after switching accounts.',
-    );
+  const { path: icaclsPath, shell } = windowsPathFor(options.sessionPath);
+  // On WSL, `chmod`/`stat` reporting 0600 isn't proof either: a DrvFS mount with the
+  // `metadata` option can round-trip that mode bit while the underlying NTFS ACL still
+  // grants every account on the machine access, so WSL can never fully trust the mode.
+  const trusted = ownerOnly && shell !== 'wsl-powershell';
+  console.log(`\n✅ Session written to ${options.sessionPath}` + (trusted ? ' (mode 0600).' : '.'));
+  if (!trusted) {
+    if (shell === null) {
+      console.log(
+        "   This filesystem didn't enforce the owner-only permission, and it isn't a Windows\n" +
+          "   filesystem `icacls` can secure either — for example a CIFS, FAT, or other\n" +
+          '   permissionless mount. Move the credential to a permission-capable filesystem, or\n' +
+          "   restrict that mount's ACLs directly; there is no command this tool can print here.",
+      );
+    } else {
+      console.log(
+        (ownerOnly
+          ? "   This filesystem reports the owner-only permission, but a WSL mount of a Windows\n" +
+            '   drive can accept that chmod as metadata while the underlying NTFS ACL still\n' +
+            "   grants other accounts access — the mode bit alone isn't proof here."
+          : "   This filesystem didn't enforce the owner-only permission, so the file is only as\n" +
+            "   protected as the OS ACL it inherits — commonly the case on Windows, and on some\n" +
+            '   WSL mounts of a Windows drive.') +
+          ' Restrict just this file (safe even if its\n' +
+          "   directory holds other files you don't want touched), from a Windows PowerShell\n" +
+          '   prompt' +
+          (shell === 'wsl-powershell' ? ' (not this WSL shell)' : '') +
+          ':\n' +
+          `   icacls "${icaclsPath}" /inheritance:r /grant:r "\${env:USERNAME}:F"\n` +
+          '   Every login replaces this file (writes a temp file, then renames it over the\n' +
+          "   old one), and the replacement inherits the directory's ACL rather than the file\n" +
+          '   you just locked — so re-run that command after every login, not just the first.\n' +
+          '   For the default .session directory, see the Windows note above Step 5 in\n' +
+          '   docs/setup.md instead: locking the directory protects every future login\n' +
+          "   automatically. The same applies to .playwright-profile, except `--switch`\n" +
+          '   recreates it under the parent ACL — re-apply that fix after switching accounts.',
+      );
+    }
   }
   describe(session);
 

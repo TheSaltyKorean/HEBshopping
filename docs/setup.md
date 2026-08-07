@@ -414,7 +414,9 @@ account. To forget it first:
 npm run login -- --switch
 ```
 
-That deletes the saved browser profile and starts a clean login.
+That clears the saved browser profile's contents and starts a clean login. The
+`.playwright-profile/` directory itself is left in place (so a Windows ACL lock on it
+survives), only what's inside is emptied.
 
 ### Using a session file somewhere else
 

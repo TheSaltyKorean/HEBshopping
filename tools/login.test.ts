@@ -1,10 +1,7 @@
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { mkdir, mkdtemp, readdir, realpath, rm, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
-
-const execFileSyncMock = vi.hoisted(() => vi.fn());
-vi.mock('node:child_process', () => ({ execFileSync: execFileSyncMock }));
 
 vi.mock('node:fs/promises', async (importOriginal) => {
   const actual = await importOriginal<typeof import('node:fs/promises')>();
@@ -20,10 +17,6 @@ const {
   untrustedProfileNote,
   untrustedSessionNote,
 } = await import('./login.js');
-
-afterEach(() => {
-  execFileSyncMock.mockReset();
-});
 
 describe('untrustedSessionNote', () => {
   it('has nothing to add when icacls cannot help and the mode is already owner-only or unverified', () => {

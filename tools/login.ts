@@ -16,7 +16,6 @@
  * What it writes is a live credential. See the Security section of the README.
  */
 
-import { execFileSync } from 'node:child_process';
 import { realpathSync } from 'node:fs';
 import { readdir, realpath, rm, stat } from 'node:fs/promises';
 import { basename, dirname, join, resolve } from 'node:path';
@@ -668,8 +667,7 @@ async function main(): Promise<void> {
     const profileOwnerOnly = await checkOwnerOnly(PROFILE_DIR);
     const { path: profileIcaclsPath, shell: profileShell } = windowsPathFor(PROFILE_DIR);
     const profileHome = profileShell === null ? null : homeDirFor(profileShell);
-    const profileAlreadySafe =
-      profileHome !== null && isUnderOwnHomeDirectory(profileIcaclsPath, profileHome, profileShell);
+    const profileAlreadySafe = sessionAlreadySafe(profileShell, profileIcaclsPath, profileHome);
     const profileNote = untrustedProfileNote(profileOwnerOnly, profileShell, profileAlreadySafe);
     if (profileNote !== null) console.log(profileNote);
   } else {

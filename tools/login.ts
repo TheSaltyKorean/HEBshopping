@@ -534,13 +534,17 @@ async function main(): Promise<void> {
 
   const store = new FileStore(options.sessionPath);
 
+  const context = await launchBrowser();
+
   // PROFILE_DIR is a second live credential (the logged-in browser profile) that always lives
   // in the repo and can sit on a different, less-trusted mount than the --session path, so it
   // needs its own home-directory exemption check rather than inheriting the session file's
-  // verdict. Checked before launching, for the same reason `ensureCustomSessionParentReady`
-  // preflights the session directory: `launchBrowser` creates the profile and the interactive
-  // login writes a live credential into it, so a warning that waited for the session check ran
-  // only once that credential had been sitting under the inherited ACL for up to ten minutes.
+  // verdict. Placed exactly where capture.ts and drive.ts put their `warnIfUntrustedDir`: after
+  // `launchBrowser`, because that is the call whose `ensureOwnerOnlyDir` chmods the profile —
+  // reading the mode first reports a profile left at 0755 by an earlier release as a
+  // permissionless mount, one statement before the chmod that fixes it. Still ahead of
+  // `page.goto` and the poll loop, so it lands before the interactive login writes a fresh
+  // credential in there.
   // Resolved through realDir first, for the same reason `warnIfUntrustedDir` does it: a junction
   // lexically under the home profile but redirecting elsewhere would otherwise be granted the
   // exemption and silence this warning, while capture.ts/drive.ts still warn about that same
@@ -552,7 +556,6 @@ async function main(): Promise<void> {
   const profileNote = untrustedProfileNote(profileOwnerOnly, profileShell, profileAlreadySafe);
   if (profileNote !== null) console.log(profileNote);
 
-  const context = await launchBrowser();
   const page = context.pages()[0] ?? (await context.newPage());
   await page.goto(START_URL, { waitUntil: 'domcontentloaded' });
 

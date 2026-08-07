@@ -19,6 +19,10 @@ describe('parseSpokenRequest — weight phrases', () => {
     ['a quarter pound of deli cheese', 0.25, 'deli cheese'],
     ['a pound and a half of turkey', 1.5, 'turkey'],
     ['two and a half pounds of shrimp', 2.5, 'shrimp'],
+    // Compound with a fractional secondary unit, not just an integer one ("one pound and two
+    // ounces"): `readAndAHalf` used to greedily read "1/2" as half a pound before checking
+    // whether "ounce" followed, leaving the unit unconsumed and dropping the whole phrase.
+    ['one pound and 1/2 ounce of turkey', 1.03125, 'turkey'],
     ['1.5 pounds of shrimp', 1.5, 'shrimp'],
     ['half pound of turkey', 0.5, 'turkey'],
     ['3 lbs of peeled shrimp', 3, 'peeled shrimp'],

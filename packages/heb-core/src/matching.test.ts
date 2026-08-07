@@ -519,6 +519,20 @@ describe('parseSpokenRequest', () => {
       expect(count.quantity).not.toBe(1500);
       expect(count.quantityRefused).toBe(1500);
     });
+
+    it('refuses a scale amount following a spoken decimal count', () => {
+      // "two point zero thousand" — the spoken-decimal loop advances past "two point zero"
+      // (3 tokens), but the hundred/thousand checks used to look for their scale word at a
+      // fixed token 1 regardless, so "thousand" was left in the query while `numeric` stayed
+      // the un-scaled 2 — resolving as two confirmed bananas instead of refusing 2,000.
+      const thousand = parseSpokenRequest('two point zero thousand bananas');
+      expect(thousand.quantity).not.toBe(2000);
+      expect(thousand.quantityRefused).toBe(2000);
+
+      const hundred = parseSpokenRequest('two point zero hundred bananas');
+      expect(hundred.quantity).not.toBe(200);
+      expect(hundred.quantityRefused).toBe(200);
+    });
   });
 
   it('does not read a trailing-only number as a count', () => {

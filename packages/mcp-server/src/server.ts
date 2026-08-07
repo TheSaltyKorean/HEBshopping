@@ -175,10 +175,21 @@ function describeAddResult(result: AddResult, requested: { quantity?: number; we
           : ''
       : '';
 
+  // Weight's version of `mergedNotice`: a concurrent add merged into a brand-new counter
+  // line before this request's own write landed, so `item.weight` reads higher than the
+  // pounds this request itself asked for.
+  const weightMergedNotice =
+    result.status === 'added' &&
+    result.weightRequested !== undefined &&
+    result.item.weight !== undefined &&
+    result.item.weight > result.weightRequested
+      ? ` (another request added this item too — asked for ${result.weightRequested} lb, list now has ${result.item.weight} lb)`
+      : '';
+
   switch (result.status) {
     case 'added':
       return text(
-        `Added to the HEB list: ${describeItem(result.item)}${cappedNotice}${mergedNotice}${unprovenNotice}${weightCappedNotice}`,
+        `Added to the HEB list: ${describeItem(result.item)}${cappedNotice}${mergedNotice}${unprovenNotice}${weightCappedNotice}${weightMergedNotice}`,
       );
     case 'already_present':
       return text(

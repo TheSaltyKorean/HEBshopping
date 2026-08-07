@@ -12,23 +12,16 @@
 
 import { readFileSync, writeFileSync } from 'node:fs';
 import { resolve } from 'node:path';
-import { HEB_GRAPHQL_URL, HEB_ORIGIN, cookieMatchesHost } from '@heb/core';
+import { HEB_GRAPHQL_URL, HEB_ORIGIN, cookieHeaderFor, type SessionState } from '@heb/core';
 
-interface StorageState {
-  cookies: Array<{ name: string; value: string; domain: string }>;
-}
-
-const state: StorageState = JSON.parse(
+const state: SessionState = JSON.parse(
   readFileSync(resolve('captures/storage-state.json'), 'utf8'),
 );
 
-// Storefront cookies only. Sending the whole jar would hand `accounts.heb.com` identity
-// cookies to a different origin, which no browser would do and which discloses the
-// identity-session credential for no benefit — this probe only needs www.heb.com.
-const cookieHeader = state.cookies
-  .filter((cookie) => cookieMatchesHost(cookie, 'www.heb.com'))
-  .map((c) => `${c.name}=${c.value}`)
-  .join('; ');
+// The same builder the production client uses. A hand-rolled domain filter sends expired,
+// path-ineligible and duplicate copies that `cookieHeaderFor` omits — see `tools/probe-mutation.ts`.
+// This probe only needs www.heb.com; `cookieHeaderFor` itself already scopes to that host.
+const cookieHeader = cookieHeaderFor(state, 'www.heb.com', '/graphql');
 
 async function graphql(query: string, variables: unknown = {}): Promise<any> {
   const response = await fetch(HEB_GRAPHQL_URL, {

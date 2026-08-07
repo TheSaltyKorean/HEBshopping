@@ -17,17 +17,17 @@ import {
   HebListOps,
   HEB_GRAPHQL_URL,
   HEB_ORIGIN,
-  type Cookie,
+  cookieHeaderFor,
+  type SessionState,
 } from '@heb/core';
 
 const raw = JSON.parse(
   await readFile(resolve('captures/storage-state.json'), 'utf8'),
-) as { cookies: Cookie[] };
+) as SessionState;
 
-const cookieHeader = raw.cookies
-  .filter((c) => c.domain === 'www.heb.com' || c.domain === '.heb.com')
-  .map((c) => `${c.name}=${c.value}`)
-  .join('; ');
+// The same builder the production client uses. A hand-rolled domain filter sends expired,
+// path-ineligible and duplicate copies that `cookieHeaderFor` omits — see `tools/probe-mutation.ts`.
+const cookieHeader = cookieHeaderFor(raw, 'www.heb.com', '/graphql');
 
 async function probe(label: string, query: string): Promise<void> {
   const response = await fetch(HEB_GRAPHQL_URL, {

@@ -183,6 +183,13 @@ export interface AddItemInput {
  * `weightRequested` is also present when a weight was asked for but the resolved product
  * turned out to be packaged, not priced by weight — there `item.weight` is undefined
  * entirely, and the caller says one package was added instead of the pounds requested.
+ *
+ * On a brand-new counter line it can also be *less* than `item.weight`, the weight
+ * equivalent of `quantityRequested` reading higher than requested above: a household
+ * member's concurrent add merged into the line before this request's write, so
+ * `item.weight` is their weight plus this request's. `weightRequested` then names only
+ * this request's own contribution, so the caller can say that amount was added and the
+ * list now totals `item.weight`, instead of crediting the merged total to this request.
  */
 export type AddResult =
   | { status: 'added'; item: ListItem; quantityRequested?: number; weightRequested?: number }

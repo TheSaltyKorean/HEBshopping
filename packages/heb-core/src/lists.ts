@@ -686,10 +686,17 @@ export class HebListOps implements ListOps {
       const target = Math.max(added.weight ?? 0, snapWeight(requested, increments));
       // Same shortfall reporting as the existing-line path above: the ladder's top rung is
       // not the full request.
+      // Same merge case as `quantityRequested` above, one unit type over: a household
+      // member's concurrent add landed first, so `item.weight` is their weight plus this
+      // request's, not this request's contribution alone. Surface what this request itself
+      // asked for so the caller can report the contribution and the merged total separately,
+      // instead of crediting the whole merged weight to this request.
       const shortfall =
         increments !== undefined && increments.length > 0 && requested > increments[increments.length - 1]!
           ? { weightRequested: requested }
-          : {};
+          : merged
+            ? { weightRequested: input.weight }
+            : {};
       return {
         status,
         item: await this.adjustWeight(listId, added, target, !wasPresent && !merged),
@@ -830,7 +837,7 @@ export class HebListOps implements ListOps {
         throw new HebError(
           'UPSTREAM_ERROR',
           `Added ${line.text}, but the amount is at least ${done}, not confirmed at ` +
-            `${added.quantity + remaining}.`,
+            `${totalRequested}.`,
           { cause: error, retryable: false, details: { partialAdd: true, indeterminate: true } },
         );
       }

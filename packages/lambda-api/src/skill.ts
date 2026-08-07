@@ -164,13 +164,22 @@ function confirmAdded(
 
   // A counter line is measured in pounds, so speak pounds. Its `quantity` is an artefact
   // of how HEB stores the row, and "you now have 1" beside two pounds of turkey is wrong.
+  // Same idea as `requestedCount` above, one unit type over: a concurrent add merged into
+  // this counter line before this request's own write landed, so `item.weight` is their
+  // weight plus this request's. Speak this request's own contribution — `mergedWeightNotice`
+  // below says what the list now totals.
+  const requestedWeight =
+    !wasPresent && weightRequested !== undefined && item.weight !== undefined && item.weight > weightRequested
+      ? weightRequested
+      : item.weight;
+
   const speech = wasPresent
     ? item.weight === undefined
       ? `${name} was already on your list. You now have ${item.quantity}.`
       : `${name} was already on your list. You now have ${speakablePounds(item.weight)}.`
     : item.weight === undefined
       ? `Added ${requestedCount > 1 ? `${requestedCount} ` : ''}${name}.`
-      : `Added ${speakablePounds(item.weight)} of ${name}.`;
+      : `Added ${speakablePounds(requestedWeight!)} of ${name}.`;
 
   // The server's per-item cap can stop a multi-unit add short of what was asked. Saying so
   // is what tells the shopper the line reads 10, not the 15 they actually asked for.
@@ -225,8 +234,17 @@ function confirmAdded(
           ? ` H-E-B only sells ${name} up to ${speakablePounds(item.weight)}, so I could not bring it up to ${speakablePounds(weightRequested)}.`
           : '';
 
+  // The other direction, weight's version of `mergedNotice`: someone else's concurrent add
+  // is already reflected in `item.weight`, above what this request itself asked for.
+  const weightMergedNotice =
+    !wasPresent && weightRequested !== undefined && item.weight !== undefined && item.weight > weightRequested
+      ? ` Someone else added some too, so the list now has ${speakablePounds(item.weight)}.`
+      : '';
+
   return input.responseBuilder
-    .speak(`${speech}${cappedNotice}${mergedNotice}${unprovenNotice}${weightCappedNotice} Anything else?`)
+    .speak(
+      `${speech}${cappedNotice}${mergedNotice}${unprovenNotice}${weightCappedNotice}${weightMergedNotice} Anything else?`,
+    )
     .reprompt(REPROMPT)
     .getResponse();
 }

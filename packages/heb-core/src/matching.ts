@@ -528,7 +528,7 @@ function parseWeightPhrase(raw: readonly string[]): { pounds: number; rest: stri
   // fraction is in the *sub-pound unit just matched* ("a half" more ounces, not more pounds),
   // so it must go through the same `poundsPerUnit` conversion as the leading amount, or "an
   // ounce and a half" comes out as 1.5 lb instead of 0.09375 lb.
-  const readAndAHalf = (scale: number): void => {
+  const readAndAHalf = (scale: number, primaryUnitRead: boolean): void => {
     let cursor = index;
     if (raw[cursor] !== 'and') return;
     cursor += 1;
@@ -543,10 +543,25 @@ function parseWeightPhrase(raw: readonly string[]): { pounds: number; rest: stri
     const fractionCursor = leadingOnes !== undefined ? cursor + 1 : cursor;
     const extra = readFractionToken(raw[fractionCursor] ?? '');
     if (extra === undefined) return;
+
+    // "one pound and 1/2 ounce of turkey" — once the primary unit is already read, a fraction
+    // immediately followed by its own weight unit names a *second* amount, not more of the
+    // unit already matched. Without this check, this branch would greedily read "1/2" as half
+    // a pound, leaving "ounce" where the final "of" is expected and dropping the whole phrase
+    // through to a count-and-query parse. `readAndSecondaryUnit` below handles this form
+    // instead. Before the primary unit is read ("two and a half pounds"), the following word
+    // *is* the primary unit the fraction itself is measured in, so this check does not apply.
+    if (primaryUnitRead) {
+      const followingUnit = raw[fractionCursor + 1];
+      if (followingUnit !== undefined && (POUND_WORDS.has(followingUnit) || SUB_POUND_UNITS[followingUnit] !== undefined)) {
+        return;
+      }
+    }
+
     pounds += extra * (leadingOnes ?? 1) * scale;
     index = fractionCursor + 1;
   };
-  readAndAHalf(1);
+  readAndAHalf(1, false);
 
   skipArticles();
   const unit = raw[index];
@@ -556,7 +571,7 @@ function parseWeightPhrase(raw: readonly string[]): { pounds: number; rest: stri
   index += 1;
 
   // "a pound and a half of turkey" — same fraction, on the other side of the unit.
-  readAndAHalf(poundsPerUnit);
+  readAndAHalf(poundsPerUnit, true);
 
   // "one pound and two ounces of turkey" — a compound naming a second unit rather than a
   // fraction. `readAndAHalf` above already tried the fraction form and left "and" unconsumed
@@ -570,7 +585,8 @@ function parseWeightPhrase(raw: readonly string[]): { pounds: number; rest: stri
     while (cursor < raw.length && ARTICLES.has(raw[cursor]!)) cursor += 1;
     const secondaryNumeric =
       NUMBER_WORDS[raw[cursor] ?? ''] ??
-      (/^\d+(?:\.\d+)?$/.test(raw[cursor] ?? '') ? Number(raw[cursor]) : undefined);
+      (/^\d+(?:\.\d+)?$/.test(raw[cursor] ?? '') ? Number(raw[cursor]) : undefined) ??
+      readFractionToken(raw[cursor] ?? '');
     if (secondaryNumeric === undefined) return;
     const secondaryUnit = raw[cursor + 1];
     const secondaryPoundsPerUnit =
@@ -719,11 +735,16 @@ export function parseSpokenRequest(text: string): SpokenRequest {
   //
   // "a hundred bananas" — the leading article is filtered as FILLER before `tokens` is built,
   // so no digit word precedes "hundred" here either; treat the bare word as an implicit one.
+  // A spoken decimal ("two point zero thousand") advances past `first` by `pointTokens`
+  // extra tokens before any scale word, so the scale must be looked up relative to that
+  // consumed position rather than a fixed offset — otherwise "thousand" is left in the
+  // query while `numeric` stays the un-scaled integer, and a refusal reads as a live add.
   const isBareHundred = numeric === undefined && first === 'hundred';
   let consumedHundred = 1 + pointTokens;
-  if (((numeric !== undefined && numeric >= 1) || isBareHundred) && tokens[isBareHundred ? 0 : 1] === 'hundred') {
+  const hundredIndex = isBareHundred ? 0 : consumedHundred;
+  if (((numeric !== undefined && numeric >= 1) || isBareHundred) && tokens[hundredIndex] === 'hundred') {
     numeric = (numeric ?? 1) * 100;
-    consumedHundred = isBareHundred ? 1 : 2;
+    consumedHundred = hundredIndex + 1;
 
     // "one hundred and five bananas" / "one hundred five bananas" — an optional "and" and a
     // trailing ones word extend the hundred, same as `parseWeightPhrase` does. Without this,
@@ -766,7 +787,7 @@ export function parseSpokenRequest(text: string): SpokenRequest {
   // preceded by a count ("one thousand island dressing", "two thousand islands dressings") —
   // in both cases "island" right after "thousand" means the product name, not a multiplier.
   const isBareThousand = numeric === undefined && first === 'thousand';
-  const thousandIndex = isBareThousand ? 0 : 1;
+  const thousandIndex = isBareThousand ? 0 : consumedHundred;
   const isThousandIsland = tokens[thousandIndex] === 'thousand' && tokens[thousandIndex + 1] === 'island';
   if (
     !isThousandIsland &&
@@ -774,7 +795,7 @@ export function parseSpokenRequest(text: string): SpokenRequest {
     tokens[thousandIndex] === 'thousand'
   ) {
     numeric = (numeric ?? 1) * 1000;
-    consumedHundred = isBareThousand ? 1 : 2;
+    consumedHundred = thousandIndex + 1;
   }
 
   // "twenty one bananas" / "thirty five bananas" — every tens word from twenty through ninety

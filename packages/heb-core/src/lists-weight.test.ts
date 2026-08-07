@@ -307,6 +307,10 @@ describe('weight on a counter line', () => {
 
     expect(result.status).toBe('added');
     expect(result.status === 'added' && result.item.weight).toBe(2.5);
+    // `weightRequested` names this request's own contribution (0.5), not the merged total
+    // (2.5) — the surfaces use it to report the two separately instead of crediting the
+    // household member's pre-existing 2 lb to this request.
+    expect(result.status === 'added' && result.weightRequested).toBe(0.5);
   });
 
   it('preserves a definitive refusal instead of reconciling it into a generic error', async () => {
@@ -730,6 +734,35 @@ describe('the product path matches the written-line path', () => {
     await expect(ops.addItem({ productId: 'p-milk', quantity: 2 })).rejects.toSatisfy(
       (error: unknown) =>
         (error as { details?: Record<string, unknown> }).details?.['indeterminate'] === true,
+    );
+  });
+
+  it('reports the request\'s own total, not the merged quantity, when a later unit is lost', async () => {
+    // The opening read found no line, but a household member's concurrent add merges into
+    // this call's own first unit before its response arrives — the line reads 2 (their unit
+    // plus this call's first), not 1. `added.quantity + remaining` would credit their unit
+    // to this request and report "not confirmed at 4" for a 3-unit request that only landed
+    // its own units; `totalRequested` (3, computed from what this request itself asked for)
+    // is correct regardless of the merge.
+    const { ops, lines } = scripted([]);
+    const client = (ops as unknown as { client: { execute: (d: unknown) => Promise<unknown> } })
+      .client;
+    const real = client.execute.bind(client);
+    let calls = 0;
+    client.execute = async (document: unknown) => {
+      if ((document as { operationName: string }).operationName === 'HebAddShoppingListItems') {
+        calls += 1;
+        if (calls === 1) {
+          lines.push({ id: 'line-0', quantity: 1, productId: 'p-milk' });
+          return real(document); // the household member's concurrent unit, already on the line
+        }
+        if (calls === 2) throw new HebError('UPSTREAM_ERROR', 'response lost');
+      }
+      return real(document);
+    };
+
+    await expect(ops.addItem({ productId: 'p-milk', quantity: 3 })).rejects.toSatisfy(
+      (error: unknown) => (error as { message: string }).message.includes('not confirmed at 3'),
     );
   });
 

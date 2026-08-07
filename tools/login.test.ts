@@ -6,6 +6,11 @@ import { join } from 'node:path';
 const execFileSyncMock = vi.hoisted(() => vi.fn());
 vi.mock('node:child_process', () => ({ execFileSync: execFileSyncMock }));
 
+vi.mock('node:fs/promises', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('node:fs/promises')>();
+  return { ...actual, readdir: vi.fn(actual.readdir) };
+});
+
 const { clearDirectoryContents, isSessionTrusted, untrustedProfileNote, untrustedSessionNote, windowsPathFor } =
   await import('./login.js');
 
@@ -221,6 +226,12 @@ describe('clearDirectoryContents', () => {
   it('does nothing when the directory does not exist yet', async () => {
     const dir = join(tmpdir(), 'heb-profile-missing-does-not-exist');
     await expect(clearDirectoryContents(dir)).resolves.toBeUndefined();
+  });
+
+  it('propagates read failures other than "does not exist" instead of treating the directory as empty', async () => {
+    const error = Object.assign(new Error('permission denied'), { code: 'EACCES' });
+    vi.mocked(readdir).mockRejectedValueOnce(error);
+    await expect(clearDirectoryContents('/some/profile/dir')).rejects.toThrow('permission denied');
   });
 });
 

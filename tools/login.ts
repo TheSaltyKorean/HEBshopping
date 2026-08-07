@@ -340,7 +340,13 @@ export function untrustedProfileNote(
  * contents instead keeps that lock in place across a switch.
  */
 export async function clearDirectoryContents(dir: string): Promise<void> {
-  const entries = await readdir(dir).catch(() => []);
+  let entries: string[];
+  try {
+    entries = await readdir(dir);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return;
+    throw error;
+  }
   await Promise.all(entries.map((entry) => rm(join(dir, entry), { recursive: true, force: true })));
 }
 

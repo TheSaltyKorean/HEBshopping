@@ -21,14 +21,18 @@ runStoreContract('FileStore', harness);
 // Windows drive, which report `process.platform === 'linux'` but can behave the same way —
 // so this is checked by writing a real file rather than trusting the platform name.
 const honorsOwnerOnlyMode = await (async () => {
-  const probeDir = await mkdtemp(join(tmpdir(), 'heb-mode-probe-'));
   try {
-    const probePath = join(probeDir, 'probe');
-    await writeFile(probePath, 'x', { mode: 0o600 });
-    await chmod(probePath, 0o600);
-    return ((await stat(probePath)).mode & 0o777) === 0o600;
-  } finally {
-    await rm(probeDir, { recursive: true, force: true });
+    const probeDir = await mkdtemp(join(tmpdir(), 'heb-mode-probe-'));
+    try {
+      const probePath = join(probeDir, 'probe');
+      await writeFile(probePath, 'x', { mode: 0o600 });
+      await chmod(probePath, 0o600);
+      return ((await stat(probePath)).mode & 0o777) === 0o600;
+    } finally {
+      await rm(probeDir, { recursive: true, force: true });
+    }
+  } catch {
+    return false;
   }
 })();
 

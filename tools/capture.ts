@@ -19,9 +19,8 @@
 import type { BrowserContext } from 'playwright';
 import { resolve } from 'node:path';
 import { filterHebStorageState, isGraphqlUrl, type StorageStateLike } from '@heb/core';
-import { ensureOwnerOnlyDir, launchBrowser, writeSecret } from './lib/browser.js';
+import { CAPTURE_DIR, ensureOwnerOnlyDir, launchBrowser, writeSecret } from './lib/browser.js';
 
-const CAPTURE_DIR = resolve('captures');
 const START_URL = 'https://www.heb.com/shopping-list';
 
 interface CapturedOperation {

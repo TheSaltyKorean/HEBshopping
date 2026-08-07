@@ -1,11 +1,16 @@
 import { describe, expect, it, vi } from 'vitest';
-import { mkdir, mkdtemp, readdir, rm, stat, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readdir, realpath, rm, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 
 vi.mock('node:fs/promises', async (importOriginal) => {
   const actual = await importOriginal<typeof import('node:fs/promises')>();
-  return { ...actual, readdir: vi.fn(actual.readdir), stat: vi.fn(actual.stat) };
+  return {
+    ...actual,
+    readdir: vi.fn(actual.readdir),
+    realpath: vi.fn(actual.realpath),
+    stat: vi.fn(actual.stat),
+  };
 });
 
 const {
@@ -296,6 +301,17 @@ describe('isDedicatedDirectory', () => {
   it('tolerates a stray session.json.tmp in the default .session directory when checking a second file', async () => {
     vi.mocked(readdir).mockResolvedValueOnce(['session.json.tmp', 'second.json'] as never);
     await expect(isDedicatedDirectory(resolve('.session'), 'second.json', 'powershell')).resolves.toBe(true);
+  });
+
+  it('still recognizes the default .session directory when the repo is reached through a junction', async () => {
+    // Both callers pass a realDir-resolved `dir`, while DEFAULT_SESSION_PATH resolves against a
+    // cwd that still holds the junction. Comparing those lexically made the default directory
+    // look foreign, so `--session .session/other.json` was blocked outright. Every other
+    // default-directory case here passes a lexical path, which is why none of them caught it.
+    const realSessionDir = resolve('/real-target/HEBshopping/.session');
+    vi.mocked(realpath).mockResolvedValueOnce(realSessionDir as never);
+    vi.mocked(readdir).mockResolvedValueOnce(['session.json'] as never);
+    await expect(isDedicatedDirectory(realSessionDir, 'second.json', 'powershell')).resolves.toBe(true);
   });
 });
 

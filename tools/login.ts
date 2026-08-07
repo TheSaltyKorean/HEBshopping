@@ -329,7 +329,12 @@ export async function isDedicatedDirectory(
   // not evidence of a shared directory, so it's allowed alongside the file it belongs to.
   const allowed = new Set([expectedEntry, `${expectedEntry}.tmp`]);
   const resolvedDir = resolve(dir);
-  const resolvedDefaultDir = dirname(resolve(DEFAULT_SESSION_PATH));
+  // Canonicalized to match `dir`, which both callers resolve through `realDir` before passing
+  // it here. `DEFAULT_SESSION_PATH` resolves against a `process.cwd()` that keeps whatever
+  // junction the repo was reached through, so comparing it lexically against an already-resolved
+  // `dir` makes the default directory look foreign and hard-blocks a plain
+  // `--session .session/other.json` — in the very directory docs/setup.md says to lock.
+  const resolvedDefaultDir = await realDir(dirname(resolve(DEFAULT_SESSION_PATH)));
   const caseInsensitive = shell === 'powershell' || shell === 'wsl-powershell';
   const sameAsDefaultDir = caseInsensitive
     ? resolvedDir.toLowerCase() === resolvedDefaultDir.toLowerCase()
@@ -636,8 +641,12 @@ async function main(): Promise<void> {
   // in the repo and can sit on a different, less-trusted mount than the --session path, so it
   // needs its own home-directory exemption check regardless of whether the session file's own
   // check above passed or failed — it must not silently inherit that verdict either way.
+  // Resolved through realDir first, for the same reason `warnIfUntrustedDir` does it: a junction
+  // lexically under the home profile but redirecting elsewhere would otherwise be granted the
+  // exemption and silence this warning, while capture.ts/drive.ts still warn about that same
+  // directory.
   const profileOwnerOnly = await checkOwnerOnly(PROFILE_DIR);
-  const { path: profileIcaclsPath, shell: profileShell } = windowsPathFor(PROFILE_DIR);
+  const { path: profileIcaclsPath, shell: profileShell } = windowsPathFor(await realDir(PROFILE_DIR));
   const profileHome = profileShell === null ? null : homeDirFor(profileShell);
   const profileAlreadySafe = sessionAlreadySafe(profileShell, profileIcaclsPath, profileHome);
   const profileNote = untrustedProfileNote(profileOwnerOnly, profileShell, profileAlreadySafe);

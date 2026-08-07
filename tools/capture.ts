@@ -19,7 +19,14 @@
 import type { BrowserContext } from 'playwright';
 import { resolve } from 'node:path';
 import { filterHebStorageState, isGraphqlUrl, type StorageStateLike } from '@heb/core';
-import { CAPTURE_DIR, ensureOwnerOnlyDir, launchBrowser, writeSecret } from './lib/browser.js';
+import {
+  CAPTURE_DIR,
+  PROFILE_DIR,
+  ensureOwnerOnlyDir,
+  launchBrowser,
+  warnIfUntrustedDir,
+  writeSecret,
+} from './lib/browser.js';
 
 const START_URL = 'https://www.heb.com/shopping-list';
 
@@ -182,6 +189,7 @@ async function flush(context: BrowserContext): Promise<void> {
   }
 
   await ensureOwnerOnlyDir(CAPTURE_DIR);
+  await warnIfUntrustedDir(CAPTURE_DIR);
 
   await writeSecret(resolve(CAPTURE_DIR, 'operations.json'),
     JSON.stringify(Object.fromEntries(operations), null, 2));
@@ -213,6 +221,7 @@ async function flush(context: BrowserContext): Promise<void> {
 
 async function main(): Promise<void> {
   const context = await launchBrowser();
+  await warnIfUntrustedDir(PROFILE_DIR);
 
   await recordGraphqlTraffic(context);
 

@@ -35,7 +35,7 @@ import {
   type SessionState,
   type Store,
 } from '@heb/core';
-import { launchBrowser, PROFILE_DIR } from './lib/browser.js';
+import { checkOwnerOnly, isSessionTrusted, launchBrowser, PROFILE_DIR, windowsPathFor } from './lib/browser.js';
 
 const START_URL = 'https://www.heb.com/shopping-list';
 const DEFAULT_SESSION_PATH = '.session/session.json';
@@ -70,46 +70,6 @@ function parseArgs(argv: string[]): Options {
 }
 
 const sleep = (ms: number): Promise<void> => new Promise((done) => setTimeout(done, ms));
-
-/**
- * `icacls` is a Windows tool and only understands Windows-style paths. On WSL,
- * `options.sessionPath` is POSIX-style (e.g. `/mnt/c/repo/.session/session.json`), so
- * translate it via `wslpath` before printing a command meant to run in PowerShell.
- *
- * `wslpath` succeeds for *any* path, including one on WSL's own native filesystem — there it
- * translates to a `\\wsl.localhost\...` (or the older `\\wsl$\...`) UNC alias rather than a
- * drive letter. That's not a DrvFS/NTFS mount, so it isn't Windows-backed and `icacls`
- * doesn't apply; treat it the same as a `wslpath` failure. Any other UNC path — e.g. a
- * Windows-backed network share mounted through DrvFS — is a real `icacls` target and should
- * be accepted, same as a drive letter.
- *
- * `shell` says where that command has to be run: `'powershell'` on native Windows,
- * `'wsl-powershell'` on WSL when the path actually resolves onto a Windows drive, or `null`
- * on a platform (or WSL path) `icacls` can't help — native Linux/macOS, permissionless mounts
- * like CIFS or FAT, or a WSL-native path — where the caller should not print an `icacls`
- * command at all.
- */
-export function windowsPathFor(path: string): { path: string; shell: 'powershell' | 'wsl-powershell' | null } {
-  if (process.platform === 'win32') return { path, shell: 'powershell' };
-  if (process.platform !== 'linux') return { path, shell: null };
-  try {
-    const winPath = execFileSync('wslpath', ['-w', path], { encoding: 'utf8' }).trim();
-    if (/^\\\\wsl(\.localhost|\$)\\/i.test(winPath)) return { path, shell: null };
-    if (!/^([A-Za-z]:\\|\\\\)/.test(winPath)) return { path, shell: null };
-    return { path: winPath, shell: 'wsl-powershell' };
-  } catch {
-    return { path, shell: null };
-  }
-}
-
-/**
- * On WSL, `chmod`/`stat` reporting 0600 isn't proof either: a DrvFS mount with the `metadata`
- * option can round-trip that mode bit while the underlying NTFS ACL still grants every account
- * on the machine access, so WSL can never fully trust the mode.
- */
-export function isSessionTrusted(ownerOnly: boolean, shell: ReturnType<typeof windowsPathFor>['shell']): boolean {
-  return ownerOnly && shell !== 'wsl-powershell';
-}
 
 const quotePowerShell = (path: string): string => `'${path.replace(/'/g, "''")}'`;
 
@@ -335,15 +295,6 @@ async function worksAgainstHeb(candidate: SessionState): Promise<boolean> {
     return data.getShoppingListsV2?.__typename === 'ShoppingListsWithHeaderPageV2';
   } catch {
     return false;
-  }
-}
-
-/** Owner-only mode on POSIX, or `null` when it can't be determined (missing, or stat failed). */
-async function checkOwnerOnly(path: string): Promise<boolean | null> {
-  try {
-    return ((await stat(path)).mode & 0o077) === 0;
-  } catch {
-    return null;
   }
 }
 
@@ -786,8 +737,9 @@ async function main(): Promise<void> {
   await context.close().catch(() => {});
 }
 
-// Guarded so the test suite can import the pure helpers above (`windowsPathFor`,
-// `isSessionTrusted`) without launching a real browser and waiting on a human to log in.
+// Guarded so the test suite can import the pure helpers above (`isDedicatedDirectory`,
+// `untrustedProfileNote`, ...) without launching a real browser and waiting on a human to
+// log in.
 // Resolved through realpathSync, not just resolve(): Node's loader already resolves
 // import.meta.url through any symlink, but process.argv[1] keeps whatever path was typed,
 // so a symlinked launcher would otherwise never match and main() would silently not run.

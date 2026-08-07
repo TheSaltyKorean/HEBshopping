@@ -2,12 +2,15 @@
  * Shared Playwright wiring for the discovery and login tools.
  *
  * The GraphQL parsing itself lives in @heb/core (`capture.ts`) so the refresher can reuse
- * it without depending on Playwright. This module is only the plumbing: launch a browser
- * that keeps its login, and pipe its GraphQL traffic into that parser.
+ * it without depending on Playwright. Besides that plumbing — launch a browser that keeps
+ * its login, and pipe its GraphQL traffic into that parser — this is also where the
+ * Windows/WSL owner-only checks live, since every tool that writes a live credential
+ * (`login.ts`, `capture.ts`, `drive.ts`) needs them.
  */
 
 import { chromium, type BrowserContext } from 'playwright';
-import { chmod, mkdir, writeFile } from 'node:fs/promises';
+import { execFileSync } from 'node:child_process';
+import { chmod, mkdir, stat, writeFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
 import { filterHebStorageState, isGraphqlUrl, parseGraphqlPost } from '@heb/core';
 
@@ -50,6 +53,89 @@ const OWNER_ONLY_DIR_MODE = 0o700;
 export async function ensureOwnerOnlyDir(dir: string): Promise<void> {
   await mkdir(dir, { recursive: true });
   await chmod(dir, OWNER_ONLY_DIR_MODE);
+}
+
+/**
+ * `icacls` is a Windows tool and only understands Windows-style paths. On WSL, a path here
+ * is POSIX-style (e.g. `/mnt/c/repo/.session/session.json`), so translate it via `wslpath`
+ * before printing a command meant to run in PowerShell.
+ *
+ * `wslpath` succeeds for *any* path, including one on WSL's own native filesystem — there it
+ * translates to a `\\wsl.localhost\...` (or the older `\\wsl$\...`) UNC alias rather than a
+ * drive letter. That's not a DrvFS/NTFS mount, so it isn't Windows-backed and `icacls`
+ * doesn't apply; treat it the same as a `wslpath` failure. Any other UNC path — e.g. a
+ * Windows-backed network share mounted through DrvFS — is a real `icacls` target and should
+ * be accepted, same as a drive letter.
+ *
+ * `shell` says where that command has to be run: `'powershell'` on native Windows,
+ * `'wsl-powershell'` on WSL when the path actually resolves onto a Windows drive, or `null`
+ * on a platform (or WSL path) `icacls` can't help — native Linux/macOS, permissionless mounts
+ * like CIFS or FAT, or a WSL-native path — where the caller should not print an `icacls`
+ * command at all.
+ */
+export function windowsPathFor(path: string): { path: string; shell: 'powershell' | 'wsl-powershell' | null } {
+  if (process.platform === 'win32') return { path, shell: 'powershell' };
+  if (process.platform !== 'linux') return { path, shell: null };
+  try {
+    const winPath = execFileSync('wslpath', ['-w', path], { encoding: 'utf8' }).trim();
+    if (/^\\\\wsl(\.localhost|\$)\\/i.test(winPath)) return { path, shell: null };
+    if (!/^([A-Za-z]:\\|\\\\)/.test(winPath)) return { path, shell: null };
+    return { path: winPath, shell: 'wsl-powershell' };
+  } catch {
+    return { path, shell: null };
+  }
+}
+
+/**
+ * On WSL, `chmod`/`stat` reporting 0600 isn't proof either: a DrvFS mount with the `metadata`
+ * option can round-trip that mode bit while the underlying NTFS ACL still grants every account
+ * on the machine access, so WSL can never fully trust the mode.
+ */
+export function isSessionTrusted(ownerOnly: boolean, shell: ReturnType<typeof windowsPathFor>['shell']): boolean {
+  return ownerOnly && shell !== 'wsl-powershell';
+}
+
+/** Owner-only mode on POSIX, or `null` when it can't be determined (missing, or stat failed). */
+export async function checkOwnerOnly(path: string): Promise<boolean | null> {
+  try {
+    return ((await stat(path)).mode & 0o077) === 0;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * The remediation note for a directory holding a live credential whose owner-only mode
+ * couldn't be confirmed — null when `checkOwnerOnly` + `isSessionTrusted` already call it
+ * trusted. Generic sibling of login.ts's `untrustedSessionNote`/`untrustedProfileNote` for
+ * callers (capture.ts, drive.ts) that have no --session-style custom path, or check "above",
+ * to fold into the message — so it only ever reports what was measured, not a generated
+ * remediation command.
+ */
+export function untrustedDirNote(
+  dir: string,
+  ownerOnly: boolean | null,
+  shell: ReturnType<typeof windowsPathFor>['shell'],
+): string | null {
+  if (ownerOnly !== null && isSessionTrusted(ownerOnly, shell)) return null;
+  if (shell === null) {
+    if (ownerOnly !== false) return null;
+    return (
+      `⚠ ${dir} holds a live credential and this filesystem did not enforce the\n` +
+      '   owner-only permission. Restrict it manually before trusting it.'
+    );
+  }
+  return (
+    `⚠ ${dir} holds a live credential and its owner-only permission could not be\n` +
+    '   confirmed on Windows/WSL. See the Windows note above Step 5 in docs/setup.md\n' +
+    '   to check and, if needed, restrict it.'
+  );
+}
+
+/** Checks `dir` and prints `untrustedDirNote`'s remediation, if any. */
+export async function warnIfUntrustedDir(dir: string): Promise<void> {
+  const note = untrustedDirNote(dir, await checkOwnerOnly(dir), windowsPathFor(dir).shell);
+  if (note !== null) console.warn(note);
 }
 
 export interface CapturedCall {

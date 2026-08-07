@@ -375,14 +375,21 @@ export async function isDedicatedDirectory(
   expectedEntry: string,
   shell: ReturnType<typeof windowsPathFor>['shell'],
 ): Promise<boolean> {
-  const allowed = new Set([expectedEntry]);
+  // FileStore.putSession writes `<path>.tmp` then renames it onto `<path>` (file-store.ts) —
+  // an interrupted write leaves that `.tmp` sibling behind. It's this tool's own leftover,
+  // not evidence of a shared directory, so it's allowed alongside the file it belongs to.
+  const allowed = new Set([expectedEntry, `${expectedEntry}.tmp`]);
   const resolvedDir = resolve(dir);
   const resolvedDefaultDir = dirname(resolve(DEFAULT_SESSION_PATH));
   const caseInsensitive = shell === 'powershell' || shell === 'wsl-powershell';
   const sameAsDefaultDir = caseInsensitive
     ? resolvedDir.toLowerCase() === resolvedDefaultDir.toLowerCase()
     : resolvedDir === resolvedDefaultDir;
-  if (sameAsDefaultDir) allowed.add(basename(DEFAULT_SESSION_PATH));
+  if (sameAsDefaultDir) {
+    const defaultEntry = basename(DEFAULT_SESSION_PATH);
+    allowed.add(defaultEntry);
+    allowed.add(`${defaultEntry}.tmp`);
+  }
   const allowedForComparison = caseInsensitive
     ? new Set([...allowed].map((entry) => entry.toLowerCase()))
     : allowed;

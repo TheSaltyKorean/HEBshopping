@@ -376,6 +376,22 @@ describe('isDedicatedDirectory', () => {
       await rm(dir, { recursive: true, force: true });
     }
   });
+
+  it('tolerates a stray .tmp left by an interrupted write to the expected entry', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'heb-dedicated-tmp-'));
+    try {
+      await writeFile(join(dir, 'session.json'), '{}');
+      await writeFile(join(dir, 'session.json.tmp'), '{}');
+      await expect(isDedicatedDirectory(dir, 'session.json', null)).resolves.toBe(true);
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('tolerates a stray session.json.tmp in the default .session directory when checking a second file', async () => {
+    vi.mocked(readdir).mockResolvedValueOnce(['session.json.tmp', 'second.json'] as never);
+    await expect(isDedicatedDirectory(resolve('.session'), 'second.json', 'powershell')).resolves.toBe(true);
+  });
 });
 
 describe('customSessionParentAction', () => {

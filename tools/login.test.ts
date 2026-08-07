@@ -3,7 +3,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 const execFileSyncMock = vi.hoisted(() => vi.fn());
 vi.mock('node:child_process', () => ({ execFileSync: execFileSyncMock }));
 
-const { isSessionTrusted, windowsPathFor } = await import('./login.js');
+const { isSessionTrusted, untrustedSessionNote, windowsPathFor } = await import('./login.js');
 
 const originalPlatform = process.platform;
 
@@ -100,5 +100,43 @@ describe('isSessionTrusted', () => {
     expect(isSessionTrusted(false, 'powershell')).toBe(false);
     expect(isSessionTrusted(false, 'wsl-powershell')).toBe(false);
     expect(isSessionTrusted(false, null)).toBe(false);
+  });
+});
+
+describe('untrustedSessionNote', () => {
+  it('has nothing to add when icacls cannot help and the mode is already owner-only or unverified', () => {
+    expect(untrustedSessionNote(true, null, '/whatever', true)).toBeNull();
+    expect(untrustedSessionNote(null, null, '/whatever', true)).toBeNull();
+  });
+
+  it('warns about the browser profile too when stuck on a permissionless mount', () => {
+    const note = untrustedSessionNote(false, null, '/mnt/share/.session/session.json', true);
+    expect(note).toContain('.playwright-profile');
+    expect(note).toContain('there is no command this tool can print here');
+  });
+
+  it('still prints the icacls remediation when stat() failed to verify the mode — the prior regression', () => {
+    const note = untrustedSessionNote(null, 'powershell', 'C:\\repo\\.session\\session.json', true);
+    expect(note).toContain('icacls');
+    expect(note).toContain('could not be verified');
+  });
+
+  it('flags the WSL metadata caveat when the mode reports owner-only but the mount cannot be trusted', () => {
+    const note = untrustedSessionNote(true, 'wsl-powershell', 'C:\\repo\\.session\\session.json', true);
+    expect(note).toContain('metadata');
+    expect(note).toContain('(not this WSL shell)');
+  });
+
+  it('warns plainly on native Windows when the mode was never restricted', () => {
+    const note = untrustedSessionNote(false, 'powershell', 'C:\\repo\\.session\\session.json', true);
+    expect(note).toContain("didn't enforce the owner-only permission");
+    expect(note).not.toContain('(not this WSL shell)');
+  });
+
+  it('points to the default .session directory note only when the path actually is the default', () => {
+    const atDefault = untrustedSessionNote(false, 'powershell', 'C:\\repo\\.session\\session.json', true);
+    const atCustom = untrustedSessionNote(false, 'powershell', 'C:\\creds\\foo.json', false);
+    expect(atDefault).toContain('the default .session directory');
+    expect(atCustom).not.toContain('the default .session directory');
   });
 });

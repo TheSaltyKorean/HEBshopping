@@ -164,8 +164,10 @@ Verifying against the live API …
   ✅ "Shopping" — 1 item(s)
 ```
 
-On Windows and WSL, `chmod` can't restrict the file, so that first line ends with just a
-period instead of `(mode 0600)` — see the note above Step 5 for what protects it there.
+On Windows, and on WSL when the repo sits on a Windows drive, `chmod` can't restrict the
+file, so that first line ends with just a period instead of `(mode 0600)` — see the note
+above Step 5 for what protects it there. On WSL's own native filesystem (e.g. `~/...`),
+`chmod` works normally and you'll see `(mode 0600)`.
 
 That last line is the proof: it made a real authenticated call and saw your real list.
 

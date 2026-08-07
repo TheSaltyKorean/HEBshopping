@@ -19,7 +19,7 @@
 import { execFileSync } from 'node:child_process';
 import { realpathSync } from 'node:fs';
 import { readdir, rm, stat } from 'node:fs/promises';
-import { dirname, join, resolve } from 'node:path';
+import { basename, dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
   FileStore,
@@ -124,6 +124,13 @@ export function isSessionTrusted(ownerOnly: boolean, shell: ReturnType<typeof wi
  * (the icacls-ready form of that file's parent directory) lets the custom-path case be told
  * to lock the directory instead, the same durable fix the default `.session` path already
  * gets from docs/setup.md.
+ *
+ * `dedicated` (whether that directory holds nothing but this file, checked by the caller via
+ * a directory listing) decides which of two mutually exclusive instructions to give for a
+ * custom path: locking a *shared* directory would strip every other account's access to
+ * files this tool has no business touching, so that case must be told to relocate to a new
+ * directory instead — and, critically, must not also print a fix for the file at its old
+ * location, since that location stops existing once the reader moves it.
  */
 export function untrustedSessionNote(
   ownerOnly: boolean | null,
@@ -131,6 +138,7 @@ export function untrustedSessionNote(
   icaclsPath: string,
   isDefaultSessionPath: boolean,
   dirIcaclsPath: string,
+  dedicated: boolean,
 ): string | null {
   if (shell === null) {
     if (ownerOnly !== false) return null;
@@ -192,36 +200,52 @@ export function untrustedSessionNote(
   // `/inheritance:r` on a directory removes every inherited ACE and `/grant:r` leaves only
   // the named account, so it strips every other account's access to the directory itself
   // and to files created in it later. Without `/T` it does not touch files already inside
-  // it, so a directory with other content in it isn't retroactively protected. `dirIcaclsPath`
-  // is always the file's *existing* parent (it's already writing there), so this can only
-  // ever offer to lock that directory — not a new one — and must tell the user to relocate
-  // to a directory of their own choosing when this one isn't dedicated, rather than claiming
-  // to create and lock a "new" directory that's actually the same one.
-  return (
+  // it, so a directory with other content in it isn't retroactively protected.
+  const profileNote =
+    `   ${PROFILE_DIR} holds a live logged-in browser profile from this same login.\n` +
+    "   It isn't relocated by --session, so it stays exposed under its inherited ACL\n" +
+    '   even after you lock this file — see the Windows note above Step 5 in\n' +
+    '   docs/setup.md to restrict it too.';
+  const cautionary =
     reason +
     ' A fix on just this file would not last — the next\n' +
     "   login replaces it with a fresh temp file that inherits its directory's ACL, not\n" +
     "   the file's. Lock the directory that holds it instead — but only if it's dedicated\n" +
     "   to this file: without `/T` this only strips every other account's access to the\n" +
     "   directory itself and to files created in it later, not to files already inside it,\n" +
-    "   so it isn't safe to rely on for a directory anything else depends on. If this one\n" +
-    "   holds anything else, don't lock it: create a new, empty,\n" +
-    "   dedicated directory of your own choosing and lock that new directory first —\n" +
-    "   the same mkdir/icacls pattern shown below, just against its own path — then\n" +
-    "   move this file into that new directory, point --session there, and run again;\n" +
-    "   locking first means that write inherits the safe ACL from the moment it\n" +
-    "   happens, instead of landing under an unlocked directory again. Otherwise, lock\n" +
-    `   this one now, from a Windows PowerShell prompt${wslSuffix}:\n` +
+    "   so it isn't safe to rely on for a directory anything else depends on.\n";
+
+  // `dirIcaclsPath` is always the file's *existing* parent (it's already writing there), and
+  // a directory that isn't dedicated to this file must never be locked directly — nor can a
+  // fix for the file at its *old* location be offered, because that location stops existing
+  // the moment the reader moves it there. The rerun's own write (temp-file-then-rename inside
+  // the new, already-locked directory) picks up the safe ACL on its own, so no separate
+  // per-file command is needed once the reader relocates.
+  if (!dedicated) {
+    return (
+      cautionary +
+      "   This directory holds other files, so don't lock it: create a new, empty,\n" +
+      "   dedicated directory of your own choosing and lock that new directory first —\n" +
+      '   the same mkdir + icacls /reset + icacls /inheritance:r /grant:r pattern this\n' +
+      "   tool uses to lock a dedicated directory, just against its own path — then\n" +
+      "   move this file into that new directory, point --session there, and run again;\n" +
+      "   locking first means that write inherits the safe ACL from the moment it\n" +
+      "   happens, instead of landing under an unlocked directory again, and that same\n" +
+      "   write is what secures the file — no separate per-file fix is needed for it.\n" +
+      profileNote
+    );
+  }
+
+  return (
+    cautionary +
+    `   Lock this one now, from a Windows PowerShell prompt${wslSuffix}:\n` +
     `   mkdir -Force ${quote(dirIcaclsPath)}\n` +
     `   icacls ${quote(dirIcaclsPath)} /reset\n` +
     `   icacls ${quote(dirIcaclsPath)} /inheritance:r /grant:r "\${env:USERDOMAIN}\\\${env:USERNAME}:(OI)(CI)F"\n` +
     '   This run already wrote the file under the old ACL, so fix that one file too,\n' +
     '   once:\n' +
     fileFix +
-    `   ${PROFILE_DIR} holds a live logged-in browser profile from this same login.\n` +
-    "   It isn't relocated by --session, so it stays exposed under its inherited ACL\n" +
-    '   even after you lock this file — see the Windows note above Step 5 in\n' +
-    '   docs/setup.md to restrict it too.'
+    profileNote
   );
 }
 
@@ -302,6 +326,22 @@ async function checkOwnerOnly(path: string): Promise<boolean | null> {
     return ((await stat(path)).mode & 0o077) === 0;
   } catch {
     return null;
+  }
+}
+
+/**
+ * Whether `dir` holds nothing but `expectedEntry`. Gates the custom-`--session` icacls
+ * remediation: locking a directory that holds anything else would strip every other
+ * account's access to files this tool has no business touching, so that fix must only ever
+ * be offered for a directory the session file has entirely to itself. Treated as "not
+ * dedicated" when the listing itself fails — the safer assumption when it can't be verified.
+ */
+async function isDedicatedDirectory(dir: string, expectedEntry: string): Promise<boolean> {
+  try {
+    const entries = await readdir(dir);
+    return entries.length === 1 && entries[0] === expectedEntry;
+  } catch {
+    return false;
   }
 }
 
@@ -451,7 +491,10 @@ async function main(): Promise<void> {
   if (!trusted) {
     const isDefaultSessionPath = options.sessionPath === resolve(DEFAULT_SESSION_PATH);
     const dirIcaclsPath = windowsPathFor(dirname(options.sessionPath)).path;
-    const note = untrustedSessionNote(ownerOnly, shell, icaclsPath, isDefaultSessionPath, dirIcaclsPath);
+    const dedicated =
+      isDefaultSessionPath ||
+      (await isDedicatedDirectory(dirname(options.sessionPath), basename(options.sessionPath)));
+    const note = untrustedSessionNote(ownerOnly, shell, icaclsPath, isDefaultSessionPath, dirIcaclsPath, dedicated);
     if (note !== null) console.log(note);
   } else {
     // A trusted --session path only proves that file's own filesystem is safe. PROFILE_DIR

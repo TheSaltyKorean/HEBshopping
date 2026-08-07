@@ -114,57 +114,92 @@ describe('isSessionTrusted', () => {
 
 describe('untrustedSessionNote', () => {
   it('has nothing to add when icacls cannot help and the mode is already owner-only or unverified', () => {
-    expect(untrustedSessionNote(true, null, '/whatever', true, '/whatever/dir')).toBeNull();
-    expect(untrustedSessionNote(null, null, '/whatever', true, '/whatever/dir')).toBeNull();
+    expect(untrustedSessionNote(true, null, '/whatever', true, '/whatever/dir', true)).toBeNull();
+    expect(untrustedSessionNote(null, null, '/whatever', true, '/whatever/dir', true)).toBeNull();
   });
 
   it('warns about the browser profile too when stuck on a permissionless mount', () => {
-    const note = untrustedSessionNote(false, null, '/mnt/share/.session/session.json', true, '/mnt/share/.session');
+    const note = untrustedSessionNote(
+      false,
+      null,
+      '/mnt/share/.session/session.json',
+      true,
+      '/mnt/share/.session',
+      true,
+    );
     expect(note).toContain('.playwright-profile');
     expect(note).toContain('there is no command this tool can print here');
     expect(note).toContain('exposed on the mount');
   });
 
   it('does not claim the browser profile shares a custom --session path\'s permissionless mount', () => {
-    const note = untrustedSessionNote(false, null, '/mnt/share/creds/foo.json', false, '/mnt/share/creds');
+    const note = untrustedSessionNote(false, null, '/mnt/share/creds/foo.json', false, '/mnt/share/creds', true);
     expect(note).toContain('.playwright-profile');
     expect(note).toContain('need not share\n   this mount at all');
     expect(note).not.toContain('exposed on the mount');
   });
 
   it('still prints the icacls remediation when stat() failed to verify the mode — the prior regression', () => {
-    const note = untrustedSessionNote(null, 'powershell', 'C:\\repo\\.session\\session.json', true, 'C:\\repo\\.session');
+    const note = untrustedSessionNote(
+      null,
+      'powershell',
+      'C:\\repo\\.session\\session.json',
+      true,
+      'C:\\repo\\.session',
+      true,
+    );
     expect(note).toContain('icacls');
     expect(note).toContain('could not be verified');
   });
 
   it('flags the WSL metadata caveat when the mode reports owner-only but the mount cannot be trusted', () => {
-    const note = untrustedSessionNote(true, 'wsl-powershell', 'C:\\repo\\.session\\session.json', true, 'C:\\repo\\.session');
+    const note = untrustedSessionNote(
+      true,
+      'wsl-powershell',
+      'C:\\repo\\.session\\session.json',
+      true,
+      'C:\\repo\\.session',
+      true,
+    );
     expect(note).toContain('metadata');
     expect(note).toContain('(not this WSL shell)');
   });
 
   it('warns plainly on native Windows when the mode was never restricted', () => {
-    const note = untrustedSessionNote(false, 'powershell', 'C:\\repo\\.session\\session.json', true, 'C:\\repo\\.session');
+    const note = untrustedSessionNote(
+      false,
+      'powershell',
+      'C:\\repo\\.session\\session.json',
+      true,
+      'C:\\repo\\.session',
+      true,
+    );
     expect(note).toContain("didn't enforce the owner-only permission");
     expect(note).not.toContain('(not this WSL shell)');
   });
 
   it('points to the default .session directory note only when the path actually is the default', () => {
-    const atDefault = untrustedSessionNote(false, 'powershell', 'C:\\repo\\.session\\session.json', true, 'C:\\repo\\.session');
-    const atCustom = untrustedSessionNote(false, 'powershell', 'C:\\creds\\foo.json', false, 'C:\\creds');
+    const atDefault = untrustedSessionNote(
+      false,
+      'powershell',
+      'C:\\repo\\.session\\session.json',
+      true,
+      'C:\\repo\\.session',
+      true,
+    );
+    const atCustom = untrustedSessionNote(false, 'powershell', 'C:\\creds\\foo.json', false, 'C:\\creds', true);
     expect(atDefault).toContain('the default .session directory');
     expect(atCustom).not.toContain('the default .session directory');
   });
 
   it('still warns about .playwright-profile on Windows/WSL for a custom --session path', () => {
-    const atCustom = untrustedSessionNote(false, 'powershell', 'C:\\creds\\foo.json', false, 'C:\\creds');
+    const atCustom = untrustedSessionNote(false, 'powershell', 'C:\\creds\\foo.json', false, 'C:\\creds', true);
     expect(atCustom).toContain('.playwright-profile');
     expect(atCustom).toContain("isn't relocated by --session");
   });
 
   it('requires locking the parent directory for a custom --session path, not a recurring per-file fix', () => {
-    const atCustom = untrustedSessionNote(false, 'powershell', 'C:\\creds\\foo.json', false, 'C:\\creds');
+    const atCustom = untrustedSessionNote(false, 'powershell', 'C:\\creds\\foo.json', false, 'C:\\creds', true);
     expect(atCustom).toContain("icacls 'C:\\creds' /inheritance:r /grant:r");
     expect(atCustom).toContain('(OI)(CI)F');
     expect(atCustom).not.toContain('re-run that command after every login');
@@ -173,45 +208,60 @@ describe('untrustedSessionNote', () => {
   });
 
   it('still tells the default .session path to re-run the per-file fix after every login', () => {
-    const atDefault = untrustedSessionNote(false, 'powershell', 'C:\\repo\\.session\\session.json', true, 'C:\\repo\\.session');
+    const atDefault = untrustedSessionNote(
+      false,
+      'powershell',
+      'C:\\repo\\.session\\session.json',
+      true,
+      'C:\\repo\\.session',
+      true,
+    );
     expect(atDefault).toContain('re-run that command after every login');
   });
 
-  it('requires the custom --session parent to be a dedicated directory before locking it', () => {
-    const atCustom = untrustedSessionNote(false, 'powershell', 'C:\\shared\\foo.json', false, 'C:\\shared');
+  it('locks the directory that already holds the file when it is dedicated to it', () => {
+    const atCustom = untrustedSessionNote(false, 'powershell', 'C:\\shared\\foo.json', false, 'C:\\shared', true);
     expect(atCustom).not.toContain('safe even if it holds other files');
     expect(atCustom).toContain("strips every other account's access");
     // Without /T the directory-level fix never reaches files already inside it — only the
     // directory itself and what's created afterward — so it must not claim otherwise.
     expect(atCustom).not.toContain('anything already in it');
-    expect(atCustom).toContain('dedicated directory of your own choosing');
-  });
-
-  it('creates the directory before locking it, in case it does not exist yet', () => {
-    const atCustom = untrustedSessionNote(false, 'powershell', 'C:\\shared\\foo.json', false, 'C:\\shared');
+    expect(atCustom).not.toContain('dedicated directory of your own choosing');
     expect(atCustom).toContain("mkdir -Force 'C:\\shared'");
-  });
-
-  it('locks the directory that already holds the file, not a fabricated new one', () => {
-    const atCustom = untrustedSessionNote(false, 'powershell', 'C:\\shared\\foo.json', false, 'C:\\shared');
-    // dirIcaclsPath is always the file's own parent directory — there is nothing to "move"
-    // into it, so the note must not claim it is proposing a different, new location.
-    expect(atCustom).not.toContain('move this file into it');
     expect(atCustom).toContain("icacls 'C:\\shared' /inheritance:r /grant:r");
   });
 
+  it('requires the custom --session parent to be a dedicated directory before locking it', () => {
+    const atCustom = untrustedSessionNote(false, 'powershell', 'C:\\shared\\foo.json', false, 'C:\\shared', false);
+    expect(atCustom).not.toContain('safe even if it holds other files');
+    expect(atCustom).toContain("strips every other account's access");
+    expect(atCustom).not.toContain('anything already in it');
+    expect(atCustom).toContain('dedicated directory of your own choosing');
+  });
+
   it('tells the user to relocate to a directory of their own choosing when this one is not dedicated', () => {
-    const atCustom = untrustedSessionNote(false, 'powershell', 'C:\\shared\\foo.json', false, 'C:\\shared');
+    const atCustom = untrustedSessionNote(false, 'powershell', 'C:\\shared\\foo.json', false, 'C:\\shared', false);
     expect(atCustom).toContain('dedicated directory of your own choosing and lock that new directory first');
     expect(atCustom).toContain('move this file into that new directory, point --session there, and run again');
+    // dirIcaclsPath is the file's *existing*, non-dedicated parent — it must never be
+    // printed as a literal command to lock, since that directory holds other files.
+    expect(atCustom).not.toContain("icacls 'C:\\shared' /inheritance:r /grant:r");
   });
 
   it('locks the new directory before moving the file into it, not after', () => {
-    const atCustom = untrustedSessionNote(false, 'powershell', 'C:\\shared\\foo.json', false, 'C:\\shared');
+    const atCustom = untrustedSessionNote(false, 'powershell', 'C:\\shared\\foo.json', false, 'C:\\shared', false);
     const lockFirstIndex = atCustom!.indexOf('lock that new directory first');
     const moveIndex = atCustom!.indexOf('move this file into that new directory');
     expect(lockFirstIndex).toBeGreaterThan(-1);
     expect(moveIndex).toBeGreaterThan(lockFirstIndex);
+  });
+
+  it('does not print a stale per-file fix for the old location once the file is meant to move', () => {
+    const atCustom = untrustedSessionNote(false, 'powershell', 'C:\\shared\\foo.json', false, 'C:\\shared', false);
+    // The file at C:\shared\foo.json stops existing once the reader moves it into the new,
+    // dedicated directory — a fix command targeting that old path would just fail to find it.
+    expect(atCustom).not.toContain("icacls 'C:\\shared\\foo.json'");
+    expect(atCustom).not.toContain('already wrote the file under the old ACL');
   });
 });
 

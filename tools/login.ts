@@ -242,8 +242,9 @@ export function untrustedSessionNote(
     `   mkdir -Force ${quote(dirIcaclsPath)}\n` +
     `   icacls ${quote(dirIcaclsPath)} /reset\n` +
     `   icacls ${quote(dirIcaclsPath)} /inheritance:r /grant:r "\${env:USERDOMAIN}\\\${env:USERNAME}:(OI)(CI)F"\n` +
-    '   This run already wrote the file under the old ACL, so fix that one file too,\n' +
-    '   once:\n' +
+    "   Windows can't confirm from here whether this file already picked up that ACL\n" +
+    '   or still carries whatever it inherited before the directory was locked, so lock\n' +
+    '   the file itself too, every time you see this:\n' +
     fileFix +
     profileNote
   );

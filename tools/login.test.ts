@@ -198,12 +198,13 @@ describe('untrustedSessionNote', () => {
     expect(atCustom).toContain("isn't relocated by --session");
   });
 
-  it('requires locking the parent directory for a custom --session path, not a recurring per-file fix', () => {
+  it('locks the parent directory for a custom --session path, and does not claim the file fix is a one-time thing', () => {
     const atCustom = untrustedSessionNote(false, 'powershell', 'C:\\creds\\foo.json', false, 'C:\\creds', true);
     expect(atCustom).toContain("icacls 'C:\\creds' /inheritance:r /grant:r");
     expect(atCustom).toContain('(OI)(CI)F');
-    expect(atCustom).not.toContain('re-run that command after every login');
-    // The file this run already wrote still needs its own one-time fix.
+    // Windows mode bits can never confirm the directory-level fix from a prior run already
+    // took effect, so the note must not assert this run's write is still under the old ACL.
+    expect(atCustom).not.toContain('already wrote the file under the old ACL');
     expect(atCustom).toContain("icacls 'C:\\creds\\foo.json' /reset");
   });
 

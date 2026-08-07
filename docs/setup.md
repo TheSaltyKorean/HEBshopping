@@ -95,20 +95,25 @@ entirely offline, so if they pass, your install is good.
 > Already ran `npm run login` before reading this? Those directories exist already and may
 > hold a session written under the old, wider ACL. Run the four `icacls` commands above
 > (skip `mkdir` — the directories already exist), then also re-ACL what's already inside
-> them — this is the only case that needs it:
+> them, then restore the directory's own grant — this is the only case that needs it:
 >
 > ```powershell
 > icacls .session /T /reset
 > icacls .session /T /inheritance:r /grant:r "${env:USERDOMAIN}\${env:USERNAME}:F"
+> icacls .session /inheritance:r /grant:r "${env:USERDOMAIN}\${env:USERNAME}:(OI)(CI)F"
 > icacls .playwright-profile /T /reset
 > icacls .playwright-profile /T /inheritance:r /grant:r "${env:USERDOMAIN}\${env:USERNAME}:F"
+> icacls .playwright-profile /inheritance:r /grant:r "${env:USERDOMAIN}\${env:USERNAME}:(OI)(CI)F"
 > ```
 >
 > Do this in separate calls per directory, not one `/T` with `(OI)(CI)`: those inherit flags
 > are directory-only semantics, and applying them to an existing file via `/T` silently
 > produces an empty, protected ACL — locking you out of the very file you're trying to
 > protect. The `/T /reset` call is what strips a stray explicit ACE from files that already
-> exist under the directory, same reason as above.
+> exist under the directory, same reason as above. `/T` reaches the directory itself too, so
+> that plain-`F` grant overwrites the directory's `(OI)(CI)F` grant from the first block —
+> the final command per directory restores it, so the *next* login's temp-file-then-rename
+> write still inherits a safe ACL instead of the process's default one.
 >
 > The same applies to `captures/` if you ever run `npm run capture`, which writes raw cookie
 > jars and request bodies.

@@ -164,11 +164,19 @@ function describeAddResult(result: AddResult, requested: { quantity?: number; we
   // was written at its last rung, not the pounds actually requested. A packaged product has
   // no ladder at all — `item.weight` stays undefined and the requested pounds were dropped
   // entirely in favor of one package.
+  //
+  // But a packaged product already at its *quantity* ceiling never reaches the add mutation
+  // at all — `HebListOps` returns early with both `quantityRequested` and `weightRequested`
+  // set on the unchanged item, so nothing was added. `cappedNotice` already says so; a
+  // non-empty `cappedNotice` here means the ceiling blocked this outright, not that a
+  // package went out in place of the pounds requested.
   const weightCappedNotice =
     (result.status === 'added' || result.status === 'already_present') && result.weightRequested !== undefined
       ? result.item.weight === undefined
-        ? ` (this item is sold by the package, not the pound — added one package instead of ` +
-          `the requested ${result.weightRequested} lb)`
+        ? cappedNotice !== ''
+          ? ''
+          : ` (this item is sold by the package, not the pound — added one package instead of ` +
+            `the requested ${result.weightRequested} lb)`
         : result.weightRequested > result.item.weight
           ? ` (HEB only sells this item up to ${result.item.weight} lb — could not bring it up to ` +
             `the requested total of ${result.weightRequested} lb)`

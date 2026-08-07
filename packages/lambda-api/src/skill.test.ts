@@ -185,6 +185,26 @@ describe('adding — the confident path', () => {
     expect(turn.speech).toContain('sold by the pound');
     expect(turn.speech).not.toContain('only allows');
   });
+
+  it('does not claim a package was added when a packaged item is already at its ceiling', async () => {
+    // `HebListOps` returns this early, before ever issuing the add mutation — the ceiling
+    // blocked it outright, so nothing was written. The "sold by the package ... added one
+    // instead" wording is for a real add that skipped the pounds in favor of a package; it
+    // must not fire alongside "only allows N", which says nothing was added at all.
+    const existing = line('l1', '1', 'Sliced Turkey Lunch Meat, 16 oz', 20);
+    const ops = fakeOps({
+      addItem: vi.fn(async () => ({
+        status: 'already_present' as const,
+        item: { ...existing, maximumQuantity: 20 },
+        quantityRequested: 21,
+        weightRequested: 2,
+      })),
+    });
+    const turn = await conversation(ops)(intent('AddItemIntent', { item: 'two pounds of sliced turkey lunch meat' }));
+
+    expect(turn.speech).toContain('only allows');
+    expect(turn.speech).not.toContain('added one instead');
+  });
 });
 
 describe('adding — the confirmation dialog', () => {

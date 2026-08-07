@@ -320,16 +320,23 @@ export function untrustedProfileNote(
   return intro + ' — see the Windows note above Step 5 in\n   docs/setup.md to check and, if needed, restrict it.';
 }
 
+/**
+ * Empties `dir` without removing the directory itself. Used for `--switch`: removing
+ * the directory would drop a Windows ACL locked onto it per the setup docs, and Playwright
+ * would recreate it fresh under the parent's (often broader) inherited ACL. Clearing its
+ * contents instead keeps that lock in place across a switch.
+ */
+export async function clearDirectoryContents(dir: string): Promise<void> {
+  const entries = await readdir(dir).catch(() => []);
+  await Promise.all(entries.map((entry) => rm(join(dir, entry), { recursive: true, force: true })));
+}
+
 async function main(): Promise<void> {
   const options = parseArgs(process.argv.slice(2));
 
   if (options.switchAccount) {
     console.log(`Forgetting the current account (clearing ${PROFILE_DIR}) …`);
-    // Removing the directory itself would drop a Windows ACL locked onto it per the setup
-    // docs, and Playwright would recreate it fresh under the parent's (often broader)
-    // inherited ACL. Clearing its contents instead keeps that lock in place across a switch.
-    const entries = await readdir(PROFILE_DIR).catch(() => []);
-    await Promise.all(entries.map((entry) => rm(join(PROFILE_DIR, entry), { recursive: true, force: true })));
+    await clearDirectoryContents(PROFILE_DIR);
   }
 
   const store = new FileStore(options.sessionPath);

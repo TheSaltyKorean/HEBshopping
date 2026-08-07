@@ -1,11 +1,13 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { mkdir, mkdtemp, readdir, rm, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 
 const execFileSyncMock = vi.hoisted(() => vi.fn());
 vi.mock('node:child_process', () => ({ execFileSync: execFileSyncMock }));
 
-const { isSessionTrusted, untrustedProfileNote, untrustedSessionNote, windowsPathFor } = await import(
-  './login.js'
-);
+const { clearDirectoryContents, isSessionTrusted, untrustedProfileNote, untrustedSessionNote, windowsPathFor } =
+  await import('./login.js');
 
 const originalPlatform = process.platform;
 
@@ -175,6 +177,28 @@ describe('untrustedSessionNote', () => {
     const moveIndex = atCustom!.indexOf('move this file into it and point --session there');
     expect(lockIndex).toBeGreaterThan(-1);
     expect(moveIndex).toBeGreaterThan(lockIndex);
+  });
+});
+
+describe('clearDirectoryContents', () => {
+  it('removes every entry but keeps the directory itself (and its ACL) in place', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'heb-profile-'));
+    try {
+      await writeFile(join(dir, 'Cookies'), 'data');
+      await mkdir(join(dir, 'Default'));
+      await writeFile(join(dir, 'Default', 'Preferences'), '{}');
+
+      await clearDirectoryContents(dir);
+
+      await expect(readdir(dir)).resolves.toEqual([]);
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('does nothing when the directory does not exist yet', async () => {
+    const dir = join(tmpdir(), 'heb-profile-missing-does-not-exist');
+    await expect(clearDirectoryContents(dir)).resolves.toBeUndefined();
   });
 });
 

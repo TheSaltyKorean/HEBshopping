@@ -377,9 +377,9 @@ async function sameFileCaseFolded(dir: string, entry: string, allowed: Set<strin
 }
 
 /**
- * The remediation note for PROFILE_DIR when a trusted --session path doesn't also vouch for
- * it — pulled out as a pure function, like `untrustedSessionNote`, so this boolean-composed
- * gate on a security-relevant message is unit-tested rather than only reasoned about by hand.
+ * The remediation note for PROFILE_DIR, printed before login starts — pulled out as a pure
+ * function, like `untrustedSessionNote`, so this boolean-composed gate on a security-relevant
+ * message is unit-tested rather than only reasoned about by hand.
  *
  * `profileAlreadySafe` is PROFILE_DIR's own home-directory exemption (`isUnderOwnHomeDirectory`)
  * — independent of whatever the `--session` file's directory computed, since PROFILE_DIR always
@@ -395,9 +395,8 @@ export function untrustedProfileNote(
 ): string | null {
   if (profileAlreadySafe) return null;
   if (profileOwnerOnly !== null && isSessionTrusted(profileOwnerOnly, profileShell)) return null;
-  const intro =
-    `\n   ${PROFILE_DIR} is a separate live credential (the logged-in browser profile)\n` +
-    "   and wasn't covered by the check above";
+  // Stands on its own — no back-reference to the session check, which now prints after this.
+  const intro = `\n⚠ ${PROFILE_DIR} is a separate live credential (the logged-in browser profile)`;
   // A permissionless mount (CIFS, FAT, ...) with no Windows/WSL shell to run icacls from
   // isn't fixed by the Windows note this otherwise points to — same case `untrustedSessionNote`
   // handles for the session file itself. When the mode couldn't even be verified there either,
@@ -406,8 +405,8 @@ export function untrustedProfileNote(
     if (profileOwnerOnly !== false) return null;
     return (
       intro +
-      " — this filesystem didn't enforce the owner-only\n" +
-      "   permission either, and it isn't a Windows filesystem `icacls` can secure. Move\n" +
+      " and this filesystem didn't enforce the\n" +
+      "   owner-only permission, and it isn't a Windows filesystem `icacls` can secure. Move\n" +
       '   the repository, or just that profile, to a permission-capable filesystem, or\n' +
       "   restrict that mount's ACLs directly; there is no command this tool can print here."
     );
@@ -534,6 +533,25 @@ async function main(): Promise<void> {
   }
 
   const store = new FileStore(options.sessionPath);
+
+  // PROFILE_DIR is a second live credential (the logged-in browser profile) that always lives
+  // in the repo and can sit on a different, less-trusted mount than the --session path, so it
+  // needs its own home-directory exemption check rather than inheriting the session file's
+  // verdict. Checked before launching, for the same reason `ensureCustomSessionParentReady`
+  // preflights the session directory: `launchBrowser` creates the profile and the interactive
+  // login writes a live credential into it, so a warning that waited for the session check ran
+  // only once that credential had been sitting under the inherited ACL for up to ten minutes.
+  // Resolved through realDir first, for the same reason `warnIfUntrustedDir` does it: a junction
+  // lexically under the home profile but redirecting elsewhere would otherwise be granted the
+  // exemption and silence this warning, while capture.ts/drive.ts still warn about that same
+  // directory.
+  const profileOwnerOnly = await checkOwnerOnly(PROFILE_DIR);
+  const { path: profileIcaclsPath, shell: profileShell } = windowsPathFor(await realDir(PROFILE_DIR));
+  const profileHome = profileShell === null ? null : homeDirFor(profileShell);
+  const profileAlreadySafe = sessionAlreadySafe(profileShell, profileIcaclsPath, profileHome);
+  const profileNote = untrustedProfileNote(profileOwnerOnly, profileShell, profileAlreadySafe);
+  if (profileNote !== null) console.log(profileNote);
+
   const context = await launchBrowser();
   const page = context.pages()[0] ?? (await context.newPage());
   await page.goto(START_URL, { waitUntil: 'domcontentloaded' });
@@ -637,20 +655,6 @@ async function main(): Promise<void> {
     const note = untrustedSessionNote(ownerOnly, shell, icaclsPath, isDefaultSessionPath, dirIcaclsPath, dedicated);
     if (note !== null) console.log(note);
   }
-  // PROFILE_DIR is a second live credential (the logged-in browser profile) that always lives
-  // in the repo and can sit on a different, less-trusted mount than the --session path, so it
-  // needs its own home-directory exemption check regardless of whether the session file's own
-  // check above passed or failed — it must not silently inherit that verdict either way.
-  // Resolved through realDir first, for the same reason `warnIfUntrustedDir` does it: a junction
-  // lexically under the home profile but redirecting elsewhere would otherwise be granted the
-  // exemption and silence this warning, while capture.ts/drive.ts still warn about that same
-  // directory.
-  const profileOwnerOnly = await checkOwnerOnly(PROFILE_DIR);
-  const { path: profileIcaclsPath, shell: profileShell } = windowsPathFor(await realDir(PROFILE_DIR));
-  const profileHome = profileShell === null ? null : homeDirFor(profileShell);
-  const profileAlreadySafe = sessionAlreadySafe(profileShell, profileIcaclsPath, profileHome);
-  const profileNote = untrustedProfileNote(profileOwnerOnly, profileShell, profileAlreadySafe);
-  if (profileNote !== null) console.log(profileNote);
   describe(session);
 
   // Writing a session that cannot actually authenticate would be a silent failure that

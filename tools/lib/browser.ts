@@ -361,7 +361,7 @@ export async function saveCapture(
   // Locked and checked before the first write, not after: `storage-state.json` below is a live
   // cookie jar, and `ensureOwnerOnlyDir`'s chmod can't touch a Windows DACL — so a caller whose
   // `captures/` inherited a broad ACL has to hear about it while the credential still isn't
-  // there. Same order `capture.ts`'s `flush()` uses for the same reason.
+  // there. Same order `capture.ts`'s `main()` uses for the same reason.
   await ensureOwnerOnlyDir(CAPTURE_DIR);
   await warnIfUntrustedDir(CAPTURE_DIR);
 

@@ -406,7 +406,9 @@ describe('untrustedProfileNote', () => {
   it('warns when the profile mode could not be verified', () => {
     const note = untrustedProfileNote(null, 'powershell', false);
     expect(note).toContain('.playwright-profile');
-    expect(note).toContain("wasn't covered by the check above");
+    expect(note).toContain('the Windows note above Step 5');
+    // Printed before login starts, ahead of the session check, so it must not claim a prior one.
+    expect(note).not.toContain('the check above');
   });
 
   it('warns when the profile mode was never restricted', () => {

@@ -189,7 +189,6 @@ async function flush(context: BrowserContext): Promise<void> {
   }
 
   await ensureOwnerOnlyDir(CAPTURE_DIR);
-  await warnIfUntrustedDir(CAPTURE_DIR);
 
   await writeSecret(resolve(CAPTURE_DIR, 'operations.json'),
     JSON.stringify(Object.fromEntries(operations), null, 2));
@@ -222,6 +221,13 @@ async function flush(context: BrowserContext): Promise<void> {
 async function main(): Promise<void> {
   const context = await launchBrowser();
   await warnIfUntrustedDir(PROFILE_DIR);
+
+  // Locked and checked here, not in `flush()`: the 15-second autosave below is the first thing
+  // that writes into `captures/`, and `ensureOwnerOnlyDir`'s chmod can't touch a Windows DACL —
+  // so a caller whose `captures/` inherited a broad ACL has to hear about it while the raw
+  // request bodies still aren't there, not at shutdown. Warning inside the tick would spam.
+  await ensureOwnerOnlyDir(CAPTURE_DIR);
+  await warnIfUntrustedDir(CAPTURE_DIR);
 
   await recordGraphqlTraffic(context);
 

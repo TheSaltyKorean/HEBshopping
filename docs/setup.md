@@ -462,8 +462,8 @@ Point `HEB_SESSION_PATH` at the same path in your MCP client config.
 
 | Path | Contents | In git? |
 |---|---|---|
-| `.session/session.json` | your live session cookies | **never** — gitignored, mode 0600 |
-| `.playwright-profile/` | the logged-in browser profile | **never** — gitignored |
+| `.session/session.json` | your live session cookies | **never** — gitignored, mode 0600 (on Windows that mode does nothing — see the note above Step 5) |
+| `.playwright-profile/` | the logged-in browser profile | **never** — gitignored; same Windows caveat as above |
 | `captures/` | raw discovery output; only created by `npm run capture` | **never** — gitignored |
 
 Run `npm run scan` any time to check nothing sensitive has crept into a committable file.

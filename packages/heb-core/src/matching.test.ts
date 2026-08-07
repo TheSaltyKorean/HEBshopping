@@ -196,6 +196,9 @@ describe('parseSpokenRequest', () => {
       ['three packs of gum', 3, 'packs gum'],
       ['two cases of water', 2, 'cases water'],
       ['two rolls of paper towels', 2, 'rolls paper towels'],
+      // "pieces" behaves like "packs"/"cases"/"rolls": plural, and "of" is what marks it as
+      // a genuine count rather than the size of an 8-piece bucket.
+      ['two pieces of chicken', 2, 'pieces chicken'],
     ])('%s → quantity %i, query "%s"', (input, quantity, query) => {
       expect(parseSpokenRequest(input)).toEqual({ quantity, query });
     });
@@ -213,6 +216,9 @@ describe('parseSpokenRequest', () => {
       // singular "pack" here still names one six-pack, the same as "six pack soda" above —
       // "of" alone does not flip it, or a live add performs six additions for one package.
       ['six pack of soda', 1, 'six pack soda'],
+      // "8-piece fried chicken" (tokenized "8 piece fried chicken") names one package of
+      // eight pieces, not eight separate additions — the same trap as "six pack soda".
+      ['8 piece fried chicken', 1, '8 piece fried chicken'],
     ])('%s → quantity %i, query "%s"', (input, quantity, query) => {
       expect(parseSpokenRequest(input)).toEqual({ quantity, query });
     });
@@ -309,6 +315,20 @@ describe('parseSpokenRequest', () => {
       expect(parsed.quantity).toBe(1);
       expect(parsed.quantityRefused).toBe(1.75);
       expect(parsed.query).toBe('one three quarters bananas');
+    });
+
+    // Without "and", a fraction word right after the count names the size of *each* item
+    // ("two half-gallon milks" is two half-gallon cartons), not an amount added to the
+    // count. The fraction-folding check above used to fold it into `numeric` regardless,
+    // turning this into a count of 2.5 and reading "gallon" as the measure word — which
+    // returned the default quantity of 1 instead of 2.
+    it.each([
+      ['two half-gallon milks', 2, 'half gallon milks'],
+      ['three quarter-pound burger patties', 3, 'quarter pound burger patties'],
+    ])('keeps the count before a fractional package size (%s)', (input, quantity, query) => {
+      const parsed = parseSpokenRequest(input);
+      expect(parsed.quantity).toBe(quantity);
+      expect(parsed.query).toBe(query);
     });
 
     it('refuses a bare leading spelled fraction ("half of a banana")', () => {
@@ -420,6 +440,16 @@ describe('parseSpokenRequest', () => {
       // dropped the weight entirely.
       const parsed = parseSpokenRequest('one pound and two ounces of turkey');
       expect(parsed.weight).toBeCloseTo(1.125, 5);
+      expect(parsed.query).toBe('turkey');
+    });
+
+    it('reads a compound secondary weight with its own compound number ("one kilogram and five hundred grams")', () => {
+      // The secondary-amount reader assumed the token right after "and" was the unit, so a
+      // multi-token secondary number like "five hundred" left "hundred" unmatched as the
+      // unit and the whole phrase fell through to a count-and-query parse that dropped the
+      // weight entirely.
+      const parsed = parseSpokenRequest('one kilogram and five hundred grams of turkey');
+      expect(parsed.weight).toBeCloseTo(3.306934, 5);
       expect(parsed.query).toBe('turkey');
     });
 

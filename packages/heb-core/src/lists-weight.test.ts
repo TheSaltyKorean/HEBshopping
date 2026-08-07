@@ -313,6 +313,30 @@ describe('weight on a counter line', () => {
     expect(result.status === 'added' && result.weightRequested).toBe(0.5);
   });
 
+  it('reports its own contribution, not the merged total, when a concurrent merge is already at the ladder cap', async () => {
+    // Same concurrent-create merge as above, but the household member's line is already at
+    // the top of the ladder (2.5 lb) when this request's 0.5 lb add merges in. None of this
+    // request's weight can land — the target stays 2.5 — so `weightRequested` must still
+    // name this request's own 0.5 lb ask, not the merged total of 3, or the caller would
+    // report this request as having asked for 3 lb when it never did.
+    const { ops, lines } = scripted([]);
+    const client = (ops as unknown as { client: { execute: (d: unknown) => Promise<unknown> } })
+      .client;
+    const real = client.execute.bind(client);
+    client.execute = async (document: unknown) => {
+      if ((document as { operationName: string }).operationName === 'HebAddShoppingListItems') {
+        lines.push({ id: 'line-0', quantity: 1, weight: 2.5, productId: 'p-turkey' });
+      }
+      return real(document);
+    };
+
+    const result = await ops.addItem({ productId: 'p-turkey', weight: 0.5 });
+
+    expect(result.status).toBe('added');
+    expect(result.status === 'added' && result.item.weight).toBe(2.5);
+    expect(result.status === 'added' && result.weightRequested).toBe(0.5);
+  });
+
   it('preserves a definitive refusal instead of reconciling it into a generic error', async () => {
     // A rejected union member means HEB explicitly refused the weight update, not that the
     // response was lost. Reconciling would re-read the (unchanged) line and repackage this
@@ -819,6 +843,21 @@ describe('an add never lowers a concurrently raised line', () => {
 
     expect(result.status).toBe('already_present');
     expect(sent.filter((q) => q.includes('addShoppingListItemsV2'))).toHaveLength(0);
+  });
+
+  it('still reports the packaged-weight guidance when the ceiling blocks the add first', async () => {
+    // "Two pounds of milk" resolving to a packaged product that is also already at its
+    // quantity ceiling used to return from the ceiling check before `input.weight` was ever
+    // looked at, so the caller only heard about the blocked quantity and never learned the
+    // pounds it asked for do not apply to a packaged product at all.
+    const { ops } = scripted([
+      { id: 'line-0', quantity: 20, productId: 'p-milk', maximumQuantity: 20 },
+    ]);
+
+    const result = await ops.addItem({ productId: 'p-milk', weight: 2 });
+
+    expect(result.status).toBe('already_present');
+    expect(result.status === 'already_present' && result.weightRequested).toBe(2);
   });
 });
 

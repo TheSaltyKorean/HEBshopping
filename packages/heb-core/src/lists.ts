@@ -557,7 +557,18 @@ export class HebListOps implements ListOps {
       // reads identically to a request that never asked for more, so both surfaces would
       // confirm the unchanged line as if it were the full ask instead of flagging the
       // shortfall, the same gap `addRemainingUnits` closes for a partially fulfilled add.
-      return { status: 'already_present', item: existing, quantityRequested: existing.quantity + quantity };
+      //
+      // `input.weight` is carried the same way the caller at the bottom of this method
+      // carries it past a packaged-product add: a weight request against a packaged good
+      // that is also at its quantity ceiling would otherwise return here first and lose the
+      // "sold by the package, not the pound" guidance entirely, reporting only a blocked
+      // quantity increment as if pounds were never asked for.
+      return {
+        status: 'already_present',
+        item: existing,
+        quantityRequested: existing.quantity + quantity,
+        ...(input.weight === undefined ? {} : { weightRequested: input.weight }),
+      };
     }
 
     // ── The add itself ───────────────────────────────────────────────────────────────
@@ -691,12 +702,17 @@ export class HebListOps implements ListOps {
       // request's, not this request's contribution alone. Surface what this request itself
       // asked for so the caller can report the contribution and the merged total separately,
       // instead of crediting the whole merged weight to this request.
-      const shortfall =
-        increments !== undefined && increments.length > 0 && requested > increments[increments.length - 1]!
+      //
+      // Checked *before* the ladder-shortfall case, not after: when the ladder is also
+      // capped, `requested` is the merged total (their weight plus this request's), not
+      // anything this request itself asked for, and reporting it as `weightRequested` would
+      // have Alexa/MCP claim this request asked for the merged total rather than its own
+      // share.
+      const shortfall = merged
+        ? { weightRequested: input.weight }
+        : increments !== undefined && increments.length > 0 && requested > increments[increments.length - 1]!
           ? { weightRequested: requested }
-          : merged
-            ? { weightRequested: input.weight }
-            : {};
+          : {};
       return {
         status,
         item: await this.adjustWeight(listId, added, target, !wasPresent && !merged),

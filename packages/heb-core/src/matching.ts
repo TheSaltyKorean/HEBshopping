@@ -133,6 +133,10 @@ const MEASURE_WORDS = new Set([
   // is one carton — the number belongs to the product name, exactly as in "two percent
   // milk". Getting these wrong multiplies a whole shop.
   'pack', 'packs', 'pk', 'count', 'ct', 'case', 'cases', 'dozen', 'roll', 'rolls',
+  // "8-piece fried chicken" names one package of eight pieces, the same trap as "six pack
+  // soda" — but unlike "count"/"ct", "piece" also has a genuine plural count reading
+  // ("two pieces of chicken"), so it is in `PLURAL_PACKAGE_WORDS` too.
+  'piece', 'pieces',
   // Abbreviated metric and volume units. Alexa transcribes "2 L soda" and "500 ml water"
   // exactly like that, and without these the size becomes the quantity — two litres of
   // soda turns into two of whatever "soda" matched.
@@ -204,7 +208,7 @@ const COMPOSITION_WORDS = new Set(['cheese', 'layer', 'bean', 'meat', 'wick', 'b
  * gum"), while "three packs of gum" is genuinely three. `pk` has no distinct plural
  * spelling, so it stays singular-only and never multiplies via "of".
  */
-const PLURAL_PACKAGE_WORDS = new Set(['packs', 'cases', 'rolls']);
+const PLURAL_PACKAGE_WORDS = new Set(['packs', 'cases', 'rolls', 'pieces']);
 
 const NUMBER_LED_BRANDS: ReadonlyArray<readonly string[]> = [
   ['two', 'good'],
@@ -583,12 +587,44 @@ function parseWeightPhrase(raw: readonly string[]): { pounds: number; rest: stri
     if (raw[cursor] !== 'and') return;
     cursor += 1;
     while (cursor < raw.length && ARTICLES.has(raw[cursor]!)) cursor += 1;
-    const secondaryNumeric =
+    let secondaryNumeric =
       NUMBER_WORDS[raw[cursor] ?? ''] ??
       (/^\d+(?:\.\d+)?$/.test(raw[cursor] ?? '') ? Number(raw[cursor]) : undefined) ??
       readFractionToken(raw[cursor] ?? '');
     if (secondaryNumeric === undefined) return;
-    const secondaryUnit = raw[cursor + 1];
+    cursor += 1;
+
+    // "one kilogram and five hundred grams of turkey" — the secondary amount can be a
+    // compound number too, the same "hundred" (plus an optional "and" and a trailing
+    // tens/ones word) that the primary amount reads above. Without this, "hundred" is left
+    // where the unit is expected, the unit lookup below fails, and the whole compound falls
+    // through to a count-and-query parse that adds the counter product at its default
+    // weight instead of the requested total.
+    if (secondaryNumeric >= 1 && raw[cursor] === 'hundred') {
+      secondaryNumeric *= 100;
+      cursor += 1;
+      let tensCursor = cursor;
+      if (raw[tensCursor] === 'and') tensCursor += 1;
+      const tens = NUMBER_WORDS[raw[tensCursor] ?? ''];
+      if (tens !== undefined && tens >= 20 && tens % 10 === 0) {
+        secondaryNumeric += tens;
+        tensCursor += 1;
+        const ones = ONES_WORDS[raw[tensCursor] ?? ''];
+        if (ones !== undefined) {
+          secondaryNumeric += ones;
+          tensCursor += 1;
+        }
+        cursor = tensCursor;
+      } else {
+        const ones = ONES_WORDS[raw[tensCursor] ?? ''];
+        if (ones !== undefined) {
+          secondaryNumeric += ones;
+          cursor = tensCursor + 1;
+        }
+      }
+    }
+
+    const secondaryUnit = raw[cursor];
     const secondaryPoundsPerUnit =
       secondaryUnit === undefined
         ? undefined
@@ -597,7 +633,7 @@ function parseWeightPhrase(raw: readonly string[]): { pounds: number; rest: stri
           : SUB_POUND_UNITS[secondaryUnit];
     if (secondaryPoundsPerUnit === undefined) return;
     pounds += secondaryNumeric * secondaryPoundsPerUnit;
-    index = cursor + 2;
+    index = cursor + 1;
   };
   readAndSecondaryUnit();
 
@@ -826,7 +862,29 @@ export function parseSpokenRequest(text: string): SpokenRequest {
   const fractionLeadingOnes = ONES_WORDS[tokens[consumed] ?? ''];
   const fractionCursor = fractionLeadingOnes !== undefined ? consumed + 1 : consumed;
   const fraction = tokens[fractionCursor] !== undefined ? readFractionToken(tokens[fractionCursor]!) : undefined;
-  if (numeric !== undefined && numeric >= 1 && fraction !== undefined) {
+
+  // "two half-gallon milks" / "three quarter-pound burger patties" — a fraction word
+  // directly after the count, with no "and" separating them, names the size of each
+  // product, not an amount to add to the count. "and" is filler and already gone from
+  // `tokens` by the time this runs, so `raw` is walked here to confirm "and" actually
+  // separated the count from the fraction — the same distinction `readAndAHalf` draws for
+  // weights. Without this check, "two half-gallon milks" folds to a count of 2.5, leaves
+  // "gallon milks" for the measure-word parser below, and resolves to a live one-item add
+  // instead of matching two half-gallon cartons.
+  const rawIndexOfMeaningful = (n: number): number => {
+    let seen = 0;
+    for (const [index, token] of raw.entries()) {
+      if (FILLER.has(token)) continue;
+      if (seen === n) return index;
+      seen += 1;
+    }
+    return raw.length;
+  };
+  const hasAndBeforeFraction = raw
+    .slice(rawIndexOfMeaningful(consumed - 1) + 1, rawIndexOfMeaningful(fractionCursor))
+    .includes('and');
+
+  if (numeric !== undefined && numeric >= 1 && fraction !== undefined && hasAndBeforeFraction) {
     numeric += fraction * (fractionLeadingOnes ?? 1);
     consumed = fractionCursor + 1;
   }

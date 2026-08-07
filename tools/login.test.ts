@@ -40,9 +40,9 @@ describe('windowsPathFor', () => {
 
   it('treats a wslpath translation onto its own WSL-native filesystem as not Windows-backed', () => {
     setPlatform('linux');
-    execFileSyncMock.mockReturnValue('\\\\wsl.localhost\\Ubuntu\\home\\user\\repo\\.session\\session.json\r\n');
-    expect(windowsPathFor('/home/user/repo/.session/session.json')).toEqual({
-      path: '/home/user/repo/.session/session.json',
+    execFileSyncMock.mockReturnValue('\\\\wsl.localhost\\Ubuntu\\path\\to\\HEBshopping\\.session\\session.json\r\n');
+    expect(windowsPathFor('/path/to/HEBshopping/.session/session.json')).toEqual({
+      path: '/path/to/HEBshopping/.session/session.json',
       shell: null,
     });
   });
@@ -52,16 +52,16 @@ describe('windowsPathFor', () => {
     execFileSyncMock.mockImplementation(() => {
       throw new Error('wslpath: command not found');
     });
-    expect(windowsPathFor('/home/user/repo/.session/session.json')).toEqual({
-      path: '/home/user/repo/.session/session.json',
+    expect(windowsPathFor('/path/to/HEBshopping/.session/session.json')).toEqual({
+      path: '/path/to/HEBshopping/.session/session.json',
       shell: null,
     });
   });
 
   it('leaves other platforms (e.g. macOS) unable to run icacls', () => {
     setPlatform('darwin');
-    expect(windowsPathFor('/Users/me/repo/.session/session.json')).toEqual({
-      path: '/Users/me/repo/.session/session.json',
+    expect(windowsPathFor('/path/to/HEBshopping/.session/session.json')).toEqual({
+      path: '/path/to/HEBshopping/.session/session.json',
       shell: null,
     });
     expect(execFileSyncMock).not.toHaveBeenCalled();

@@ -245,6 +245,10 @@ describe('untrustedSessionNote', () => {
     expect(atCustom).toContain("strips every other account's access");
     expect(atCustom).not.toContain('anything already in it');
     expect(atCustom).toContain('dedicated directory of your own choosing');
+    // `dedicated: false` also covers an unreadable directory (e.g. EACCES), not just one
+    // that genuinely holds other files — the message must not assert the wrong one as fact.
+    expect(atCustom).not.toContain('This directory holds other files');
+    expect(atCustom).toContain("isn't confirmed to be dedicated to this file");
   });
 
   it('tells the user to relocate to a directory of their own choosing when this one is not dedicated', () => {

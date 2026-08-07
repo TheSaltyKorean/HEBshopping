@@ -240,7 +240,9 @@ export function untrustedSessionNote(
   if (!dedicated) {
     return (
       cautionary +
-      "   This directory holds other files, so don't lock it: create a new, empty,\n" +
+      "   This directory isn't confirmed to be dedicated to this file — it may hold\n" +
+      "   other files, or its contents couldn't be listed — so don't lock it: create a\n" +
+      "   new, empty,\n" +
       "   dedicated directory of your own choosing and lock that new directory first —\n" +
       '   the same mkdir + icacls /reset + icacls /inheritance:r /grant:r pattern this\n' +
       "   tool uses to lock a dedicated directory, just against its own path — then\n" +
@@ -449,8 +451,10 @@ async function ensureCustomSessionParentReady(sessionPath: string): Promise<void
   const dedicated = await isDedicatedDirectory(dir, basename(sessionPath));
   if (customSessionParentAction(shell, dedicated) === 'blocked') {
     console.error(
-      `\n⛔ ${dir} holds other files, so this tool won't write a live credential there —\n` +
-        "   locking it down would strip access that isn't this tool's to take away. Point\n" +
+      `\n⛔ ${dir} isn't confirmed to be dedicated to this file — it may hold other\n` +
+        "   files, or its contents couldn't be listed — so this tool won't write a live\n" +
+        "   credential there: locking a directory that turns out to be shared would strip\n" +
+        "   access that isn't this tool's to take away. Point\n" +
         '   --session at a new, empty directory of your own choosing, lock that directory\n' +
         '   first (see the Windows note above Step 5 in docs/setup.md for the mkdir + icacls\n' +
         '   commands), then run again.',

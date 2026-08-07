@@ -107,12 +107,15 @@ That last line is the proof: it made a real authenticated call and saw your real
 >
 > ```powershell
 > icacls .session /inheritance:r /grant:r "${env:USERNAME}:(OI)(CI)F"
-> icacls .session /T /grant:r "${env:USERNAME}:F"
+> icacls .session /T /inheritance:r /grant:r "${env:USERNAME}:F"
 > ```
 >
 > Both lines matter. The first sets up the directory so anything created in it *from now on*
 > inherits a user-only ACL. The second re-ACLs what's *already* there — the `session.json`
-> that `npm run login` already wrote — without which it would keep its old, wider-open ACL.
+> that `npm run login` already wrote. `/inheritance:r` on that second call is what actually
+> strips the stale inherited ACE (the `Users:(R)` grant from `C:\`'s default ACL); `/grant:r`
+> alone only replaces the explicit rights already granted to your own account and leaves
+> other trustees' inherited access untouched.
 > Do this in two calls, not one `/T` with `(OI)(CI)`: those inherit flags are directory-only
 > semantics, and applying them to an existing file via `/T` silently produces an empty,
 > protected ACL — locking you out of the very file you're trying to protect.

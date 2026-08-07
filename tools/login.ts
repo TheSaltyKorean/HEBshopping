@@ -20,7 +20,7 @@ import { execFileSync } from 'node:child_process';
 import { realpathSync } from 'node:fs';
 import { readdir, rm, stat } from 'node:fs/promises';
 import { homedir } from 'node:os';
-import { basename, dirname, join, resolve, sep } from 'node:path';
+import { basename, dirname, join, posix, resolve, sep, win32 } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
   FileStore,
@@ -452,15 +452,44 @@ export async function clearDirectoryContents(dir: string): Promise<void> {
  * `--session` directory there is safe to write into even when it holds other files this tool
  * doesn't own — `node:fs`'s `mode` can't tell us that on Windows (chmod there only toggles the
  * read-only attribute, so `stat().mode` never reflects the real ACL either way), but this can.
+ *
+ * `shell` — like `isDedicatedDirectory`'s — decides both the path style to parse `dir`/`home`
+ * with and whether the comparison is case-insensitive: `'powershell'`/`'wsl-powershell'` mean
+ * both strings are Windows-style (backslash-separated, possibly translated from a WSL path via
+ * `windowsPathFor`), so they must be parsed with `path.win32`, not the host's own `path.resolve`
+ * — under WSL that's POSIX and would mangle a `C:\...` string instead of recognizing it as
+ * absolute. `null` means both are plain POSIX paths on the host's own filesystem.
  */
-export function isUnderOwnHomeDirectory(dir: string, home: string): boolean {
-  const resolvedHome = resolve(home);
-  const resolvedDir = resolve(dir);
+export function isUnderOwnHomeDirectory(
+  dir: string,
+  home: string,
+  shell: ReturnType<typeof windowsPathFor>['shell'],
+): boolean {
+  const { resolve: resolvePath, sep: pathSep } = shell === null ? posix : win32;
+  const resolvedHome = resolvePath(home);
+  const resolvedDir = resolvePath(dir);
   const [target, base] =
-    process.platform === 'win32'
-      ? [resolvedDir.toLowerCase(), resolvedHome.toLowerCase()]
-      : [resolvedDir, resolvedHome];
-  return target === base || target.startsWith(base + sep);
+    shell === null ? [resolvedDir, resolvedHome] : [resolvedDir.toLowerCase(), resolvedHome.toLowerCase()];
+  return target === base || target.startsWith(base + pathSep);
+}
+
+/**
+ * The home directory to compare `isUnderOwnHomeDirectory` against, in whatever path style
+ * `shell` implies. Native Windows and native POSIX already have `os.homedir()` in the right
+ * style. WSL is the odd one out: `os.homedir()` there returns the *Linux* home directory
+ * (somewhere under /home), which lives on WSL's own filesystem and has nothing to do with the
+ * Windows user profile (`C:\Users\randy`) that docs/setup.md's "nothing to do" exemption is
+ * actually about — so ask Windows directly, via `cmd.exe`'s environment, the same way
+ * `windowsPathFor` asks it to translate a path. Returns null when that can't be determined, so
+ * the caller falls back to "not confirmed safe" instead of guessing.
+ */
+export function homeDirFor(shell: ReturnType<typeof windowsPathFor>['shell']): string | null {
+  if (shell !== 'wsl-powershell') return homedir();
+  try {
+    return execFileSync('cmd.exe', ['/c', 'echo %USERPROFILE%'], { encoding: 'utf8' }).trim();
+  } catch {
+    return null;
+  }
 }
 
 /**
@@ -503,7 +532,8 @@ async function ensureCustomSessionParentReady(sessionPath: string): Promise<void
   const { path: dirIcaclsPath, shell } = windowsPathFor(dir);
   if (shell === null) return;
 
-  const alreadySafe = isUnderOwnHomeDirectory(dir, homedir());
+  const home = homeDirFor(shell);
+  const alreadySafe = home !== null && isUnderOwnHomeDirectory(dirIcaclsPath, home, shell);
   const dedicated = await isDedicatedDirectory(dir, basename(sessionPath), shell);
   const action = customSessionParentAction(shell, dedicated, alreadySafe);
   if (action === 'skip') return;
@@ -629,7 +659,9 @@ async function main(): Promise<void> {
   // same exemption the preflight (`ensureCustomSessionParentReady`) already grants via
   // `isUnderOwnHomeDirectory` — so it must not be told afterward to lock a directory that
   // was already judged safe moments earlier.
-  const alreadySafe = !isDefaultSessionPath && isUnderOwnHomeDirectory(dirname(options.sessionPath), homedir());
+  const dirIcaclsPath = windowsPathFor(dirname(options.sessionPath)).path;
+  const home = isDefaultSessionPath ? null : homeDirFor(shell);
+  const alreadySafe = home !== null && isUnderOwnHomeDirectory(dirIcaclsPath, home, shell);
   console.log(`\n✅ Session written to ${options.sessionPath}` + (trusted ? ' (mode 0600).' : '.'));
   if (ownerOnly === null) {
     console.log(
@@ -648,7 +680,6 @@ async function main(): Promise<void> {
     const profileNote = untrustedProfileNote(profileOwnerOnly, profileShell);
     if (profileNote !== null) console.log(profileNote);
   } else {
-    const dirIcaclsPath = windowsPathFor(dirname(options.sessionPath)).path;
     const dedicated =
       isDefaultSessionPath ||
       (await isDedicatedDirectory(dirname(options.sessionPath), basename(options.sessionPath), shell));

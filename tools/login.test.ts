@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { mkdir, mkdtemp, readdir, rm, writeFile } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
+import { homedir, tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 
 const execFileSyncMock = vi.hoisted(() => vi.fn());
@@ -14,6 +14,7 @@ vi.mock('node:fs/promises', async (importOriginal) => {
 const {
   clearDirectoryContents,
   customSessionParentAction,
+  homeDirFor,
   isDedicatedDirectory,
   isSessionTrusted,
   isUnderOwnHomeDirectory,
@@ -406,24 +407,53 @@ describe('customSessionParentAction', () => {
 
 describe('isUnderOwnHomeDirectory', () => {
   it('treats the home directory itself as under the home directory', () => {
-    expect(isUnderOwnHomeDirectory('C:\\Users\\randy', 'C:\\Users\\randy')).toBe(true);
+    expect(isUnderOwnHomeDirectory('C:\\Users\\randy', 'C:\\Users\\randy', 'powershell')).toBe(true);
   });
 
   it('treats a subdirectory of home as under the home directory', () => {
-    expect(isUnderOwnHomeDirectory('C:\\Users\\randy\\creds', 'C:\\Users\\randy')).toBe(true);
+    expect(isUnderOwnHomeDirectory('C:\\Users\\randy\\creds', 'C:\\Users\\randy', 'powershell')).toBe(true);
   });
 
-  it('is case-insensitive on Windows, where a drive letter or name may be typed differently', () => {
-    setPlatform('win32');
-    expect(isUnderOwnHomeDirectory('c:\\users\\RANDY\\creds', 'C:\\Users\\randy')).toBe(true);
+  it('is case-insensitive on native Windows, where a drive letter or name may be typed differently', () => {
+    expect(isUnderOwnHomeDirectory('c:\\users\\RANDY\\creds', 'C:\\Users\\randy', 'powershell')).toBe(true);
+  });
+
+  it('is case-insensitive on WSL too, comparing the Windows-translated forms of both paths', () => {
+    expect(isUnderOwnHomeDirectory('C:\\Users\\randy\\creds', 'c:\\users\\RANDY', 'wsl-powershell')).toBe(true);
   });
 
   it('rejects a sibling directory that merely shares a prefix', () => {
-    expect(isUnderOwnHomeDirectory('C:\\Users\\randy-other', 'C:\\Users\\randy')).toBe(false);
+    expect(isUnderOwnHomeDirectory('C:\\Users\\randy-other', 'C:\\Users\\randy', 'powershell')).toBe(false);
   });
 
   it('rejects a directory outside the home directory entirely', () => {
-    expect(isUnderOwnHomeDirectory('C:\\shared', 'C:\\Users\\randy')).toBe(false);
+    expect(isUnderOwnHomeDirectory('C:\\shared', 'C:\\Users\\randy', 'powershell')).toBe(false);
+  });
+
+  it('parses both paths as plain, case-sensitive POSIX paths when icacls cannot help', () => {
+    expect(isUnderOwnHomeDirectory('/srv/randy/creds', '/srv/randy', null)).toBe(true);
+    expect(isUnderOwnHomeDirectory('/srv/RANDY/creds', '/srv/randy', null)).toBe(false);
+  });
+});
+
+describe('homeDirFor', () => {
+  it('uses os.homedir() directly on native Windows and native POSIX, no shell-out needed', () => {
+    expect(homeDirFor('powershell')).toBe(homedir());
+    expect(homeDirFor(null)).toBe(homedir());
+    expect(execFileSyncMock).not.toHaveBeenCalled();
+  });
+
+  it('asks cmd.exe for %USERPROFILE% on WSL instead of the Linux home os.homedir() would return', () => {
+    execFileSyncMock.mockReturnValue('C:\\Users\\randy\r\n');
+    expect(homeDirFor('wsl-powershell')).toBe('C:\\Users\\randy');
+    expect(execFileSyncMock).toHaveBeenCalledWith('cmd.exe', ['/c', 'echo %USERPROFILE%'], { encoding: 'utf8' });
+  });
+
+  it('returns null when the cmd.exe interop call fails, instead of falling back to the Linux home', () => {
+    execFileSyncMock.mockImplementation(() => {
+      throw new Error('cmd.exe: command not found');
+    });
+    expect(homeDirFor('wsl-powershell')).toBeNull();
   });
 });
 

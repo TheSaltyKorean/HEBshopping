@@ -322,7 +322,7 @@ normal path, not an error case:
 | "no" | offers the next one |
 | "no" again (3rd refusal) | gives up and puts the options on a card in the Alexa app |
 | "yes" | adds exactly the product it just named |
-| "what's on my list" | reads up to 7 items; longer lists get a count plus a card — an Echo Show also renders the whole list on screen |
+| "what's on my list" | reads up to 7 items; longer lists get a count plus a card — a screen-capable device also renders the list, up to a 120-item, 12,000-byte display cap, past which it shows a "Showing X of Y items" subtitle |
 | "remove tortillas" | same yes/no walk, against your list rather than the catalog |
 
 One candidate is offered at a time on purpose. Three long product names read aloud is

@@ -284,12 +284,50 @@ export function itemAmountLabel(item: ListItem): string | undefined {
   return undefined;
 }
 
+/**
+ * How many UTF-8 bytes a single Unicode code point costs once JSON-encoded as part of a
+ * string, excluding the surrounding quotes. Mirrors `apl.ts`'s row budgeting: an emoji is two
+ * UTF-16 code units but four UTF-8 bytes, and a quote or backslash costs an extra escape byte
+ * once serialized into the response.
+ */
+function jsonByteLength(ch: string): number {
+  return Buffer.byteLength(JSON.stringify(ch), 'utf8') - 2;
+}
+
+/**
+ * Shortens `line` so its JSON-escaped form fits within `maxBytes`.
+ *
+ * Only applied to the very first line: the loop below always keeps at least one line so the
+ * card is never empty, but an oversized line must not be exempt from the budget either — free
+ * text has no length bound of its own (reachable via the MCP `text` input), and dropping it
+ * entirely (the previous behavior) discarded every line after it too, not just itself. Walked
+ * by Unicode code point, not UTF-16 code unit, so the cut cannot split a surrogate pair — the
+ * same technique `apl.ts`'s `truncateRow` uses.
+ */
+function truncateLine(line: string, maxBytes: number): string {
+  const chars = Array.from(line);
+  const budget = Math.max(1, maxBytes);
+  const ellipsisCost = jsonByteLength('…');
+  let cost = 0;
+  let cut = 0;
+  while (cut < chars.length) {
+    const chCost = jsonByteLength(chars[cut] as string);
+    if (cost + chCost + ellipsisCost > budget) break;
+    cost += chCost;
+    cut++;
+  }
+  return `${chars.slice(0, cut).join('')}…`;
+}
+
 /** Plain-text card body, bounded, and explicit about anything it had to drop. */
 export function cardList(items: readonly ListItem[]): string {
   if (items.length === 0) return 'Your H-E-B list is empty.';
 
   const lines: string[] = [];
   let used = 0;
+  // The lines below are joined (and the footer is prefixed) with a real `\n` character, which
+  // costs 2 bytes, not 1, once this whole card is JSON-serialized into the response.
+  const sepBytes = jsonByteLength('\n');
 
   for (const [index, item] of items.entries()) {
     // Kept as a prefix rather than reusing `itemAmountLabel`: a card is one string per line,
@@ -301,7 +339,7 @@ export function cardList(items: readonly ListItem[]): string {
         : item.quantity > 1
           ? `${item.quantity} × `
           : '';
-    const line = `${amount}${itemName(item)}`;
+    let line = `${amount}${itemName(item)}`;
     const remaining = items.length - index;
     // Reserve room for the footer, so the truncation notice itself cannot overflow.
     const footer = `\n… and ${remaining} more (${items.length} items in total).`;
@@ -309,15 +347,20 @@ export function cardList(items: readonly ListItem[]): string {
     // response body only pays once for the whole card, not once per line: a quote or
     // backslash in a free-text name costs an extra escape byte on the wire that the raw byte
     // length does not.
-    const lineBytes = Buffer.byteLength(JSON.stringify(line), 'utf8') - 2;
-    const footerBytes = Buffer.byteLength(footer, 'utf8');
+    let lineBytes = Buffer.byteLength(JSON.stringify(line), 'utf8') - 2;
+    const footerBytes = Buffer.byteLength(JSON.stringify(footer), 'utf8') - 2;
 
-    if (used + lineBytes + 1 + footerBytes > MAX_CARD_CHARS) {
-      lines.push(footer.trimStart());
-      break;
+    if (used + lineBytes + sepBytes + footerBytes > MAX_CARD_CHARS) {
+      if (lines.length === 0) {
+        line = truncateLine(line, MAX_CARD_CHARS - used - sepBytes - footerBytes);
+        lineBytes = Buffer.byteLength(JSON.stringify(line), 'utf8') - 2;
+      } else {
+        lines.push(footer.trimStart());
+        break;
+      }
     }
     lines.push(line);
-    used += lineBytes + 1;
+    used += lineBytes + sepBytes;
   }
 
   return lines.join('\n');

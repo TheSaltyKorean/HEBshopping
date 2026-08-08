@@ -278,6 +278,28 @@ describe('the card must fit inside Alexa limits', () => {
     expect(card.split('\n')).toHaveLength(2);
     expect(card).not.toContain('more (');
   });
+
+  it('keeps a truncated first line instead of an empty card, when the first item alone exceeds the budget', () => {
+    // Previously, hitting the budget broke the loop unconditionally and pushed only the
+    // footer, so an oversized first item left the card with zero item names, discarding
+    // every already-scheduled and still-to-come line along with the offending one.
+    const huge: ListItem = { lineId: 'l0', text: 'X'.repeat(50_000), quantity: 1 };
+    const card = cardList([huge, line('Milk')]);
+
+    expect(card.split('\n')[0]).not.toBe('');
+    expect(card.split('\n')[0]).toContain('…');
+    expect(Buffer.byteLength(JSON.stringify(card), 'utf8')).toBeLessThanOrEqual(8_000);
+  });
+
+  it('accounts for the JSON-escaped newline between lines, so many short lines stay under the wire cap', () => {
+    // Once the whole card is embedded in the Lambda's JSON response, each `\n` joining lines
+    // escapes to a 2-byte sequence, not 1 — undercounting it let enough short lines add up to
+    // more encoded bytes than the raw budget check saw.
+    const items = Array.from({ length: 3_000 }, (_, i) => line(`${i}`));
+    const card = cardList(items);
+
+    expect(Buffer.byteLength(JSON.stringify(card), 'utf8')).toBeLessThanOrEqual(8_000);
+  });
 });
 
 describe('speakablePounds', () => {

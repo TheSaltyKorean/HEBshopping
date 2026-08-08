@@ -89,19 +89,45 @@ function listRow(item: ListItem): Row {
 }
 
 /**
+ * How many characters a single UTF-16 code unit occupies once JSON-encoded as part of a
+ * string, excluding the surrounding quotes — 1 for a plain character, 2 for one JSON has to
+ * escape (`"`, `\`, control characters). Free-text item names are not guaranteed to be free of
+ * those, so raw character count cannot stand in for encoded size.
+ */
+function jsonCharLength(ch: string): number {
+  return JSON.stringify(ch).length - 2;
+}
+
+/**
  * Shortens `row`'s primary text so its serialized form fits within `maxChars`.
  *
  * Only applied to a first row that alone exceeds the whole screen budget: the loop below
  * always keeps at least one row so the screen is never empty, but "kept" cannot mean
  * "exempt from the budget" — item names are free text with no length bound of their own
  * (reachable through the MCP `text` input), so an oversized first row could otherwise push
- * the directive past Alexa's 24 KB response cap on its own.
+ * the directive past Alexa's 24 KB response cap on its own. The text can also contain
+ * characters JSON has to escape, which cost two encoded characters apiece, so the cut point is
+ * found by walking the encoded cost rather than assuming raw length matches encoded length.
  */
 function truncateRow(row: Row, maxChars: number): Row {
   const overhead = JSON.stringify({ ...row, primaryText: '' }).length;
   const budget = Math.max(1, maxChars - overhead);
-  if (row.primaryText.length <= budget) return row;
-  return { ...row, primaryText: `${row.primaryText.slice(0, Math.max(0, budget - 1))}…` };
+  const text = row.primaryText;
+
+  let fullCost = 0;
+  for (let i = 0; i < text.length; i++) fullCost += jsonCharLength(text.charAt(i));
+  if (fullCost <= budget) return row;
+
+  const ellipsisCost = jsonCharLength('…');
+  let cost = 0;
+  let cut = 0;
+  while (cut < text.length) {
+    const chCost = jsonCharLength(text.charAt(cut));
+    if (cost + chCost + ellipsisCost > budget) break;
+    cost += chCost;
+    cut++;
+  }
+  return { ...row, primaryText: `${text.slice(0, cut)}…` };
 }
 
 /**

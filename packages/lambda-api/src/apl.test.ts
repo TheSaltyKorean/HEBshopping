@@ -197,5 +197,14 @@ describe('listRenderDirective', () => {
       expect(items[0]?.primaryText.length).toBeLessThan(50_000);
       expect(items[0]?.primaryText.endsWith('…')).toBe(true);
     });
+
+    it('truncates by encoded size, not raw length, when the name needs JSON escaping', () => {
+      // Each `"` or `\` costs two characters once serialized, not one — a raw-length budget
+      // would let a row like this come out roughly double the intended size.
+      const escapeHeavy = list([item({ text: '"\\'.repeat(30_000) })]);
+      const row = render(screen, escapeHeavy).datasources.hebList.items[0];
+      expect(row).toBeDefined();
+      expect(JSON.stringify(row).length).toBeLessThan(12_100);
+    });
   });
 });

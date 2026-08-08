@@ -219,12 +219,17 @@ invocation names, see below), and put your address in `alert_email`.
 > decreases account's UnreservedConcurrentExecution below its minimum value of [10].
 > ```
 >
-> Check yours with `aws lambda get-account-settings --query
-> 'AccountLimit.ConcurrentExecutions'`. If it prints `10`, uncomment the line.
+> Check yours with `aws lambda get-account-settings --region us-east-1 --query
+> 'AccountLimit.ConcurrentExecutions'`. If it prints `10`, uncomment the line. The region
+> flag matters here: this quota is regional, and if you skipped `aws configure` because you
+> were already authenticated, your CLI's default region may not be the `us-east-1` Terraform
+> deploys to.
 >
 > The 10-execution floor is account-wide, not per-function: if you also set `enable_mcp_url
-> = true`, uncommenting this line disables *that* function's reservation too, not just
-> Alexa's — otherwise Step 6 fails the same way on the MCP function instead.
+> = true`, that function keeps its own reservation of 1 regardless of this setting, so Step
+> 6 keeps failing the same way on the MCP function. Raise the quota before enabling the
+> public MCP endpoint on a fresh account — it stays unreserved otherwise, and it is public
+> and unauthenticated.
 >
 > The reservation exists to bound how many invocations call H-E-B in parallel (see the
 > comment on `aws_lambda_function.alexa`), so losing it is a real if small cost — though on
@@ -255,7 +260,7 @@ not send alerts until you click that link. It arrives from Amazon SNS's no-reply
 lands in junk**; the link expires after three days. Check the status with:
 
 ```bash
-aws sns list-subscriptions-by-topic --output text \
+aws sns list-subscriptions-by-topic --region us-east-1 --output text \
   --topic-arn "$(terraform -chdir=infra output -raw alerts_topic)" \
   --query 'Subscriptions[].[Endpoint,SubscriptionArn]'
 ```
@@ -356,10 +361,14 @@ of the spoken message. In order:
    be at fault.
 
    ```bash
-   aws logs filter-log-events --log-group-name /aws/lambda/heb-shopping-alexa \
+   aws logs filter-log-events --region us-east-1 \
+     --log-group-name "/aws/lambda/$(terraform -chdir=infra output -raw alexa_lambda_arn | cut -d: -f7)" \
      --start-time $(( ($(date -u +%s) - 900) * 1000 )) \
      --query 'events[].[message]' --output text | grep -c "START RequestId"
    ```
+
+   Taking the function name from the ARN rather than hard-coding it, because it follows
+   `name_prefix` — see Step 8.
 
 2. **Is the endpoint reachable, ignoring speech?** Developer console → **Test** → **Manual
    JSON**, and post a `LaunchRequest` envelope. That skips NLU entirely and calls your
@@ -436,7 +445,7 @@ CloudWatch log retention, which is why it is capped rather than left at "never e
   scrollback. Read it from SSM when you need it:
 
   ```bash
-  aws ssm get-parameter --with-decryption \
+  aws ssm get-parameter --region us-east-1 --with-decryption \
     --name "$(terraform -chdir=infra output -raw mcp_token_parameter)" \
     --query Parameter.Value --output text
   ```
@@ -475,7 +484,7 @@ assumption in the project, and deploying is the only way to answer it.
 | No "Endpoint" entry in the console sidebar | Newer console layout. The skill id is in the page URL — see Step 3. |
 | The SNS confirmation email never arrived | Check junk. AWS cannot resend; recreate the subscription — see Step 6. |
 | Skill says "my H-E-B login has expired" but the laptop works | You skipped step 8 after logging in. |
-| `There was a problem with the requested skill's response` | Check CloudWatch `/aws/lambda/heb-shopping-alexa`. A cold-start throw is almost always missing configuration. |
+| `There was a problem with the requested skill's response` | Check CloudWatch for the Alexa Lambda's log group — see Step 9 for how to derive its name. A cold-start throw is almost always missing configuration. |
 | The skill does not respond on your Echo | The Echo is registered to a different Amazon account than the developer account. |
 | `BOT_CHALLENGE` from the skill only | See *The one unknown* above. |
 | `terraform apply` fails on `prevent_destroy` | Intentional — the session table is protected. Remove that block deliberately if you really mean to delete it. |

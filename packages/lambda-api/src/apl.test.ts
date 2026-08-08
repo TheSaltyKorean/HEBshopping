@@ -18,6 +18,26 @@ const screen = {
   context: { System: { device: { supportedInterfaces: { 'Alexa.Presentation.APL': {} } } } },
 } as never;
 
+/** An older APL device that reports a runtime below the document's version. */
+const oldScreen = {
+  context: {
+    System: {
+      device: { supportedInterfaces: { 'Alexa.Presentation.APL': { runtime: { maxVersion: '1.7' } } } },
+    },
+  },
+} as never;
+
+/** A current-generation Show, whose reported runtime matches the document's version. */
+const currentScreen = {
+  context: {
+    System: {
+      device: {
+        supportedInterfaces: { 'Alexa.Presentation.APL': { runtime: { maxVersion: '2023.3' } } },
+      },
+    },
+  },
+} as never;
+
 interface Directive {
   type: string;
   token: string;
@@ -48,11 +68,25 @@ describe('supportsApl', () => {
   it('treats a request with no context at all as no screen', () => {
     expect(supportsApl({} as never)).toBe(false);
   });
+
+  it('is false for a device whose reported runtime cannot render this document', () => {
+    // Sending the directive anyway does not degrade — Alexa rejects the whole response —
+    // so an under-versioned device has to be treated the same as no screen at all.
+    expect(supportsApl(oldScreen)).toBe(false);
+  });
+
+  it('is true for a device whose reported runtime matches the document version', () => {
+    expect(supportsApl(currentScreen)).toBe(true);
+  });
 });
 
 describe('listRenderDirective', () => {
   it('returns null for a speaker, leaving its response exactly as it was', () => {
     expect(listRenderDirective(speaker, list([item({ text: 'Milk' })]))).toBeNull();
+  });
+
+  it('returns null for a device too old to render this document, same as a speaker', () => {
+    expect(listRenderDirective(oldScreen, list([item({ text: 'Milk' })]))).toBeNull();
   });
 
   it('renders one row per line, titled with the list name', () => {
@@ -137,6 +171,25 @@ describe('listRenderDirective', () => {
     it('says what it dropped, so a truncated list cannot pass for a complete one', () => {
       // Someone shopping from a silently truncated list leaves the shop without the rest.
       expect(render(screen, many).datasources.hebList.subtitle).toBe('Showing 120 of 200 items');
+    });
+  });
+
+  describe('a list within the row cap but over the size budget', () => {
+    // Long free-text names have no length bound of their own, so well under 120 rows can
+    // still serialize past the size budget — the row count alone cannot be trusted.
+    const longNamed = list(
+      Array.from({ length: 100 }, (_, i) => item({ text: `${'X'.repeat(200)} ${i}` })),
+    );
+
+    it('stops before the row cap once the serialized size budget is spent', () => {
+      const shown = render(screen, longNamed).datasources.hebList.items;
+      expect(shown.length).toBeGreaterThan(0);
+      expect(shown.length).toBeLessThan(100);
+    });
+
+    it('always keeps at least one row, even one that alone exceeds the budget', () => {
+      const huge = list([item({ text: 'Y'.repeat(50_000) })]);
+      expect(render(screen, huge).datasources.hebList.items).toHaveLength(1);
     });
   });
 });

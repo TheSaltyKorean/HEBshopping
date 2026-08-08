@@ -19,26 +19,63 @@ import { itemAmountLabel, itemName } from './speech.js';
 /** The interface name Alexa reports in `supportedInterfaces` and expects on the directive. */
 const APL_INTERFACE = 'Alexa.Presentation.APL';
 
+/** The APL runtime version `listDocument` targets — must match its own `version` field. */
+const APL_DOCUMENT_VERSION = '2023.3';
+
 /**
- * How many lines reach the screen.
+ * A sanity ceiling on how many lines are even considered for the screen.
  *
- * Not a display limit — a response-size one. Alexa caps the entire response at 24 KB and
- * counts directives toward it, so an unbounded list would fail `ReadListIntent` outright on
- * exactly the long lists this exists to serve, the same trap `MAX_CARD_CHARS` guards against
- * for cards. At roughly 60 bytes a row, 120 rows is comfortably inside the budget, and a
- * grocery list that long is already past the point of being read on a screen.
+ * `MAX_ITEMS_CHARS` below is the real, correctness-bearing bound on response size — this
+ * just stops the loop that enforces it from walking an unbounded list, and a grocery list
+ * this long is already past the point of being read on a screen.
  */
 const MAX_DISPLAYED_ITEMS = 120;
 
 /**
- * Whether this device has a screen that can render APL.
+ * Character budget for the screen's own share of the response.
+ *
+ * Alexa caps the entire response at 24 KB and counts directives toward it, the same trap
+ * `MAX_CARD_CHARS` guards against for cards — but unlike a card, a row's `primaryText` and
+ * `secondaryText` have no length bound of their own (a long catalog or free-text item name
+ * passes straight through), so a fixed row *count* does not bound response *size*. Budgeting
+ * the serialized rows directly, with headroom for the rest of the response (speech, and on
+ * `ReadListIntent`, a card up to `MAX_CARD_CHARS`), is what actually keeps the whole thing
+ * under the cap.
+ */
+const MAX_ITEMS_CHARS = 12_000;
+
+/**
+ * Whether `a` is at least `b`, comparing APL version strings component-by-component
+ * (e.g. "2023.3" vs "1.7") rather than as plain strings, where "1.10" would sort before
+ * "1.9" lexicographically.
+ */
+function isAtLeastVersion(a: string, b: string): boolean {
+  const partsA = a.split('.').map(Number);
+  const partsB = b.split('.').map(Number);
+  for (let i = 0; i < Math.max(partsA.length, partsB.length); i++) {
+    const diff = (partsA[i] ?? 0) - (partsB[i] ?? 0);
+    if (diff !== 0) return diff > 0;
+  }
+  return true;
+}
+
+/**
+ * Whether this device has a screen that can render the document `listDocument` builds.
  *
  * Read from the request rather than assumed from the device type: the same skill serves
  * Echo speakers, Shows, Fire TV and the phone app, and only some of those can display
- * anything. Absent interfaces are absent, not false, so this is a presence check.
+ * anything. Absent interfaces are absent, not false, so presence alone is checked when the
+ * device does not report a runtime version at all.
+ *
+ * A device that *does* report one but below `APL_DOCUMENT_VERSION` cannot render this
+ * document — sending it anyway does not degrade, it makes Alexa reject the whole response,
+ * so an under-versioned device is treated the same as one with no screen at all.
  */
 export function supportsApl(envelope: RequestEnvelope): boolean {
-  return envelope.context?.System?.device?.supportedInterfaces?.[APL_INTERFACE] !== undefined;
+  const support = envelope.context?.System?.device?.supportedInterfaces?.[APL_INTERFACE];
+  if (support === undefined) return false;
+  const maxVersion = support.runtime?.maxVersion;
+  return maxVersion === undefined || isAtLeastVersion(maxVersion, APL_DOCUMENT_VERSION);
 }
 
 /** One row on screen: the product on the left, its amount on the right. */
@@ -60,7 +97,7 @@ function listRow(item: ListItem): { primaryText: string; secondaryText?: string 
 function listDocument(): unknown {
   return {
     type: 'APL',
-    version: '2023.3',
+    version: APL_DOCUMENT_VERSION,
     import: [{ name: 'alexa-layouts', version: '1.7.0' }],
     mainTemplate: {
       parameters: ['payload'],
@@ -87,7 +124,19 @@ function listDocument(): unknown {
 export function listRenderDirective(envelope: RequestEnvelope, list: HebList): unknown | null {
   if (!supportsApl(envelope)) return null;
 
-  const shown = list.items.slice(0, MAX_DISPLAYED_ITEMS);
+  // Row count alone does not bound response size — item names are free text — so rows are
+  // added only while their serialized form still fits `MAX_ITEMS_CHARS`. The first row is
+  // always kept even if it alone would not fit, the same way `cardList` always keeps at
+  // least a footer: an empty screen is a worse failure than one slightly over budget.
+  const shown: ListItem[] = [];
+  let usedChars = 0;
+  for (const item of list.items) {
+    if (shown.length >= MAX_DISPLAYED_ITEMS) break;
+    const rowChars = JSON.stringify(listRow(item)).length;
+    if (shown.length > 0 && usedChars + rowChars > MAX_ITEMS_CHARS) break;
+    shown.push(item);
+    usedChars += rowChars;
+  }
   const dropped = list.items.length - shown.length;
 
   return {

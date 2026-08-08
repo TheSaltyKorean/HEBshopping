@@ -33,7 +33,7 @@ output "next_steps" {
     2. Upload the H-E-B session (the Lambda cannot read your laptop):
          npm run push:session -- --table ${aws_dynamodb_table.session.name} --region ${var.region}
 
-    3. Say: "Alexa, ask heb list what is on my list"
+    3. Say: "Alexa, ask heb shopper what is on my list"
 
        The invocation name has to be in the sentence, and exactly — "ask MY heb
        list" does not match it. Without it Alexa answers from its own built-in

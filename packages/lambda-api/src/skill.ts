@@ -71,7 +71,7 @@ export interface CreateSkillOptions {
    * skill at it, so the skill id is checked and everything else rejected.
    *
    * A *list*, because Alexa allows exactly one invocation name per skill. Answering to
-   * both "heb list" and "house list" means two skills, and they share this one Lambda.
+   * both "heb shopper" and "house shopper" means two skills, and they share this one Lambda.
    */
   skillIds?: readonly string[];
 }

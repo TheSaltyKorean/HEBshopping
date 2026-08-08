@@ -1,7 +1,7 @@
 {
   "interactionModel": {
     "languageModel": {
-      "invocationName": "grocery list",
+      "invocationName": "heb list",
       "intents": [
         {
           "name": "AddItemIntent",

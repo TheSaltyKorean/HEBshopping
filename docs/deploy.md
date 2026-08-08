@@ -90,16 +90,25 @@ this repo's `packages/lambda-api/skill-package/interactionModels/custom/en-US.js
 consoles and **Build Skill** in newer ones; there is only one build action either way. It
 takes a minute or two.
 
-It worked if the invocation name reads **grocery list** and the intent list shows
+It worked if the invocation name reads **heb list** and the intent list shows
 `AddItemIntent`, `ReadListIntent` and `RemoveItemIntent` beside the standard `AMAZON.*` ones.
 
-The invocation name is **"grocery list"** — what you say out loud. Change it in that file
-if you prefer something else.
+The invocation name is **"heb list"** — what you say out loud. Change it in that file if you
+prefer something else, but read the next paragraph before choosing "grocery list".
+
+#### Don't call it "grocery list"
+
+The obvious name is the one that does not work. **"grocery list" competes with Alexa's own
+built-in shopping list**, and Amazon's routing often prefers the built-in feature — so the
+Echo answers, confidently, about a completely different list, and nothing in that reply
+suggests your skill was never reached. This was the default here until a real deploy hit it.
+
+"heb list" does not collide with anything Amazon ships.
 
 #### Answering to more than one name
 
-**Alexa allows exactly one invocation name per skill.** There is no list of aliases, so
-"grocery list" *or* "heb list" is a choice, not a setting.
+**Alexa allows exactly one invocation name per skill.** There is no list of aliases, so the
+name is a choice, not a setting.
 
 You can still have both, by creating a second skill that points at the same Lambda:
 
@@ -122,8 +131,8 @@ Extra skills cost nothing — Lambda's free tier is per account, not per skill.
 Two rules the console enforces when you pick a name:
 
 - **Two or more words**, unless the name is a distinctive brand you own. Single common
-  words like "groceries" are rejected at model-build time. "grocery list" and "heb list"
-  are fine; plain "heb" most likely is not.
+  words like "groceries" are rejected at model-build time. "heb list" is fine; plain "heb"
+  most likely is not.
 - Names are checked when the model builds, so you find out immediately, not at deploy.
 
 ### Step 3. Copy the skill id
@@ -247,29 +256,31 @@ uploading, so a failure here means running `npm run login` first.
 
 ### Step 9. Talk to it
 
-> *"Alexa, ask grocery list what is on my list"*
+> *"Alexa, ask heb list what is on my list"*
 
 Development-mode skills are enabled automatically on **every Echo registered to the same
 Amazon account** — no installation step, and anyone in the house can use it.
 
-#### The invocation name has to be in the sentence
+#### The invocation name has to be in the sentence, exactly
 
-A custom skill is only reached by naming it. Without that, Alexa answers from its own
-built-in shopping list, which looks like the skill working badly — it replies, cheerfully,
-about a completely different list:
+A custom skill is only reached by naming it, and the name has to match. Without that, Alexa
+answers from its own built-in shopping list, which does not look like a failure at all — it
+replies, cheerfully, about a completely different list:
 
 | Reaches this skill | Reaches Alexa's own list |
 |---|---|
-| "Alexa, ask grocery list what is on my list" | "Alexa, what's on my shopping list" |
-| "Alexa, ask grocery list to add milk" | "Alexa, add milk to my shopping list" |
-| "Alexa, open grocery list" (then speak) | "Alexa, add milk to my grocery list" |
+| "Alexa, ask heb list what is on my list" | "Alexa, what's on my shopping list" |
+| "Alexa, ask heb list to add milk" | "Alexa, add milk to my shopping list" |
+| "Alexa, open heb list" (then speak) | "Alexa, ask **my** heb list what is on my list" |
 
-This is also an argument against the default invocation name. **"grocery list" competes
-directly with Amazon's native shopping-list intent**, so even a correctly phrased request is
-sometimes taken by the built-in feature. **"heb list" does not collide** and is the better
-choice if you find that happening — change `invocationName` in
-`packages/lambda-api/skill-package/interactionModels/custom/en-US.json`, paste the model
-again, and rebuild. Nothing on the AWS side changes: same skill id, same Lambda, same ARN.
+That last one is the trap: an extra word inside the name breaks the match as completely as
+omitting the name would, and the reply sounds fine.
+
+If you did rename the skill to something that overlaps a built-in Alexa feature, this is
+also where that shows up — see *Don't call it "grocery list"* under Step 2. Changing the
+name back means editing `invocationName` in
+`packages/lambda-api/skill-package/interactionModels/custom/en-US.json`, pasting the model
+again, and rebuilding. Nothing on the AWS side changes: same skill id, same Lambda, same ARN.
 
 ---
 
@@ -352,7 +363,7 @@ assumption in the project, and deploying is the only way to answer it.
 
 | Symptom | Cause |
 |---|---|
-| Alexa answers about a *different* list, cheerfully | The invocation name was missing or inexact — "ask **my** grocery list" does not match "grocery list". Alexa fell through to its own built-in shopping list. See *The invocation name has to be in the sentence*. |
+| Alexa answers about a *different* list, cheerfully | The invocation name was missing or inexact — "ask **my** heb list" does not match "heb list". Alexa fell through to its own built-in shopping list. Also happens if you renamed the skill to "grocery list", which collides with that built-in. See Step 9. |
 | `terraform apply` fails with `InvalidParameterValueException … below its minimum value of [10]` | New AWS account, Lambda concurrency quota of 10. Set `alexa_reserved_concurrency = -1`, or raise the quota. See Step 5. |
 | `aws configure` exits with `EOF when reading a line` | It is interactive and had no terminal attached. Run it in a real shell. |
 | No "Create Skill" button in the Alexa console | Wrong page, or the one-time developer profile is not finished. See Step 1. |

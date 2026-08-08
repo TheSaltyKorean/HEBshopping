@@ -19,7 +19,7 @@ variable "alexa_skill_ids" {
     is the only thing preventing another skill that learns the ARN from reading the list.
 
     A list, because Alexa allows exactly one invocation name per skill. To answer to both
-    "grocery list" and "heb list", create two skills with the same interaction model and
+    "heb list" and "house list", create two skills with the same interaction model and
     the same endpoint ARN, and put both ids here.
   EOT
   type        = list(string)

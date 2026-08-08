@@ -206,5 +206,15 @@ describe('listRenderDirective', () => {
       expect(row).toBeDefined();
       expect(JSON.stringify(row).length).toBeLessThan(12_100);
     });
+
+    it('never cuts a surrogate pair in half, even when one straddles the truncation point', () => {
+      // A code-unit cut point can land between an emoji's two UTF-16 halves, leaving a lone
+      // surrogate that renders as a corrupted glyph on the Show instead of the character.
+      const withEmoji = list([item({ text: `${'X'.repeat(11_999)}😀${'X'.repeat(1_000)}` })]);
+      const row = render(screen, withEmoji).datasources.hebList.items[0];
+      expect(row).toBeDefined();
+      expect(row?.primaryText.isWellFormed()).toBe(true);
+      expect(row?.primaryText.endsWith('…')).toBe(true);
+    });
   });
 });

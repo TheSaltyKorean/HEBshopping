@@ -197,6 +197,21 @@ describe('free-text lines have no product', () => {
   it('appears on the card', () => {
     expect(cardList([freeText('pico de gallo')])).toContain('pico de gallo');
   });
+
+  it('caps unbounded free text so it cannot blow the response budget on its own', () => {
+    // The MCP `text` input has no length limit, unlike the mobile app's typed notes.
+    const spoken = speakableItem(freeText('x'.repeat(20_000)));
+    expect(spoken.length).toBeLessThan(100);
+    expect(spoken.endsWith('…')).toBe(true);
+  });
+
+  it('does not split a surrogate pair when capping free text', () => {
+    // A code-unit cut point can land between an emoji's two UTF-16 halves, leaving a lone
+    // surrogate that would render as a corrupted glyph.
+    const spoken = speakableItem(freeText(`${'x'.repeat(79)}😀${'y'.repeat(20)}`));
+    expect(spoken.endsWith('…')).toBe(true);
+    expect(spoken.isWellFormed()).toBe(true);
+  });
 });
 
 describe('offers are always distinguishable', () => {

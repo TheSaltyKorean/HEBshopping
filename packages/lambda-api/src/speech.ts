@@ -149,13 +149,29 @@ export function speakableOffers(products: readonly Product[]): string[] {
 }
 
 /**
+ * How many characters of free text to speak.
+ *
+ * `text` is usually what a person typed by hand and short by construction — but the MCP
+ * `heb_add_item` `text` input has no length limit, so a line created that way can carry
+ * arbitrarily long text. Speaking it unbounded lets a single spoken line push the response
+ * past Alexa's 24 KB cap on its own, on top of whatever the card and screen directive already
+ * budget for. Walked by code point rather than sliced by UTF-16 index, so the cut cannot split
+ * a surrogate pair (an astral character, e.g. an emoji) into an unpaired half.
+ */
+const MAX_SPOKEN_TEXT_CHARS = 80;
+
+/**
  * What to speak for a list line, product-backed or not.
  *
- * A free-text line has no product to shorten, and its `text` is already what a person
- * typed — short by construction — so it is spoken verbatim.
+ * A free-text line has no product to shorten, so its `text` is spoken as-is, capped at
+ * `MAX_SPOKEN_TEXT_CHARS`.
  */
 export function speakableItem(item: ListItem): string {
-  return item.product === undefined ? item.text : speakableProduct(item.product);
+  if (item.product !== undefined) return speakableProduct(item.product);
+  const chars = Array.from(item.text);
+  return chars.length <= MAX_SPOKEN_TEXT_CHARS
+    ? item.text
+    : `${chars.slice(0, MAX_SPOKEN_TEXT_CHARS).join('')}…`;
 }
 
 /**

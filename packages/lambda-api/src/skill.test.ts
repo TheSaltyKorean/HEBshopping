@@ -441,6 +441,111 @@ describe('reading the list', () => {
       expect(getList).not.toHaveBeenCalled();
     });
 
+    describe('after a write', () => {
+      const invokeOn = async (
+        device: object | undefined,
+        request: object,
+        createListOps: () => unknown,
+      ) => {
+        const skill = createSkill({
+          createListOps: createListOps as never,
+          skillIds: ['amzn1.ask.skill.test'],
+        });
+        return (await skill.invoke(
+          {
+            version: '1.0',
+            session: {
+              new: true,
+              sessionId: 's',
+              application: { applicationId: 'amzn1.ask.skill.test' },
+              attributes: {},
+              user: { userId: 'u' },
+            },
+            context: {
+              System: {
+                application: { applicationId: 'amzn1.ask.skill.test' },
+                user: { userId: 'u' },
+                ...(device === undefined ? {} : { device }),
+              },
+            },
+            request,
+          } as never,
+          {} as never,
+        )) as {
+          response: {
+            outputSpeech?: { ssml?: string };
+            directives?: Array<{ type: string }>;
+          };
+        };
+      };
+
+      /** Adds succeed; each `getList` returns the post-write list. */
+      const opsAfterAdd = (getList: () => Promise<unknown>) => () =>
+        fakeOps({
+          getList: vi.fn(getList),
+          addItem: vi.fn(async () => ({
+            status: 'added',
+            item: line('new', '9', 'Oat Milk'),
+            quantityRequested: 1,
+          })),
+        }) as never;
+
+      it('redraws the screen, so an add is visible without asking again', async () => {
+        const response = await invokeOn(
+          showDevice,
+          intent('AddItemIntent', { item: 'oat milk' }),
+          opsAfterAdd(async () => listOf(5)),
+        );
+        expect(response.response.outputSpeech?.ssml).toContain('Added');
+        expect(response.response.directives?.map((d) => d.type)).toContain(
+          'Alexa.Presentation.APL.RenderDocument',
+        );
+      });
+
+      it('does not redraw on a speaker', async () => {
+        const response = await invokeOn(
+          undefined,
+          intent('AddItemIntent', { item: 'oat milk' }),
+          opsAfterAdd(async () => listOf(5)),
+        );
+        expect(response.response.outputSpeech?.ssml).toContain('Added');
+        expect(response.response.directives ?? []).toHaveLength(0);
+      });
+
+      it('still confirms the add when the redraw fails', async () => {
+        // The write has already committed. Turning a successful add into a spoken error
+        // because a cosmetic refresh failed would be strictly worse than a stale screen.
+        const response = await invokeOn(
+          showDevice,
+          intent('AddItemIntent', { item: 'oat milk' }),
+          opsAfterAdd(async () => {
+            throw new Error('HEB unreachable');
+          }),
+        );
+        expect(response.response.outputSpeech?.ssml).toContain('Added');
+        expect(response.response.directives ?? []).toHaveLength(0);
+      });
+
+      it('does not redraw when the add only asked a question', async () => {
+        // `needs_confirmation` wrote nothing, so a refresh would spend a round trip
+        // redrawing the list exactly as it already is.
+        const response = await invokeOn(
+          showDevice,
+          intent('AddItemIntent', { item: 'tortillas' }),
+          () =>
+            fakeOps({
+              getList: vi.fn(async () => listOf(5)),
+              addItem: vi.fn(async () => ({
+                status: 'needs_confirmation' as const,
+                match: { product: SAUCES[0]!, confidence: 0.55, alternatives: [SAUCES[1]!] },
+              })),
+            }) as never,
+        );
+        expect(response.response.outputSpeech?.ssml).toContain('Did you mean');
+        expect(response.response.directives ?? []).toHaveLength(0);
+      });
+    });
+
     it('shows every item even when speech had to cap at seven', async () => {
       // The whole point: a Show that says "I've put the whole list in your Alexa app" while
       // displaying nothing is worse than either surface alone.

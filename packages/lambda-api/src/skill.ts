@@ -17,6 +17,7 @@ import type {
   HandlerInput,
   RequestHandler,
   RequestInterceptor,
+  ResponseInterceptor,
   ErrorHandler,
 } from 'ask-sdk-core';
 import type { Response } from 'ask-sdk-model';
@@ -84,6 +85,55 @@ export interface CreateSkillOptions {
 const REPROMPT = 'You can add something, ask what is on your list, or remove something.';
 
 /**
+ * Request attribute meaning "this turn changed the list, so any screen showing it is stale".
+ *
+ * Set where a write is *confirmed*, not where one is attempted: `addItem` returning
+ * `needs_confirmation` has written nothing, and refreshing then would spend a round trip
+ * redrawing the list exactly as it already is.
+ */
+const LIST_CHANGED = 'hebListChanged';
+
+function markListChanged(input: HandlerInput): void {
+  input.attributesManager.setRequestAttributes({
+    ...input.attributesManager.getRequestAttributes(),
+    [LIST_CHANGED]: true,
+  });
+}
+
+/**
+ * Redraw the screen after a write, for devices that have one.
+ *
+ * An interceptor rather than a line in each handler: there are four confirmed-write paths
+ * today and any new one would have to remember, whereas this only needs the write marked.
+ *
+ * Best-effort by construction. The write has already committed by the time this runs, so a
+ * failure here must not turn a successful add into a spoken error — a stale screen is
+ * recoverable ("what is on my list" redraws it), a false failure is not.
+ *
+ * The fresh `ListOps` is load-bearing: the instance that performed the write has the
+ * *pre-write* list cached, and asking it would render precisely the state being replaced.
+ */
+function refreshScreenAfterWrite(options: CreateSkillOptions): ResponseInterceptor {
+  return {
+    async process(input, response) {
+      if (response === undefined) return;
+      if (input.attributesManager.getRequestAttributes()[LIST_CHANGED] !== true) return;
+      if (!supportsApl(input.requestEnvelope)) return;
+
+      try {
+        const list = await options.createListOps().getList();
+        const directive = listRenderDirective(input.requestEnvelope, list);
+        if (directive !== null) {
+          response.directives = [...(response.directives ?? []), directive as never];
+        }
+      } catch {
+        // Leave the screen as it was. The spoken confirmation is already correct.
+      }
+    },
+  };
+}
+
+/**
  * Every candidate, not just the ones we will speak.
  *
  * `MAX_OFFERS` caps *questions*, not candidates — `nextOffer` enforces that. Truncating
@@ -135,6 +185,7 @@ function giveUp(input: HandlerInput, pending: PendingChoice): Response {
  * list would look for a scannable item that is not there.
  */
 function confirmWritten(input: HandlerInput, item: ListItem, wasPresent: boolean): Response {
+  markListChanged(input);
   const name = escapeSsml(item.text);
   const speech = wasPresent
     ? `I could not find that at your H-E-B. It was already written on your list, ` +
@@ -150,6 +201,8 @@ function confirmAdded(
   quantityRequested?: number,
   weightRequested?: number,
 ): Response {
+  markListChanged(input);
+
   // Confirm with the *resolved* product name, never the spoken text: the whole point of
   // the dialog is that those two can differ, and echoing the request back would hide it.
   const name = escapeSsml(speakableItem(item));
@@ -463,6 +516,7 @@ function removeItemHandler(options: CreateSkillOptions): RequestHandler {
       const best = ranked[0]!;
       if (best.confident) {
         await listOps.removeItem({ lineId: best.item.lineId });
+        markListChanged(input);
         return input.responseBuilder
           .speak(`Removed ${escapeSsml(speakableItem(best.item))}. Anything else?`)
           .reprompt(REPROMPT)
@@ -506,6 +560,7 @@ function yesHandler(options: CreateSkillOptions): RequestHandler {
 
       if (pending.kind === 'remove') {
         await listOps.removeItem({ lineId: offer.lineId! });
+        markListChanged(input);
         return input.responseBuilder
           .speak(`Removed ${escapeSsml(offer.spoken)}. Anything else?`)
           .reprompt(REPROMPT)
@@ -774,6 +829,7 @@ export function createSkill(options: CreateSkillOptions) {
   );
 
   builder.addRequestInterceptors(clearSupersededPending());
+  builder.addResponseInterceptors(refreshScreenAfterWrite(options));
   builder.addErrorHandlers(errorHandler());
   // Not `withSkillId`, which accepts only one. Same check, same failure mode — an
   // unrecognised application id aborts before any handler runs and before the session

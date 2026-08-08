@@ -11,6 +11,7 @@ vi.mock('node:fs/promises', async (importOriginal) => {
     readdir: vi.fn(actual.readdir),
     realpath: vi.fn(actual.realpath),
     rename: vi.fn(actual.rename),
+    rm: vi.fn(actual.rm),
     stat: vi.fn(actual.stat),
   };
 });
@@ -509,6 +510,28 @@ describe('clearDirectoryContents', () => {
       await expect(readdir(dir)).resolves.toEqual(['Cookies']); // restored, not left under .clearing-<hex>
     } finally {
       await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('restores the swapped-in link under dir when removing it fails, instead of stranding it under .clearing-<hex>', async () => {
+    // The symlink-removal path clears `restore` so a *successful* removal doesn't then try to
+    // rename a path that no longer exists — but if rm() itself fails (e.g. antivirus holding the
+    // link), that flag must not already be cleared, or the finally block leaves dir missing
+    // entirely instead of putting the link back where it was.
+    const scratch = await mkdtemp(join(tmpdir(), 'heb-profile-link-fail-'));
+    const dir = join(scratch, 'profile');
+    const target = join(scratch, 'target');
+    try {
+      await mkdir(target);
+      await symlink(target, dir, 'junction');
+      const error = Object.assign(new Error('resource busy or locked'), { code: 'EBUSY' });
+      vi.mocked(rm).mockRejectedValueOnce(error);
+
+      await expect(clearDirectoryContents(dir)).rejects.toThrow('resource busy or locked');
+
+      expect((await lstat(dir)).isSymbolicLink()).toBe(true); // restored, not left under .clearing-<hex>
+    } finally {
+      await rm(scratch, { recursive: true, force: true });
     }
   });
 });

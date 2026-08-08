@@ -467,8 +467,8 @@ export async function clearDirectoryContents(dir: string): Promise<void> {
   let restore = true;
   try {
     if ((await lstat(detached)).isSymbolicLink()) {
-      restore = false;
       await rm(detached, { force: true });
+      restore = false;
       return;
     }
 

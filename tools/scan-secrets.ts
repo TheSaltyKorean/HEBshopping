@@ -86,6 +86,33 @@ const RULES: Rule[] = [
     pattern: /["']?store(?:Number|Id)["']?\s*:\s*["']?\d{2,5}["']?/gi,
     note: 'store number/id identifies the account’s location — use <storeNumber> placeholder',
   },
+  // Not a secret or PII, unlike everything above — a regression guard riding this same gate
+  // because it is the one that already runs on every commit. "grocery list", "heb list" and
+  // "heb cart" are invocation names measured (docs/deploy.md's table) to collide with an
+  // Alexa built-in feature and silently never reach this skill; "house list" was the second
+  // skill's name from the same family. All were renamed away, and the rename took four
+  // review rounds to fully land — a stale doc or leftover example resurrecting one is the
+  // exact bug this scanner is now cheap insurance against.
+  //
+  // Scoped to how the name actually surfaces — after "ask" as a spoken example, in an
+  // "invocation name is" declaration, or as the interaction model's own field — rather than
+  // the bare words, which also appear constantly as ordinary prose ("your H-E-B grocery
+  // list") unrelated to the invocation-name bug.
+  {
+    name: 'retired invocation name (spoken example)',
+    pattern: /\bask\s+(?:the\s+|my\s+)?(?:grocery list|heb list|heb cart|house list)\b/gi,
+    note: 'renamed away after colliding with an Alexa built-in — see the table in docs/deploy.md',
+  },
+  {
+    name: 'retired invocation name (declared)',
+    pattern: /invocation name[^\n]{0,30}(?:grocery list|heb list|heb cart|house list)/gi,
+    note: 'renamed away after colliding with an Alexa built-in — see the table in docs/deploy.md',
+  },
+  {
+    name: 'retired invocation name (interaction model)',
+    pattern: /"invocationName"\s*:\s*"(?:grocery list|heb list|heb cart|house list)"/gi,
+    note: 'renamed away after colliding with an Alexa built-in — see the table in docs/deploy.md',
+  },
 ];
 
 /** Paths that legitimately contain hash-like or id-like strings. */

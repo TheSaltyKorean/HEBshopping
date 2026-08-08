@@ -29,9 +29,9 @@ const pinnedList = listId();
  * `HebListOps` instances and Alexa session attributes respectively.
  */
 const skill = createSkill({
-  createListOps: () =>
+  createListOps: (budgetMs) =>
     new HebListOps({
-      client: new HebClient({ store, budgetMs: INVOCATION_BUDGET_MS }),
+      client: new HebClient({ store, budgetMs: budgetMs ?? INVOCATION_BUDGET_MS }),
       ...(pinnedList === undefined ? {} : { listId: pinnedList }),
     }),
   skillIds,

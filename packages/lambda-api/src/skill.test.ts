@@ -544,6 +544,99 @@ describe('reading the list', () => {
         expect(response.response.outputSpeech?.ssml).toContain('Did you mean');
         expect(response.response.directives ?? []).toHaveLength(0);
       });
+
+      it('bounds the refresh by the time actually left, not a fresh budget', async () => {
+        // A default `createListOps()` call hands the refresh a whole new budget, which can
+        // run the Lambda past its own deadline and lose the already-built spoken
+        // confirmation along with the screen. The refresh must instead ask for whatever
+        // time the Lambda context reports is actually left, minus a safety margin.
+        const createListOps = vi.fn(
+          (): unknown =>
+            fakeOps({
+              addItem: vi.fn(async () => ({
+                status: 'added' as const,
+                item: line('new', '9', 'Oat Milk'),
+                quantityRequested: 1,
+              })),
+              getList: vi.fn(async () => listOf(5)),
+            }),
+        );
+        const skill = createSkill({
+          createListOps: createListOps as never,
+          skillIds: ['amzn1.ask.skill.test'],
+        });
+
+        await skill.invoke(
+          {
+            version: '1.0',
+            session: {
+              new: true,
+              sessionId: 's',
+              application: { applicationId: 'amzn1.ask.skill.test' },
+              attributes: {},
+              user: { userId: 'u' },
+            },
+            context: {
+              System: {
+                application: { applicationId: 'amzn1.ask.skill.test' },
+                user: { userId: 'u' },
+                device: showDevice,
+              },
+            },
+            request: intent('AddItemIntent', { item: 'oat milk' }),
+          } as never,
+          { getRemainingTimeInMillis: () => 3_000 } as never,
+        );
+
+        expect(createListOps).toHaveBeenCalledTimes(2);
+        expect(createListOps).toHaveBeenLastCalledWith(2_500);
+      });
+
+      it('skips the redraw outright when the Lambda has essentially no time left', async () => {
+        const createListOps = vi.fn(
+          (): unknown =>
+            fakeOps({
+              addItem: vi.fn(async () => ({
+                status: 'added' as const,
+                item: line('new', '9', 'Oat Milk'),
+                quantityRequested: 1,
+              })),
+              getList: vi.fn(async () => listOf(5)),
+            }),
+        );
+        const skill = createSkill({
+          createListOps: createListOps as never,
+          skillIds: ['amzn1.ask.skill.test'],
+        });
+
+        const response = (await skill.invoke(
+          {
+            version: '1.0',
+            session: {
+              new: true,
+              sessionId: 's',
+              application: { applicationId: 'amzn1.ask.skill.test' },
+              attributes: {},
+              user: { userId: 'u' },
+            },
+            context: {
+              System: {
+                application: { applicationId: 'amzn1.ask.skill.test' },
+                user: { userId: 'u' },
+                device: showDevice,
+              },
+            },
+            request: intent('AddItemIntent', { item: 'oat milk' }),
+          } as never,
+          { getRemainingTimeInMillis: () => 100 } as never,
+        )) as { response: { outputSpeech?: { ssml?: string }; directives?: unknown[] } };
+
+        // The spoken confirmation still comes through — only the cosmetic refresh is
+        // skipped, exactly like the "redraw fails" case above.
+        expect(response.response.outputSpeech?.ssml).toContain('Added');
+        expect(response.response.directives ?? []).toHaveLength(0);
+        expect(createListOps).toHaveBeenCalledTimes(1);
+      });
     });
 
     it('shows every item even when speech had to cap at seven', async () => {

@@ -62,8 +62,12 @@ export interface CreateSkillOptions {
   /**
    * Built per invocation, never shared. `HebListOps` caches the resolved list, which is
    * correct within one command and wrong across two.
+   *
+   * `budgetMs`, when given, overrides the default invocation budget — used by the
+   * post-write screen refresh to bound itself by the time actually left in the Lambda
+   * invocation instead of resetting a fresh one partway through.
    */
-  createListOps: () => HebListOps;
+  createListOps: (budgetMs?: number) => HebListOps;
   /**
    * The skill ids this Lambda will accept. Empty or omitted disables the check (tests only).
    *
@@ -101,6 +105,17 @@ function markListChanged(input: HandlerInput): void {
 }
 
 /**
+ * Safety margin subtracted from the Lambda's own remaining time before handing it to the
+ * refresh as its budget.
+ *
+ * Enough headroom for `HebClient`'s own timeout to fire and this interceptor to return
+ * *before* AWS kills the invocation outright. Without it, resetting to a fresh budget here
+ * risks the whole invocation — including the already-built spoken confirmation, not just
+ * the screen — being cut off mid-refresh.
+ */
+const REFRESH_SAFETY_MARGIN_MS = 500;
+
+/**
  * Redraw the screen after a write, for devices that have one.
  *
  * An interceptor rather than a line in each handler: there are four confirmed-write paths
@@ -112,6 +127,8 @@ function markListChanged(input: HandlerInput): void {
  *
  * The fresh `ListOps` is load-bearing: the instance that performed the write has the
  * *pre-write* list cached, and asking it would render precisely the state being replaced.
+ * That freshness must not also reset the invocation's time budget, so it is bounded by
+ * whatever the Lambda context reports is actually left, not a new default.
  */
 function refreshScreenAfterWrite(options: CreateSkillOptions): ResponseInterceptor {
   return {
@@ -120,8 +137,12 @@ function refreshScreenAfterWrite(options: CreateSkillOptions): ResponseIntercept
       if (input.attributesManager.getRequestAttributes()[LIST_CHANGED] !== true) return;
       if (!supportsApl(input.requestEnvelope)) return;
 
+      const remaining: number | undefined = input.context?.getRemainingTimeInMillis?.();
+      if (remaining !== undefined && remaining <= REFRESH_SAFETY_MARGIN_MS) return;
+      const budgetMs = remaining === undefined ? undefined : remaining - REFRESH_SAFETY_MARGIN_MS;
+
       try {
-        const list = await options.createListOps().getList();
+        const list = await options.createListOps(budgetMs).getList();
         const directive = listRenderDirective(input.requestEnvelope, list);
         if (directive !== null) {
           response.directives = [...(response.directives ?? []), directive as never];

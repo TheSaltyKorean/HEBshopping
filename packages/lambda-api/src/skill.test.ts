@@ -545,6 +545,28 @@ describe('reading the list', () => {
         expect(response.response.directives ?? []).toHaveLength(0);
       });
 
+      it('does not redraw when already_present wrote nothing', async () => {
+        // `HebListOps` reports `already_present` with `wrote: false` when it never issued a
+        // mutation at all — blocked by the quantity ceiling, or a counter good re-asked with
+        // no weight. A refresh here would spend a round trip redrawing a list that never
+        // changed.
+        const response = await invokeOn(
+          showDevice,
+          intent('AddItemIntent', { item: 'sliced turkey' }),
+          () =>
+            fakeOps({
+              getList: vi.fn(async () => listOf(5)),
+              addItem: vi.fn(async () => ({
+                status: 'already_present' as const,
+                item: line('l1', '1', 'Sliced Turkey', 1),
+                wrote: false,
+              })),
+            }) as never,
+        );
+        expect(response.response.outputSpeech?.ssml).toContain('already on your list');
+        expect(response.response.directives ?? []).toHaveLength(0);
+      });
+
       it('bounds the refresh by the time actually left, not a fresh budget', async () => {
         // A default `createListOps()` call hands the refresh a whole new budget, which can
         // run the Lambda past its own deadline and lose the already-built spoken

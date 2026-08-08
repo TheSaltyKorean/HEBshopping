@@ -92,8 +92,10 @@ const REPROMPT = 'You can add something, ask what is on your list, or remove som
  * Request attribute meaning "this turn changed the list, so any screen showing it is stale".
  *
  * Set where a write is *confirmed*, not where one is attempted: `addItem` returning
- * `needs_confirmation` has written nothing, and refreshing then would spend a round trip
- * redrawing the list exactly as it already is.
+ * `needs_confirmation` has written nothing, and neither does `already_present` with
+ * `wrote: false` (blocked by the quantity ceiling, or a counter good re-asked with no
+ * weight) — refreshing then would spend a round trip redrawing the list exactly as it
+ * already is.
  */
 const LIST_CHANGED = 'hebListChanged';
 
@@ -221,8 +223,12 @@ function confirmAdded(
   wasPresent: boolean,
   quantityRequested?: number,
   weightRequested?: number,
+  wrote = true,
 ): Response {
-  markListChanged(input);
+  // `wrote` is false only for an `already_present` result that HEB was never asked about —
+  // blocked by the quantity ceiling, or a counter good re-asked for with no weight — so the
+  // screen showing this list is not stale and does not need the refresh this triggers.
+  if (wrote) markListChanged(input);
 
   // Confirm with the *resolved* product name, never the spoken text: the whole point of
   // the dialog is that those two can differ, and echoing the request back would hide it.
@@ -466,7 +472,14 @@ function addItemHandler(options: CreateSkillOptions): RequestHandler {
         return confirmAdded(input, result.item, false, result.quantityRequested, result.weightRequested);
       }
       if (result.status === 'already_present') {
-        return confirmAdded(input, result.item, true, result.quantityRequested, result.weightRequested);
+        return confirmAdded(
+          input,
+          result.item,
+          true,
+          result.quantityRequested,
+          result.weightRequested,
+          result.wrote,
+        );
       }
 
       const pending: PendingChoice = {
@@ -604,6 +617,7 @@ function yesHandler(options: CreateSkillOptions): RequestHandler {
         result.status === 'already_present',
         result.quantityRequested,
         result.weightRequested,
+        result.status === 'already_present' ? result.wrote : true,
       );
     },
   };

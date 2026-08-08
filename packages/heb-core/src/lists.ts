@@ -508,8 +508,8 @@ export class HebListOps implements ListOps {
         // reporting bare `already_present` reads identically to a request that never
         // asked for more, so surface the ignored count instead of dropping it quietly.
         return quantity > 1
-          ? { status: 'already_present', item: existing, quantityRequested: quantity }
-          : { status: 'already_present', item: existing };
+          ? { status: 'already_present', item: existing, quantityRequested: quantity, wrote: false }
+          : { status: 'already_present', item: existing, wrote: false };
       }
       // Re-read immediately before computing the target. The absolute write cannot be made
       // atomic, so the best available is to shrink the window between observing the weight
@@ -568,6 +568,7 @@ export class HebListOps implements ListOps {
         item: existing,
         quantityRequested: existing.quantity + quantity,
         ...(input.weight === undefined ? {} : { weightRequested: input.weight }),
+        wrote: false,
       };
     }
 

@@ -36,7 +36,7 @@ output "next_steps" {
     3. Say: "Alexa, ask heb shopper skill what is on my list"
 
        The invocation name has to be in the sentence, and exactly — "ask MY heb
-       list" does not match it. Without it Alexa answers from its own built-in
+       shopper" does not match it. Without it Alexa answers from its own built-in
        shopping list, which reads as this skill returning the wrong list.
 
     Re-run step 2 after every `npm run login` — roughly monthly, when cookies expire.

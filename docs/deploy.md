@@ -340,11 +340,12 @@ With APL enabled (see Step 2), a Show does more than speak:
 | You say | Screen |
 |---|---|
 | "open heb shopper skill" | draws the list immediately — no second question needed |
-| "ask heb shopper skill what is on my list" | draws **every** item, not the seven that get spoken |
+| "ask heb shopper skill what is on my list" | draws up to the display cap (120 items / 12,000 bytes, see Step 2), not just the seven that get spoken |
 | "…to add oat milk" / "…to remove eggs" | redraws with the change applied |
 
-Speech is unchanged throughout: seven items is still the right number to *hear*, and on a
-screen the spoken part shrinks to a count because the display is doing the reading.
+Speech from asking what's on the list, and from adding or removing, is unchanged: seven items
+is still the right number to *hear*. Only on launch does the spoken part shrink to a count
+instead — there the screen draws the list immediately, so there is nothing left to read aloud.
 
 A plain Echo behaves exactly as it always did — the directive is only ever sent to a device
 that advertises the interface, because one naming an unsupported interface makes Alexa
@@ -479,14 +480,14 @@ CloudWatch log retention, which is why it is capped rather than left at "never e
 
 ## The one unknown
 
-Nobody has measured whether Imperva treats **AWS IP ranges** more harshly than a home
-connection. Everything works from a laptop; the deployed Lambda is the first time this runs
-from a datacentre.
+Answered, for a single request at a time: the deployed Lambda in `us-east-1` has completed
+real add/remove/read turns against a live Echo, so Imperva does not block that AWS range
+outright. What is still unmeasured is behaviour under sustained load — that is what W11
+hardening (soak, latency, cost) is for.
 
-If it bites, you will see `BOT_CHALLENGE` from the skill while local commands keep working.
-The fallback is to run the session refresh from a residential machine behind a Cloudflare
-Tunnel — the `Store` seam means that is a swap, not a rewrite. It is the last unmeasured
-assumption in the project, and deploying is the only way to answer it.
+If `BOT_CHALLENGE` starts showing up from the skill while local commands keep working, the
+fallback is to run the session refresh from a residential machine behind a Cloudflare Tunnel —
+the `Store` seam means that is a swap, not a rewrite.
 
 ---
 
@@ -497,7 +498,7 @@ assumption in the project, and deploying is the only way to answer it.
 | Alexa answers about a *different* list, cheerfully | The invocation name was missing, inexact ("ask **my** heb shopper"), or contains a word Alexa owns — *list*, *cart*, *shopping*. Alexa fell through to its own built-in. See Step 2 and Step 9. |
 | Alexa offers to *create* a list named after your skill | Alexa+ read the invocation name as one of its own list names. Add the word "skill": `ask ⟨name⟩ skill ⟨request⟩`. See Step 9. |
 | "An unexpected error occurred" on `open ⟨name⟩` | Same cause — say `open ⟨name⟩ skill`, or use the `ask` form. See Step 9. |
-| The Show speaks but displays nothing | `ALEXA_PRESENTATION_APL` is not enabled on the skill. Build → Interfaces → on, then build again. No Lambda redeploy needed. See Step 2. |
+| The Show speaks but displays nothing | If `ALEXA_PRESENTATION_APL` is not yet enabled on the skill, that's it — Build → Interfaces → on, then build again; no Lambda redeploy needed. See Step 2. If it's already enabled, the device's APL runtime is older than this project's document version (2023.3) and is intentionally treated as no screen — nothing to fix there. |
 | Skill never answers, and the Lambda shows zero invocations | The request never left Amazon — routing or naming, not AWS. Work through *Diagnosing "it just doesn't answer"* in Step 9. |
 | `terraform apply` fails with `InvalidParameterValueException … below its minimum value of [10]` | New AWS account, Lambda concurrency quota of 10. Set `alexa_reserved_concurrency = -1`, or raise the quota. See Step 5. |
 | `aws configure` exits with `EOF when reading a line` | It is interactive and had no terminal attached. Run it in a real shell. |

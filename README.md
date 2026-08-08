@@ -72,7 +72,7 @@ stored. They last 30–365 days (see *What discovery changed*), so it's a rare c
 | W10 deploy | ✅ Terraform, DynamoDB store, MCP HTTP endpoint — see `docs/deploy.md`; **applied and running**, verified end to end from a real Echo |
 | W12 free-text lines | ✅ read and write — the same `Add "…" to list` line H-E-B's own UI creates |
 | W13 weight-based items | ✅ "two pounds of sliced turkey", snapped to H-E-B's quarter-pound ladder |
-| W11 harden | not started — needs a deployment (soak, latency, cost) |
+| W11 harden | not started — needs sustained runtime on the now-live deployment: soak, latency, cost |
 
 The full plan lives at `~/.claude/plans/frolicking-strolling-crab.md`.
 

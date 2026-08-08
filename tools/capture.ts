@@ -16,34 +16,18 @@
  * so treat captures/ as a secret until scrubbed into fixtures/.
  */
 
-import { chromium, type BrowserContext } from 'playwright';
-import { chmod, mkdir, writeFile } from 'node:fs/promises';
+import type { BrowserContext } from 'playwright';
 import { resolve } from 'node:path';
 import { filterHebStorageState, isGraphqlUrl, type StorageStateLike } from '@heb/core';
+import {
+  CAPTURE_DIR,
+  PROFILE_DIR,
+  ensureOwnerOnlyDir,
+  launchBrowser,
+  warnIfUntrustedDir,
+  writeSecret,
+} from './lib/browser.js';
 
-/**
- * Owner-only. These files hold the live H-E-B cookie jar and raw request/response bodies
- * for an account with a saved payment method; the default umask would commonly make them
- * world-readable, which on a shared machine is a real exposure regardless of .gitignore.
- */
-const SECRET_FILE_MODE = 0o600;
-
-/**
- * Write a file that only its owner can read, even if it already existed.
- *
- * `writeFile`'s `mode` applies only when the file is *created*. Rewriting an existing inode
- * leaves whatever permissions it already had — so a capture restored from elsewhere, or
- * created before this rule existed, keeps a live H-E-B cookie jar world-readable while the
- * code claims otherwise. The chmod is the part that actually holds the guarantee.
- */
-async function writeSecret(path: string, contents: string): Promise<void> {
-  await writeFile(path, contents, { mode: SECRET_FILE_MODE });
-  await chmod(path, SECRET_FILE_MODE);
-}
-
-
-const PROFILE_DIR = resolve('.playwright-profile');
-const CAPTURE_DIR = resolve('captures');
 const START_URL = 'https://www.heb.com/shopping-list';
 
 interface CapturedOperation {
@@ -204,7 +188,7 @@ async function flush(context: BrowserContext): Promise<void> {
     await Promise.allSettled([...pending]);
   }
 
-  await mkdir(CAPTURE_DIR, { recursive: true });
+  await ensureOwnerOnlyDir(CAPTURE_DIR);
 
   await writeSecret(resolve(CAPTURE_DIR, 'operations.json'),
     JSON.stringify(Object.fromEntries(operations), null, 2));
@@ -235,12 +219,15 @@ async function flush(context: BrowserContext): Promise<void> {
 }
 
 async function main(): Promise<void> {
-  const context = await chromium.launchPersistentContext(PROFILE_DIR, {
-    headless: false,
-    viewport: { width: 1400, height: 900 },
-    // A stock Chromium fingerprint is what Imperva expects to see; don't get clever.
-    args: ['--disable-blink-features=AutomationControlled'],
-  });
+  const context = await launchBrowser();
+  await warnIfUntrustedDir(PROFILE_DIR);
+
+  // Locked and checked here, not in `flush()`: the 15-second autosave below is the first thing
+  // that writes into `captures/`, and `ensureOwnerOnlyDir`'s chmod can't touch a Windows DACL —
+  // so a caller whose `captures/` inherited a broad ACL has to hear about it while the raw
+  // request bodies still aren't there, not at shutdown. Warning inside the tick would spam.
+  await ensureOwnerOnlyDir(CAPTURE_DIR);
+  await warnIfUntrustedDir(CAPTURE_DIR);
 
   await recordGraphqlTraffic(context);
 
@@ -306,7 +293,7 @@ async function main(): Promise<void> {
     const previous = autosave ?? Promise.resolve();
     autosave = previous
       .catch(() => undefined)
-      .then(() => mkdir(CAPTURE_DIR, { recursive: true }))
+      .then(() => ensureOwnerOnlyDir(CAPTURE_DIR))
       .then(() =>
         writeSecret(resolve(CAPTURE_DIR, 'operations.json'),
           JSON.stringify(Object.fromEntries(operations), null, 2)),

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { mkdtemp, rm, stat, writeFile } from 'node:fs/promises';
+import { chmod, mkdir, mkdtemp, rm, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { FileStore } from './file-store.js';
@@ -16,8 +16,34 @@ async function harness() {
 
 runStoreContract('FileStore', harness);
 
+// Whether this filesystem actually enforces the owner-only mode `chmod` requests. False on
+// Windows (`chmod` there only toggles the read-only attribute) and on some WSL mounts of a
+// Windows drive, which report `process.platform === 'linux'` but can behave the same way —
+// so this is checked by writing a real file rather than trusting the platform name.
+const honorsOwnerOnlyMode = await (async () => {
+  try {
+    const probeDir = await mkdtemp(join(tmpdir(), 'heb-mode-probe-'));
+    try {
+      const probePath = join(probeDir, 'probe');
+      await writeFile(probePath, 'x', { mode: 0o600 });
+      await chmod(probePath, 0o600);
+      return ((await stat(probePath)).mode & 0o777) === 0o600;
+    } finally {
+      await rm(probeDir, { recursive: true, force: true });
+    }
+  } catch {
+    return false;
+  }
+})();
+
 describe('FileStore specifics', () => {
-  it('writes the session owner-only', async () => {
+  // Skipped rather than loosened where the filesystem doesn't honour the mode: relaxing the
+  // assertion to accept whatever comes back would make it pass everywhere while checking
+  // nothing, and asserting that value would pin the platform's quirk as if it were the
+  // guarantee. Neither is the guarantee, so the check runs where it is real and is honest
+  // about not running where it is not — see `SECRET_FILE_MODE` and docs/setup.md for what
+  // protects the file where this doesn't hold.
+  it.skipIf(!honorsOwnerOnlyMode)('writes the session owner-only', async () => {
     // The file holds live auth cookies for an account with a saved payment method, so a
     // default-umask world-readable file would be a real exposure on a shared machine.
     const { store, cleanup, directory } = await harness();
@@ -34,6 +60,37 @@ describe('FileStore specifics', () => {
     const { store, cleanup } = await harness();
     try {
       await expect(store.putSession(sampleSession())).resolves.not.toThrow();
+    } finally {
+      await cleanup();
+    }
+  });
+
+  it.skipIf(!honorsOwnerOnlyMode)('creates the parent directory owner-only', async () => {
+    // The session file's directory listing (name, size, mtime) would otherwise be visible
+    // to other local accounts under a default umask, even with the file itself at 0600.
+    const { store, cleanup, directory } = await harness();
+    try {
+      await store.putSession(sampleSession());
+      const mode = (await stat(join(directory, 'nested'))).mode & 0o777;
+      expect(mode).toBe(0o700);
+    } finally {
+      await cleanup();
+    }
+  });
+
+  it.skipIf(!honorsOwnerOnlyMode)('leaves an already-existing parent directory alone', async () => {
+    // `--session`/`HEB_SESSION_PATH` can point into a directory that already exists and isn't
+    // dedicated to the session file (e.g. a shared directory, or the repo root). Locking that
+    // down would strip other accounts' access to more than the session file, so only a
+    // directory this call itself creates should be chmod'd.
+    const { cleanup, directory } = await harness();
+    try {
+      const existing = join(directory, 'existing');
+      await mkdir(existing);
+      await chmod(existing, 0o755);
+      await new FileStore(join(existing, 'session.json')).putSession(sampleSession());
+      const mode = (await stat(existing)).mode & 0o777;
+      expect(mode).toBe(0o755);
     } finally {
       await cleanup();
     }

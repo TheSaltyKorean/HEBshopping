@@ -10,13 +10,28 @@ import { dirname } from 'node:path';
 import type { SessionState, Store } from '../types.js';
 
 /**
- * Owner-read/write only.
+ * Owner-read/write only — **on POSIX**.
  *
  * The session file contains live authentication cookies for an account with a saved
  * payment method. Default umask would often make it world-readable, which on a shared or
  * multi-user machine is a real exposure, so the mode is set explicitly rather than assumed.
+ *
+ * On Windows this constant does nothing. Node maps `chmod` onto the single read-only
+ * attribute there and ignores the rest, so the file ends up with whatever ACL it inherits
+ * from its directory — and a repo checked out under `C:\` inherits an ACL that grants local
+ * `Users` read access. Stated here because silence would read as "protected everywhere":
+ * the mitigation is where the file lives, not what this constant says, and docs/setup.md
+ * carries the instruction.
  */
 const SECRET_FILE_MODE = 0o600;
+
+/**
+ * Owner-only, for the same reason as `SECRET_FILE_MODE` one level up: the directory's
+ * listing (names, sizes, mtimes) would otherwise be visible to other local accounts under
+ * a default umask even though the session file itself is protected. Same Windows caveat as
+ * `SECRET_FILE_MODE` applies — this is a no-op there.
+ */
+const OWNER_ONLY_DIR_MODE = 0o700;
 
 export class FileStore implements Store {
   constructor(private readonly path: string) {}
@@ -44,7 +59,16 @@ export class FileStore implements Store {
   }
 
   async putSession(session: SessionState): Promise<void> {
-    await mkdir(dirname(this.path), { recursive: true });
+    const directory = dirname(this.path);
+    // Only lock down a directory this call created. `--session`/`HEB_SESSION_PATH` can point
+    // at an existing, possibly shared directory (e.g. the repo root) — chmod-ing that would
+    // strip other accounts' access to more than the session file, or fail closed with EPERM
+    // on a directory this account doesn't own. `mkdir` resolves `undefined` when the target
+    // already existed, so that's the signal to leave its permissions alone.
+    const created = await mkdir(directory, { recursive: true });
+    if (created !== undefined) {
+      await chmod(directory, OWNER_ONLY_DIR_MODE);
+    }
 
     // Write-then-rename so a crash mid-write can't leave a half-written session behind.
     // Reacquiring one costs a human login, so it is worth protecting properly.

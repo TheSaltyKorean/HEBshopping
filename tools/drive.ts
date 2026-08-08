@@ -12,9 +12,19 @@
  */
 
 import type { Page } from 'playwright';
-import { mkdir, readFile, rm } from 'node:fs/promises';
-import { dirname, resolve } from 'node:path';
-import { attachCapture, launchBrowser, saveCapture, writeSecret, type Capture } from './lib/browser.js';
+import { readFile, rm } from 'node:fs/promises';
+import { resolve } from 'node:path';
+import {
+  CAPTURE_DIR,
+  PROFILE_DIR,
+  attachCapture,
+  ensureOwnerOnlyDir,
+  launchBrowser,
+  saveCapture,
+  warnIfUntrustedDir,
+  writeSecret,
+  type Capture,
+} from './lib/browser.js';
 
 /** What `add` last put on the list, so the mutating commands can refuse anything else. */
 const THROWAWAY_PATH = resolve('captures/.drive-throwaway.json');
@@ -316,6 +326,7 @@ async function main(): Promise<void> {
   const argument = process.argv[3] ?? '';
 
   const context = await launchBrowser();
+  await warnIfUntrustedDir(PROFILE_DIR);
   const capture = attachCapture(context);
   const page = context.pages()[0] ?? (await context.newPage());
 
@@ -546,7 +557,7 @@ async function addItem(page: Page, text: string, capture: Capture): Promise<void
     return;
   }
 
-  await mkdir(dirname(THROWAWAY_PATH), { recursive: true });
+  await ensureOwnerOnlyDir(CAPTURE_DIR);
   await writeSecret(
     THROWAWAY_PATH,
     JSON.stringify(

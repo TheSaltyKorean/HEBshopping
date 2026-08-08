@@ -55,13 +55,101 @@ Confirm it's sound before going further:
 npm test
 ```
 
-Expected: every file passes and nothing is skipped — the counts grow as the project does,
-so match on `passed` rather than a number. These run entirely offline, so if they pass,
-your install is good.
+Expected: every file passes. On Windows, and on some WSL mounts of a Windows drive, a
+handful of tests report as skipped — they check a POSIX-only file permission bit that
+isn't enforced there — so don't expect "nothing skipped" in those cases; match on `passed`
+instead. The counts grow as the project does, so match on `passed` rather than a number.
+These run entirely offline, so if they pass, your install is good.
 
 ---
 
 ## Part 2 — Log in
+
+> **Windows: read this before Step 5 if your repo lives outside your user profile.**
+> `npm run login` writes two live credentials: `.session/session.json` and
+> `.playwright-profile/` (a logged-in browser profile). Node's `chmod` on Windows only
+> toggles the read-only attribute, so both end up protected by whatever NTFS ACL they
+> inherit from their directory — and a repo under `C:\git\` inherits `C:\`'s default ACL,
+> which grants local `Users` read access, so on a machine with more than one account,
+> another user can read your session the moment it's written. Under your own profile
+> (`C:\Users\<you>\...`) the inherited ACL is already user-only and there is nothing to do.
+>
+> If the repo lives outside your profile, create and lock the directories *now*, before
+> Step 5 writes anything into them, so the files inherit a safe ACL from the moment they
+> exist:
+>
+> ```powershell
+> mkdir .session, .playwright-profile
+> icacls .session /reset
+> icacls .session /inheritance:r /grant:r "${env:USERDOMAIN}\${env:USERNAME}:(OI)(CI)F"
+> icacls .playwright-profile /reset
+> icacls .playwright-profile /inheritance:r /grant:r "${env:USERDOMAIN}\${env:USERNAME}:(OI)(CI)F"
+> ```
+>
+> The `/reset` strips any explicit `Users`/`Everyone` allow ACE the directory might already
+> carry — e.g. if it was copied in with ACL preservation, or shared deliberately before you
+> read this — since `/inheritance:r` only removes *inherited* ACEs and `/grant:r` only
+> replaces the named account's own explicit grant; neither touches another trustee's explicit
+> entry on its own.
+>
+> Already ran `npm run login` before reading this? Those directories exist already and may
+> hold a session written under the old, wider ACL. Run the four `icacls` commands above
+> (skip `mkdir` — the directories already exist), then also re-ACL what's already inside
+> them, then restore the directory's own grant — this is the only case that needs it:
+>
+> ```powershell
+> icacls .session /T /reset
+> icacls .session /T /inheritance:r /grant:r "${env:USERDOMAIN}\${env:USERNAME}:F"
+> icacls .session /inheritance:r /grant:r "${env:USERDOMAIN}\${env:USERNAME}:(OI)(CI)F"
+> icacls .playwright-profile /T /reset
+> icacls .playwright-profile /T /inheritance:r /grant:r "${env:USERDOMAIN}\${env:USERNAME}:F"
+> icacls .playwright-profile /inheritance:r /grant:r "${env:USERDOMAIN}\${env:USERNAME}:(OI)(CI)F"
+> Get-ChildItem .playwright-profile -Recurse -Directory | ForEach-Object {
+>   icacls $_.FullName /inheritance:r /grant:r "${env:USERDOMAIN}\${env:USERNAME}:(OI)(CI)F"
+> }
+> ```
+>
+> Do this in separate calls per directory, not one `/T` with `(OI)(CI)`: those inherit flags
+> are directory-only semantics, and applying them to an existing file via `/T` silently
+> produces an empty, protected ACL — locking you out of the very file you're trying to
+> protect. The `/T /reset` call is what strips a stray explicit ACE from files that already
+> exist under the directory, same reason as above. `/T` reaches the directory itself too, so
+> that plain-`F` grant overwrites the directory's `(OI)(CI)F` grant from the first block —
+> the final command per directory restores it, so the *next* login's temp-file-then-rename
+> write still inherits a safe ACL instead of the process's default one.
+>
+> `.playwright-profile` can already hold nested directories from a prior login — Chromium's
+> own `Default/`, `Default/Cache/`, and so on — which the `/T` block above reaches too, but
+> only with the plain, non-inheritable `F` grant; only the profile root gets `(OI)(CI)` back
+> from the command after it. Left there, a directory Chromium already created stays
+> non-inheritable, so anything written under it afterward falls back to a default DACL instead
+> of the hardened grant. The `Get-ChildItem -Recurse -Directory` loop reapplies `(OI)(CI)F` to
+> every directory that already exists, not just the root, so their contents inherit correctly
+> too. `.session` doesn't need the same loop — this tool never creates subdirectories under it.
+>
+> The same applies to `captures/` if you ever run `npm run capture`, which writes raw cookie
+> jars and request bodies the first time it runs — lock it down the same way, before that
+> first run:
+>
+> ```powershell
+> mkdir captures
+> icacls captures /reset
+> icacls captures /inheritance:r /grant:r "${env:USERDOMAIN}\${env:USERNAME}:(OI)(CI)F"
+> ```
+>
+> Already ran `npm run capture` before reading this? Same reasoning as `.session` and
+> `.playwright-profile` above — re-ACL what's already inside the directory, then restore its
+> own grant so the next capture still inherits a safe ACL:
+>
+> ```powershell
+> icacls captures /T /reset
+> icacls captures /T /inheritance:r /grant:r "${env:USERDOMAIN}\${env:USERNAME}:F"
+> icacls captures /inheritance:r /grant:r "${env:USERDOMAIN}\${env:USERNAME}:(OI)(CI)F"
+> ```
+>
+> `npm run login -- --switch` clears `.playwright-profile/`'s contents to forget the old
+> account, but keeps the directory itself — so a lock applied above survives the switch and
+> there's nothing to re-run. `.session/` isn't touched by `--switch` either.
 
 ### Step 5. Run the login tool
 
@@ -88,11 +176,17 @@ Verifying against the live API …
   ✅ "Shopping" — 1 item(s)
 ```
 
+On Windows, and on WSL when the repo sits on a Windows drive, `chmod` can't restrict the
+file, so that first line ends with just a period instead of `(mode 0600)` — see the note
+above Step 5 for what protects it there. On WSL's own native filesystem (e.g. `~/...`),
+`chmod` works normally and you'll see `(mode 0600)`.
+
 That last line is the proof: it made a real authenticated call and saw your real list.
 
 > **`.session/session.json` is a live credential.** Anyone holding that file is logged in
 > as you, on an account with a saved payment method. It's written owner-only (mode 0600)
-> and gitignored. Don't copy it around, don't paste it anywhere.
+> and gitignored. Don't copy it around, don't paste it anywhere. On Windows, that mode does
+> nothing — see the note above Step 5 for what actually protects it there.
 
 ### Step 6. Confirm it works
 
@@ -347,7 +441,9 @@ account. To forget it first:
 npm run login -- --switch
 ```
 
-That deletes the saved browser profile and starts a clean login.
+That clears the saved browser profile's contents and starts a clean login. The
+`.playwright-profile/` directory itself is left in place (so a Windows ACL lock on it
+survives), only what's inside is emptied.
 
 ### Using a session file somewhere else
 
@@ -378,8 +474,8 @@ Point `HEB_SESSION_PATH` at the same path in your MCP client config.
 
 | Path | Contents | In git? |
 |---|---|---|
-| `.session/session.json` | your live session cookies | **never** — gitignored, mode 0600 |
-| `.playwright-profile/` | the logged-in browser profile | **never** — gitignored |
+| `.session/session.json` | your live session cookies | **never** — gitignored, mode 0600 (on Windows that mode does nothing — see the note above Step 5) |
+| `.playwright-profile/` | the logged-in browser profile | **never** — gitignored; same Windows caveat as above |
 | `captures/` | raw discovery output; only created by `npm run capture` | **never** — gitignored |
 
 Run `npm run scan` any time to check nothing sensitive has crept into a committable file.

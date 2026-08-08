@@ -545,6 +545,9 @@ export class HebListOps implements ListOps {
       return {
         status: 'already_present',
         item: await this.adjustWeight(listId, fresh, target),
+        // Already at the ladder's top rung: `adjustWeight` makes no HEB call, so this must
+        // report the same `wrote: false` as the other no-write branches in this method.
+        ...(target === base ? { wrote: false } : {}),
         ...shortfall,
       };
     }

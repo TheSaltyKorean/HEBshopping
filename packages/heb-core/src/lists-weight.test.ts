@@ -341,6 +341,25 @@ describe('weight on a counter line', () => {
     expect(result.status === 'already_present' && result.weightRequested).toBe(3);
   });
 
+  it('reports wrote: false for a pre-existing line already at its weight ceiling', async () => {
+    // Unlike the concurrent-merge case above, this line was already on the list — at the
+    // ladder's top rung — before this call. `adjustWeight` sees `target === line.weight` and
+    // makes no HEB call at all, so the result must say `wrote: false` the same way the other
+    // no-write branches in `addItem` do, or a caller like `confirmAdded` defaults `wrote` to
+    // true and fires a screen refresh for a request that changed nothing.
+    const { ops, sent } = scripted([
+      { id: 'line-0', quantity: 1, weight: 2.5, productId: 'p-turkey' },
+    ]);
+
+    const result = await ops.addItem({ productId: 'p-turkey', weight: 0.5 });
+
+    expect(result.status).toBe('already_present');
+    expect(result.status === 'already_present' && result.item.weight).toBe(2.5);
+    expect(result.status === 'already_present' && result.weightRequested).toBe(3);
+    expect(result.status === 'already_present' && result.wrote).toBe(false);
+    expect(weightUpdates(sent)).toHaveLength(0);
+  });
+
   it('preserves a definitive refusal instead of reconciling it into a generic error', async () => {
     // A rejected union member means HEB explicitly refused the weight update, not that the
     // response was lost. Reconciling would re-read the (unchanged) line and repackage this

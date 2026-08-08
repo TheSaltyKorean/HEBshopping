@@ -701,6 +701,49 @@ describe('reading the list', () => {
         expect(response.response.directives ?? []).toHaveLength(0);
         expect(createListOps).toHaveBeenCalledTimes(1);
       });
+
+      it('redraws the screen when a write partially lands before a later step throws', async () => {
+        // ask-sdk's dispatcher never runs response interceptors once a handler has thrown —
+        // it jumps straight to the error handler — so the one error path where a write
+        // really did land (`partialAdd`) has to ask for the redraw itself.
+        const response = await invokeOn(
+          showDevice,
+          intent('AddItemIntent', { item: 'two pounds of ham' }),
+          () =>
+            fakeOps({
+              getList: vi.fn(async () => listOf(5)),
+              addItem: vi.fn(async () => {
+                throw new HebError('UPSTREAM_ERROR', 'HEB rejected the weight update.', {
+                  retryable: false,
+                  details: { partialAdd: true },
+                });
+              }),
+            }) as never,
+        );
+        expect(response.response.outputSpeech?.ssml).toContain('went through only partly');
+        expect(response.response.directives?.map((d) => d.type)).toContain(
+          'Alexa.Presentation.APL.RenderDocument',
+        );
+      });
+
+      it('does not redraw a speaker when a write partially lands before a later step throws', async () => {
+        const response = await invokeOn(
+          undefined,
+          intent('AddItemIntent', { item: 'two pounds of ham' }),
+          () =>
+            fakeOps({
+              getList: vi.fn(async () => listOf(5)),
+              addItem: vi.fn(async () => {
+                throw new HebError('UPSTREAM_ERROR', 'HEB rejected the weight update.', {
+                  retryable: false,
+                  details: { partialAdd: true },
+                });
+              }),
+            }) as never,
+        );
+        expect(response.response.outputSpeech?.ssml).toContain('went through only partly');
+        expect(response.response.directives ?? []).toHaveLength(0);
+      });
     });
 
     it('shows every item even when speech had to cap at seven', async () => {

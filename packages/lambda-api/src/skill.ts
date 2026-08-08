@@ -120,8 +120,9 @@ const REFRESH_SAFETY_MARGIN_MS = 500;
 /**
  * Redraw the screen after a write, for devices that have one.
  *
- * An interceptor rather than a line in each handler: there are four confirmed-write paths
- * today and any new one would have to remember, whereas this only needs the write marked.
+ * Shared by the response interceptor below (the confirmed-write paths) and by `errorHandler`
+ * (a write that partly landed before a later step threw — the ask-sdk dispatcher never runs
+ * response interceptors once a handler has thrown, so that path has to call this directly).
  *
  * Best-effort by construction. The write has already committed by the time this runs, so a
  * failure here must not turn a successful add into a spoken error — a stale screen is
@@ -132,26 +133,39 @@ const REFRESH_SAFETY_MARGIN_MS = 500;
  * That freshness must not also reset the invocation's time budget, so it is bounded by
  * whatever the Lambda context reports is actually left, not a new default.
  */
+async function attachRefreshedScreen(
+  options: CreateSkillOptions,
+  input: HandlerInput,
+  response: Response,
+): Promise<Response> {
+  if (!supportsApl(input.requestEnvelope)) return response;
+
+  const remaining: number | undefined = input.context?.getRemainingTimeInMillis?.();
+  if (remaining !== undefined && remaining <= REFRESH_SAFETY_MARGIN_MS) return response;
+  const budgetMs = remaining === undefined ? undefined : remaining - REFRESH_SAFETY_MARGIN_MS;
+
+  try {
+    const list = await options.createListOps(budgetMs).getList();
+    const directive = listRenderDirective(input.requestEnvelope, list);
+    if (directive !== null) {
+      response.directives = [...(response.directives ?? []), directive as never];
+    }
+  } catch {
+    // Leave the screen as it was. The spoken confirmation is already correct.
+  }
+  return response;
+}
+
+/**
+ * An interceptor rather than a line in each handler: there are four confirmed-write paths
+ * today and any new one would have to remember, whereas this only needs the write marked.
+ */
 function refreshScreenAfterWrite(options: CreateSkillOptions): ResponseInterceptor {
   return {
     async process(input, response) {
       if (response === undefined) return;
       if (input.attributesManager.getRequestAttributes()[LIST_CHANGED] !== true) return;
-      if (!supportsApl(input.requestEnvelope)) return;
-
-      const remaining: number | undefined = input.context?.getRemainingTimeInMillis?.();
-      if (remaining !== undefined && remaining <= REFRESH_SAFETY_MARGIN_MS) return;
-      const budgetMs = remaining === undefined ? undefined : remaining - REFRESH_SAFETY_MARGIN_MS;
-
-      try {
-        const list = await options.createListOps(budgetMs).getList();
-        const directive = listRenderDirective(input.requestEnvelope, list);
-        if (directive !== null) {
-          response.directives = [...(response.directives ?? []), directive as never];
-        }
-      } catch {
-        // Leave the screen as it was. The spoken confirmation is already correct.
-      }
+      await attachRefreshedScreen(options, input, response);
     },
   };
 }
@@ -751,10 +765,10 @@ const SPEECH_BY_CODE: Readonly<Record<HebErrorCode, string>> = {
   UPSTREAM_ERROR: 'H-E-B is not responding right now. Please try again in a moment.',
 };
 
-function errorHandler(): ErrorHandler {
+function errorHandler(options: CreateSkillOptions): ErrorHandler {
   return {
     canHandle: () => true,
-    handle(input, error) {
+    async handle(input, error) {
       if (isHebError(error)) {
         // AMBIGUOUS_LIST covers both "several lists" and "none at all", and the remedies
         // are opposites. Telling someone with no lists to pick one is advice they cannot
@@ -781,18 +795,21 @@ function errorHandler(): ErrorHandler {
         // requested weight on top of the default that is already there.
         if (error.details?.['schemaDrift'] === true) {
           console.error('HebError UPSTREAM_ERROR (schema drift — operations.ts needs updating)');
-          const partialAddNote =
-            error.details?.['partialAdd'] === true
-              ? ' The item is already on your list at H-E-B’s default amount — once it is ' +
-                'fixed, adjust that instead of asking again, or the amount will be added twice.'
-              : '';
-          return input.responseBuilder
+          const partialAdd = error.details?.['partialAdd'] === true;
+          const partialAddNote = partialAdd
+            ? ' The item is already on your list at H-E-B’s default amount — once it is ' +
+              'fixed, adjust that instead of asking again, or the amount will be added twice.'
+            : '';
+          const response = input.responseBuilder
             .speak(
               'H-E-B has changed something on their side, and I cannot reach your list ' +
                 `until this skill is updated. Retrying will not help.${partialAddNote}`,
             )
             .withShouldEndSession(true)
             .getResponse();
+          // A line really was written at H-E-B's default weight, so the screen — if this
+          // request even has one — is stale exactly like any other confirmed write's.
+          return partialAdd ? attachRefreshedScreen(options, input, response) : response;
         }
 
         // Keyed on the specific marker, not on "non-retryable UPSTREAM_ERROR" — plenty of
@@ -809,7 +826,8 @@ function errorHandler(): ErrorHandler {
                 'afterwards — the item is already there; just fix the amount in the app.'
               : 'That went through only partly — the item is on your list, but H-E-B would ' +
                 'not set the amount. Please check the quantity in the H-E-B app.';
-          return input.responseBuilder.speak(speech).withShouldEndSession(true).getResponse();
+          const response = input.responseBuilder.speak(speech).withShouldEndSession(true).getResponse();
+          return attachRefreshedScreen(options, input, response);
         }
 
         // Indeterminate: the write may well have landed and the confirming read failed
@@ -875,7 +893,7 @@ export function createSkill(options: CreateSkillOptions) {
 
   builder.addRequestInterceptors(clearSupersededPending());
   builder.addResponseInterceptors(refreshScreenAfterWrite(options));
-  builder.addErrorHandlers(errorHandler());
+  builder.addErrorHandlers(errorHandler(options));
   // Not `withSkillId`, which accepts only one. Same check, same failure mode — an
   // unrecognised application id aborts before any handler runs and before the session
   // cookies are touched.

@@ -341,11 +341,17 @@ With APL enabled (see Step 2), a Show does more than speak:
 |---|---|
 | "open heb shopper skill" | draws the list immediately — no second question needed |
 | "ask heb shopper skill what is on my list" | draws up to the display cap (120 items / 12,000 bytes, see Step 2), not just the seven that get spoken |
-| "…to add oat milk" / "…to remove eggs" | redraws with the change applied |
+| "…to add oat milk" / "…to remove eggs" | redraws with the change applied, once it's actually applied |
 
 Speech from asking what's on the list, and from adding or removing, is unchanged: seven items
 is still the right number to *hear*. Only on launch does the spoken part shrink to a count
 instead — there the screen draws the list immediately, so there is nothing left to read aloud.
+
+The redraw is best effort, and only happens once something has actually been written. An
+ambiguous add or remove ("did you mean Oatly The Oat Milk?") writes nothing and does not
+redraw until you say yes; and a confirmed write's redraw is itself skipped, screen left as it
+was, if the follow-up read fails or there isn't enough of Alexa's eight-second deadline left
+to risk it — asking what's on the list catches the screen up either way.
 
 A plain Echo behaves exactly as it always did — the directive is only ever sent to a device
 that advertises the interface, because one naming an unsupported interface makes Alexa
@@ -498,7 +504,7 @@ the `Store` seam means that is a swap, not a rewrite.
 | Alexa answers about a *different* list, cheerfully | The invocation name was missing, inexact ("ask **my** heb shopper"), or contains a word Alexa owns — *list*, *cart*, *shopping*. Alexa fell through to its own built-in. See Step 2 and Step 9. |
 | Alexa offers to *create* a list named after your skill | Alexa+ read the invocation name as one of its own list names. Add the word "skill": `ask ⟨name⟩ skill ⟨request⟩`. See Step 9. |
 | "An unexpected error occurred" on `open ⟨name⟩` | Same cause — say `open ⟨name⟩ skill`, or use the `ask` form. See Step 9. |
-| The Show speaks but displays nothing | The device's APL runtime is older than this project's document version (2023.3); `supportsApl` intentionally treats that the same as no screen — nothing to fix. See Step 2. (A skill where `ALEXA_PRESENTATION_APL` isn't enabled fails every turn, not just the screen — see *There was a problem with the requested skill's response* below.) |
+| The Show speaks but displays nothing | Usually the device's APL runtime is older than this project's document version (2023.3); `supportsApl` intentionally treats that the same as no screen — nothing to fix. See Step 2. It can also mean opening the skill hit a transient H-E-B error: launch falls back to the ordinary spoken greeting with no directive rather than an error, and asking what's on the list retries the read. (A skill where `ALEXA_PRESENTATION_APL` isn't enabled fails every turn, not just the screen — see *There was a problem with the requested skill's response* below.) |
 | Skill never answers, and the Lambda shows zero invocations | The request never left Amazon — routing or naming, not AWS. Work through *Diagnosing "it just doesn't answer"* in Step 9. |
 | `terraform apply` fails with `InvalidParameterValueException … below its minimum value of [10]` | New AWS account, Lambda concurrency quota of 10. Set `alexa_reserved_concurrency = -1`, or raise the quota. See Step 5. |
 | `aws configure` exits with `EOF when reading a line` | It is interactive and had no terminal attached. Run it in a real shell. |

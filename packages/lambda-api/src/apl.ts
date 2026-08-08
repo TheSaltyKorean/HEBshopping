@@ -78,12 +78,30 @@ export function supportsApl(envelope: RequestEnvelope): boolean {
   return maxVersion === undefined || isAtLeastVersion(maxVersion, APL_DOCUMENT_VERSION);
 }
 
+type Row = { primaryText: string; secondaryText?: string };
+
 /** One row on screen: the product on the left, its amount on the right. */
-function listRow(item: ListItem): { primaryText: string; secondaryText?: string } {
+function listRow(item: ListItem): Row {
   const amount = itemAmountLabel(item);
   return amount === undefined
     ? { primaryText: itemName(item) }
     : { primaryText: itemName(item), secondaryText: amount };
+}
+
+/**
+ * Shortens `row`'s primary text so its serialized form fits within `maxChars`.
+ *
+ * Only applied to a first row that alone exceeds the whole screen budget: the loop below
+ * always keeps at least one row so the screen is never empty, but "kept" cannot mean
+ * "exempt from the budget" — item names are free text with no length bound of their own
+ * (reachable through the MCP `text` input), so an oversized first row could otherwise push
+ * the directive past Alexa's 24 KB response cap on its own.
+ */
+function truncateRow(row: Row, maxChars: number): Row {
+  const overhead = JSON.stringify({ ...row, primaryText: '' }).length;
+  const budget = Math.max(1, maxChars - overhead);
+  if (row.primaryText.length <= budget) return row;
+  return { ...row, primaryText: `${row.primaryText.slice(0, Math.max(0, budget - 1))}…` };
 }
 
 /**
@@ -127,14 +145,21 @@ export function listRenderDirective(envelope: RequestEnvelope, list: HebList): u
   // Row count alone does not bound response size — item names are free text — so rows are
   // added only while their serialized form still fits `MAX_ITEMS_CHARS`. The first row is
   // always kept even if it alone would not fit, the same way `cardList` always keeps at
-  // least a footer: an empty screen is a worse failure than one slightly over budget.
-  const shown: ListItem[] = [];
+  // least a footer — but truncated to the budget rather than exempted from it, so an
+  // oversized name can't push the response past Alexa's cap on its own.
+  const shown: Row[] = [];
   let usedChars = 0;
   for (const item of list.items) {
     if (shown.length >= MAX_DISPLAYED_ITEMS) break;
-    const rowChars = JSON.stringify(listRow(item)).length;
-    if (shown.length > 0 && usedChars + rowChars > MAX_ITEMS_CHARS) break;
-    shown.push(item);
+    let row = listRow(item);
+    let rowChars = JSON.stringify(row).length;
+    if (shown.length === 0 && rowChars > MAX_ITEMS_CHARS) {
+      row = truncateRow(row, MAX_ITEMS_CHARS);
+      rowChars = JSON.stringify(row).length;
+    } else if (shown.length > 0 && usedChars + rowChars > MAX_ITEMS_CHARS) {
+      break;
+    }
+    shown.push(row);
     usedChars += rowChars;
   }
   const dropped = list.items.length - shown.length;
@@ -156,7 +181,7 @@ export function listRenderDirective(envelope: RequestEnvelope, list: HebList): u
             : dropped > 0
               ? `Showing ${shown.length} of ${list.items.length} items`
               : `${list.items.length} item${list.items.length === 1 ? '' : 's'}`,
-        items: shown.map(listRow),
+        items: shown,
       },
     },
   };

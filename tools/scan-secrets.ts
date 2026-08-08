@@ -104,8 +104,11 @@ const RULES: Rule[] = [
     note: 'renamed away after colliding with an Alexa built-in — see the table in docs/deploy.md',
   },
   {
+    // `[\s\S]{0,30}` (not `[^\n]{0,30}`) and `\s+` (not a literal space) so a name that
+    // Markdown line-wrapped across the gap — e.g. `invocation name is **"grocery\nlist"**`,
+    // which is exactly how this line once read — still matches instead of sailing through.
     name: 'retired invocation name (declared)',
-    pattern: /invocation name[^\n]{0,30}(?:grocery list|heb list|heb cart|house list)/gi,
+    pattern: /invocation name[\s\S]{0,30}(?:grocery\s+list|heb\s+list|heb\s+cart|house\s+list)/gi,
     note: 'renamed away after colliding with an Alexa built-in — see the table in docs/deploy.md',
   },
   {

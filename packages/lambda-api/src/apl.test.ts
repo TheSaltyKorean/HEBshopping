@@ -187,9 +187,15 @@ describe('listRenderDirective', () => {
       expect(shown.length).toBeLessThan(100);
     });
 
-    it('always keeps at least one row, even one that alone exceeds the budget', () => {
+    it('keeps at least one row, truncated to fit the budget, when the name alone would exceed it', () => {
+      // A row-count-only cap would exempt this one row from the size budget entirely — the
+      // MCP `text` input has no length limit, so an oversized first item still has to be
+      // trimmed rather than sent whole, or it alone could blow Alexa's 24 KB response cap.
       const huge = list([item({ text: 'Y'.repeat(50_000) })]);
-      expect(render(screen, huge).datasources.hebList.items).toHaveLength(1);
+      const items = render(screen, huge).datasources.hebList.items;
+      expect(items).toHaveLength(1);
+      expect(items[0]?.primaryText.length).toBeLessThan(50_000);
+      expect(items[0]?.primaryText.endsWith('…')).toBe(true);
     });
   });
 });

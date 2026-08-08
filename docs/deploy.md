@@ -192,6 +192,10 @@ invocation names, see below), and put your address in `alert_email`.
 > Check yours with `aws lambda get-account-settings --query
 > 'AccountLimit.ConcurrentExecutions'`. If it prints `10`, uncomment the line.
 >
+> The 10-execution floor is account-wide, not per-function: if you also set `enable_mcp_url
+> = true`, uncommenting this line disables *that* function's reservation too, not just
+> Alexa's — otherwise Step 6 fails the same way on the MCP function instead.
+>
 > The reservation exists to bound how many invocations call H-E-B in parallel (see the
 > comment on `aws_lambda_function.alexa`), so losing it is a real if small cost — though on
 > such an account the limit of 10 is itself the ceiling. The permanent fix is to raise the

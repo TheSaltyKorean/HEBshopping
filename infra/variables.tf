@@ -57,6 +57,9 @@ variable "alexa_reserved_concurrency" {
     InvalidParameterValueException. Raise the "Concurrent executions" quota for Lambda and
     this can go back to 2. Until then the account limit is itself the ceiling, so -1 means
     "bounded by 10" rather than genuinely unbounded.
+
+    The 10-execution floor is account-wide, not per-function, so setting this to -1 also
+    drops the MCP function's reservation when enable_mcp_url is true — see main.tf.
   EOT
   type        = number
   default     = 2

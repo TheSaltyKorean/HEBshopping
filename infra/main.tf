@@ -249,7 +249,12 @@ resource "aws_lambda_function" "mcp" {
   # spaces requests *within* an invocation, so N parallel Lambdas would be N independent
   # throttles and the politeness guarantee toward Imperva would quietly become N times
   # weaker. A household's MCP usage is one request at a time anyway.
-  reserved_concurrent_executions = var.enable_mcp_url ? 1 : -1
+  #
+  # Tied to var.alexa_reserved_concurrency's -1 sentinel rather than its own toggle: the
+  # 10-unreserved-execution floor a fresh account runs into (see that variable and
+  # docs/deploy.md) is account-wide, not per-function, so a new account that also enables
+  # this URL needs both reservations dropped together, not just Alexa's.
+  reserved_concurrent_executions = var.enable_mcp_url ? (var.alexa_reserved_concurrency == -1 ? -1 : 1) : -1
 
   environment {
     variables = {

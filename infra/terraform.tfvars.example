@@ -20,9 +20,10 @@ alert_email = "PASTE-YOUR-EMAIL-HERE"
 # Uncomment on a NEW AWS account. A fresh account's Lambda "Concurrent executions" quota is
 # 10, and AWS rejects any reservation that would leave unreserved concurrency below 10 — so
 # no reservation can be made at all, whatever its size, and `terraform apply` fails with
-# InvalidParameterValueException on the Alexa function. -1 means no reservation; the account
-# limit of 10 is then the ceiling instead of the intended 2. Raise the quota and delete this
-# line to get the reservation back.
+# InvalidParameterValueException. -1 means no reservation; the account limit of 10 is then
+# the ceiling instead of the intended 2. The floor is account-wide, so this also drops the
+# MCP function's reservation if enable_mcp_url is on below. Raise the quota and delete this
+# line to get both reservations back.
 # alexa_reserved_concurrency = -1
 
 # Only if the H-E-B account has several lists.

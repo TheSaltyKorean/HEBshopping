@@ -609,11 +609,12 @@ describe('reading the list', () => {
         expect(response.response.directives ?? []).toHaveLength(0);
       });
 
-      it('bounds the refresh by the time actually left, not a fresh budget', async () => {
+      it('bounds the refresh by what is left of Alexa\'s deadline, not the Lambda\'s', async () => {
         // A default `createListOps()` call hands the refresh a whole new budget, which can
-        // run the Lambda past its own deadline and lose the already-built spoken
-        // confirmation along with the screen. The refresh must instead ask for whatever
-        // time the Lambda context reports is actually left, minus a safety margin.
+        // run past Alexa's own ~8s deadline and lose the already-built spoken confirmation
+        // along with the screen, even while the Lambda's own looser 10s timeout still shows
+        // several seconds left. 3s of Lambda time remaining means 7s has already elapsed
+        // (out of the Lambda's 10s), leaving only 1s of Alexa's 8s — minus the safety margin.
         const createListOps = vi.fn(
           (): unknown =>
             fakeOps({
@@ -653,7 +654,7 @@ describe('reading the list', () => {
         );
 
         expect(createListOps).toHaveBeenCalledTimes(2);
-        expect(createListOps).toHaveBeenLastCalledWith(2_500);
+        expect(createListOps).toHaveBeenLastCalledWith(500);
       });
 
       it('skips the redraw outright when the Lambda has essentially no time left', async () => {
@@ -743,6 +744,83 @@ describe('reading the list', () => {
         );
         expect(response.response.outputSpeech?.ssml).toContain('went through only partly');
         expect(response.response.directives ?? []).toHaveLength(0);
+      });
+
+      describe('removing', () => {
+        const opsAfterRemove = () =>
+          fakeOps({
+            getList: vi.fn(async () => listOf(5)),
+            rankLines: vi.fn(async () => [{ item: line('l1', '1', 'Sliced Turkey'), confident: true }]),
+          }) as never;
+
+        it('redraws the screen after an outright remove', async () => {
+          const response = await invokeOn(showDevice, intent('RemoveItemIntent', { item: 'turkey' }), opsAfterRemove);
+          expect(response.response.outputSpeech?.ssml).toContain('Removed');
+          expect(response.response.directives?.map((d) => d.type)).toContain(
+            'Alexa.Presentation.APL.RenderDocument',
+          );
+        });
+
+        it('does not redraw a speaker after an outright remove', async () => {
+          const response = await invokeOn(undefined, intent('RemoveItemIntent', { item: 'turkey' }), opsAfterRemove);
+          expect(response.response.outputSpeech?.ssml).toContain('Removed');
+          expect(response.response.directives ?? []).toHaveLength(0);
+        });
+
+        it('redraws the screen after a confirmed remove ("yes" to an ambiguous match)', async () => {
+          // A different line than the outright-remove branch above — `yesHandler`'s own
+          // `pending.kind === 'remove'` branch calls `markListChanged` too, and needs its
+          // own coverage since it is reached by a "yes" after an ambiguous match, not
+          // directly by `RemoveItemIntent`.
+          const skill = createSkill({
+            createListOps: () =>
+              fakeOps({
+                getList: vi.fn(async () => listOf(5)),
+                rankLines: vi.fn(async () => [
+                  { item: line('line-1', '1', 'H-E-B Whole Milk, 1 gal'), confident: false },
+                  { item: line('line-2', '2', 'H-E-B 2% Reduced Fat Milk, 1 gal'), confident: false },
+                ]),
+              }) as never,
+            skillIds: ['amzn1.ask.skill.test'],
+          });
+          let attributes: Record<string, unknown> = {};
+          const say = async (request: object) => {
+            const response = (await skill.invoke(
+              {
+                version: '1.0',
+                session: {
+                  new: false,
+                  sessionId: 's',
+                  application: { applicationId: 'amzn1.ask.skill.test' },
+                  attributes,
+                  user: { userId: 'u' },
+                },
+                context: {
+                  System: {
+                    application: { applicationId: 'amzn1.ask.skill.test' },
+                    user: { userId: 'u' },
+                    device: showDevice,
+                  },
+                },
+                request,
+              } as never,
+              {} as never,
+            )) as {
+              sessionAttributes?: Record<string, unknown>;
+              response: { outputSpeech?: { ssml?: string }; directives?: Array<{ type: string }> };
+            };
+            attributes = response.sessionAttributes ?? {};
+            return response;
+          };
+
+          await say(intent('RemoveItemIntent', { item: 'milk' }));
+          const response = await say(intent('AMAZON.YesIntent'));
+
+          expect(response.response.outputSpeech?.ssml).toContain('Removed');
+          expect(response.response.directives?.map((d) => d.type)).toContain(
+            'Alexa.Presentation.APL.RenderDocument',
+          );
+        });
       });
     });
 

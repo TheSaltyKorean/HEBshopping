@@ -107,15 +107,33 @@ function markListChanged(input: HandlerInput): void {
 }
 
 /**
- * Safety margin subtracted from the Lambda's own remaining time before handing it to the
- * refresh as its budget.
+ * Safety margin subtracted from Alexa's own remaining time before handing it to the refresh
+ * as its budget.
  *
  * Enough headroom for `HebClient`'s own timeout to fire and this interceptor to return
- * *before* AWS kills the invocation outright. Without it, resetting to a fresh budget here
- * risks the whole invocation — including the already-built spoken confirmation, not just
- * the screen — being cut off mid-refresh.
+ * *before* Alexa stops waiting. Without it, resetting to a fresh budget here risks the whole
+ * response — including the already-built spoken confirmation, not just the screen — arriving
+ * too late to be heard.
  */
 const REFRESH_SAFETY_MARGIN_MS = 500;
+
+/**
+ * This function's own timeout, from `infra/main.tf`'s `timeout = 10` on the Alexa Lambda.
+ *
+ * `getRemainingTimeInMillis()` counts down from this, not from Alexa's shorter deadline, so
+ * it is what lets elapsed time be recovered from the one number the Lambda context exposes.
+ */
+const LAMBDA_TIMEOUT_MS = 10_000;
+
+/**
+ * Alexa's real end-to-end response deadline (see `infra/main.tf` and `INVOCATION_BUDGET_MS`
+ * in `config.ts`) — tighter than the Lambda's own 10s timeout, which is only a backstop.
+ *
+ * The refresh must be bounded by what is left of *this* deadline, not by what is left of the
+ * Lambda's: a write that already spent most of its 6.5s HEB budget can still show several
+ * seconds of Lambda time remaining while Alexa itself has already stopped waiting.
+ */
+const ALEXA_DEADLINE_MS = 8_000;
 
 /**
  * Redraw the screen after a write, for devices that have one.
@@ -131,7 +149,7 @@ const REFRESH_SAFETY_MARGIN_MS = 500;
  * The fresh `ListOps` is load-bearing: the instance that performed the write has the
  * *pre-write* list cached, and asking it would render precisely the state being replaced.
  * That freshness must not also reset the invocation's time budget, so it is bounded by
- * whatever the Lambda context reports is actually left, not a new default.
+ * whatever is actually left of Alexa's own deadline, not the Lambda's looser one.
  */
 async function attachRefreshedScreen(
   options: CreateSkillOptions,
@@ -141,8 +159,10 @@ async function attachRefreshedScreen(
   if (!supportsApl(input.requestEnvelope)) return response;
 
   const remaining: number | undefined = input.context?.getRemainingTimeInMillis?.();
-  if (remaining !== undefined && remaining <= REFRESH_SAFETY_MARGIN_MS) return response;
-  const budgetMs = remaining === undefined ? undefined : remaining - REFRESH_SAFETY_MARGIN_MS;
+  const alexaRemaining =
+    remaining === undefined ? undefined : remaining - (LAMBDA_TIMEOUT_MS - ALEXA_DEADLINE_MS);
+  if (alexaRemaining !== undefined && alexaRemaining <= REFRESH_SAFETY_MARGIN_MS) return response;
+  const budgetMs = alexaRemaining === undefined ? undefined : alexaRemaining - REFRESH_SAFETY_MARGIN_MS;
 
   try {
     const list = await options.createListOps(budgetMs).getList();

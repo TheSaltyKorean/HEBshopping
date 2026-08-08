@@ -9,7 +9,7 @@
 # Alexa developer console → your skill → Endpoint. Each starts with amzn1.ask.skill.
 #
 # A list, because Alexa allows exactly ONE invocation name per skill. If you want to say
-# both "Alexa, ask grocery list ..." and "Alexa, ask heb list ...", create two skills with
+# both "Alexa, ask heb list ..." and "Alexa, ask house list ...", create two skills with
 # the same interaction model and the same endpoint ARN, then list both ids here.
 alexa_skill_ids = ["amzn1.ask.skill.PASTE-YOUR-SKILL-ID-HERE"]
 

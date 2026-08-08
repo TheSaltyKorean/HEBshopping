@@ -65,6 +65,19 @@ describe('FileStore specifics', () => {
     }
   });
 
+  it.skipIf(!honorsOwnerOnlyMode)('creates the parent directory owner-only', async () => {
+    // The session file's directory listing (name, size, mtime) would otherwise be visible
+    // to other local accounts under a default umask, even with the file itself at 0600.
+    const { store, cleanup, directory } = await harness();
+    try {
+      await store.putSession(sampleSession());
+      const mode = (await stat(join(directory, 'nested'))).mode & 0o777;
+      expect(mode).toBe(0o700);
+    } finally {
+      await cleanup();
+    }
+  });
+
   it('treats a corrupt file as "no session" rather than throwing', async () => {
     // Callers can act on "log in again". They cannot act on a JSON parse error, and an
     // exception here would surface to a voice user as an opaque failure.

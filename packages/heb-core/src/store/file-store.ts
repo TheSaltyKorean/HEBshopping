@@ -25,6 +25,14 @@ import type { SessionState, Store } from '../types.js';
  */
 const SECRET_FILE_MODE = 0o600;
 
+/**
+ * Owner-only, for the same reason as `SECRET_FILE_MODE` one level up: the directory's
+ * listing (names, sizes, mtimes) would otherwise be visible to other local accounts under
+ * a default umask even though the session file itself is protected. Same Windows caveat as
+ * `SECRET_FILE_MODE` applies — this is a no-op there.
+ */
+const OWNER_ONLY_DIR_MODE = 0o700;
+
 export class FileStore implements Store {
   constructor(private readonly path: string) {}
 
@@ -51,7 +59,9 @@ export class FileStore implements Store {
   }
 
   async putSession(session: SessionState): Promise<void> {
-    await mkdir(dirname(this.path), { recursive: true });
+    const directory = dirname(this.path);
+    await mkdir(directory, { recursive: true });
+    await chmod(directory, OWNER_ONLY_DIR_MODE);
 
     // Write-then-rename so a crash mid-write can't leave a half-written session behind.
     // Reacquiring one costs a human login, so it is worth protecting properly.

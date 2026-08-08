@@ -322,11 +322,12 @@ normal path, not an error case:
 | "no" | offers the next one |
 | "no" again (3rd refusal) | gives up and puts the options on a card in the Alexa app |
 | "yes" | adds exactly the product it just named |
-| "what's on my list" | reads up to 7 items; longer lists get a count plus a card |
+| "what's on my list" | reads up to 7 items; longer lists get a count plus a card — an Echo Show also renders the whole list on screen |
 | "remove tortillas" | same yes/no walk, against your list rather than the catalog |
 
 One candidate is offered at a time on purpose. Three long product names read aloud is
-unusable, and there's no screen to fall back on — which is what the app card is for.
+unusable, and confirmation has no screen equivalent — the app card is what that flow falls
+back to. (Reading the list is different: see "If you have an Echo Show" in `deploy.md`.)
 
 The skill package for the ASK CLI lives in `packages/lambda-api/skill-package/`
 (`skill.json` plus the en-US interaction model). The invocation name is **"heb

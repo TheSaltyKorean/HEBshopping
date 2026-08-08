@@ -248,6 +248,16 @@ describe('the card must fit inside Alexa limits', () => {
     expect(card).toMatch(/and \d+ more \(500 items in total\)/);
   });
 
+  it('budgets by UTF-8 bytes, not UTF-16 length, so emoji-heavy names cannot double the wire size', () => {
+    // An emoji is 2 UTF-16 code units but 4 UTF-8 bytes. Budgeting by `.length` would let a
+    // card built from these pass a 7,000-character check while serializing to roughly twice
+    // that on the wire, where Alexa's cap actually applies.
+    const items = Array.from({ length: 500 }, (_, i) => line(`${'😀'.repeat(20)} Product ${i}`));
+    const card = cardList(items);
+
+    expect(Buffer.byteLength(card, 'utf8')).toBeLessThanOrEqual(7_000);
+  });
+
   it('leaves an ordinary list complete', () => {
     const card = cardList([line('Fresh Bananas'), line('H-E-B Half & Half, 32 oz')]);
     expect(card.split('\n')).toHaveLength(2);

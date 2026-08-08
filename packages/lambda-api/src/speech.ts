@@ -246,12 +246,16 @@ export function speakableList(items: readonly ListItem[]): string {
 }
 
 /**
- * Alexa's card body limit, with headroom.
+ * Alexa's card body limit, with headroom, in UTF-8 bytes.
  *
- * Cards are capped at 8000 characters and count toward the response as a whole. Exceeding
- * it makes Alexa reject the *entire* response — so an unbounded card fails `ReadListIntent`
- * outright on exactly the long lists the card exists to serve, and the user hears nothing
- * rather than the seven items that were carefully prepared for speech.
+ * Cards are capped at 8000 characters and count toward the response as a whole, and that
+ * whole-response cap (like the APL screen's, see `apl.ts`) is a byte limit — an emoji-heavy
+ * item name is a handful of UTF-16 code units but roughly twice as many UTF-8 bytes, so
+ * budgeting by `.length` under-counts exactly the free-text names (unbounded via the MCP
+ * `text` input) that are most likely to be non-ASCII. Exceeding the cap makes Alexa reject
+ * the *entire* response — so an unbounded card fails `ReadListIntent` outright on exactly the
+ * long lists the card exists to serve, and the user hears nothing rather than the seven items
+ * that were carefully prepared for speech.
  */
 const MAX_CARD_CHARS = 7_000;
 
@@ -298,13 +302,15 @@ export function cardList(items: readonly ListItem[]): string {
     const remaining = items.length - index;
     // Reserve room for the footer, so the truncation notice itself cannot overflow.
     const footer = `\n… and ${remaining} more (${items.length} items in total).`;
+    const lineBytes = Buffer.byteLength(line, 'utf8');
+    const footerBytes = Buffer.byteLength(footer, 'utf8');
 
-    if (used + line.length + 1 + footer.length > MAX_CARD_CHARS) {
+    if (used + lineBytes + 1 + footerBytes > MAX_CARD_CHARS) {
       lines.push(footer.trimStart());
       break;
     }
     lines.push(line);
-    used += line.length + 1;
+    used += lineBytes + 1;
   }
 
   return lines.join('\n');

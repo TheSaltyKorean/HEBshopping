@@ -94,13 +94,15 @@ const RULES: Rule[] = [
   // review rounds to fully land — a stale doc or leftover example resurrecting one is the
   // exact bug this scanner is now cheap insurance against.
   //
-  // Scoped to how the name actually surfaces — after "ask" as a spoken example, in an
-  // "invocation name is" declaration, or as the interaction model's own field — rather than
-  // the bare words, which also appear constantly as ordinary prose ("your H-E-B grocery
-  // list") unrelated to the invocation-name bug.
+  // Scoped to how the name actually surfaces — after "ask" or "open" as a spoken example, in
+  // an "invocation name is" declaration, or as the interaction model's own field — rather
+  // than the bare words, which also appear constantly as ordinary prose ("your H-E-B grocery
+  // list") unrelated to the invocation-name bug. "open" is its own invocation form (see
+  // docs/deploy.md's "open heb shopper" row) and routes a retired name to the same Alexa
+  // built-in as "ask" does.
   {
     name: 'retired invocation name (spoken example)',
-    pattern: /\bask\s+(?:the\s+|my\s+)?(?:grocery list|heb list|heb cart|house list)\b/gi,
+    pattern: /\b(?:ask|open)\s+(?:the\s+|my\s+)?(?:grocery list|heb list|heb cart|house list)\b/gi,
     note: 'renamed away after colliding with an Alexa built-in — see the table in docs/deploy.md',
   },
   {

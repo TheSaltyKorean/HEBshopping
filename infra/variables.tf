@@ -58,8 +58,9 @@ variable "alexa_reserved_concurrency" {
     this can go back to 2. Until then the account limit is itself the ceiling, so -1 means
     "bounded by 10" rather than genuinely unbounded.
 
-    The 10-execution floor is account-wide, not per-function, so setting this to -1 also
-    drops the MCP function's reservation when enable_mcp_url is true — see main.tf.
+    The 10-execution floor is account-wide, not per-function. Setting this to -1 does not
+    touch the MCP function's own reservation (see main.tf) — if enable_mcp_url is also
+    true, apply keeps failing on that function until the quota is raised for both.
   EOT
   type        = number
   default     = 2

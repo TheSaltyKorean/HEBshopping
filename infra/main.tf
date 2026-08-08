@@ -250,11 +250,13 @@ resource "aws_lambda_function" "mcp" {
   # throttles and the politeness guarantee toward Imperva would quietly become N times
   # weaker. A household's MCP usage is one request at a time anyway.
   #
-  # Tied to var.alexa_reserved_concurrency's -1 sentinel rather than its own toggle: the
-  # 10-unreserved-execution floor a fresh account runs into (see that variable and
-  # docs/deploy.md) is account-wide, not per-function, so a new account that also enables
-  # this URL needs both reservations dropped together, not just Alexa's.
-  reserved_concurrent_executions = var.enable_mcp_url ? (var.alexa_reserved_concurrency == -1 ? -1 : 1) : -1
+  # Independent of var.alexa_reserved_concurrency on purpose: this endpoint is public and
+  # unauthenticated, so it always keeps its own reservation when enabled rather than
+  # borrowing Alexa's -1 sentinel. On a fresh account (see that variable and
+  # docs/deploy.md) that means enabling this URL keeps failing `terraform apply` until the
+  # account's concurrency quota is raised, instead of silently applying with no reservation
+  # and letting a bogus bearer value exhaust the shared executions and starve Alexa.
+  reserved_concurrent_executions = var.enable_mcp_url ? 1 : -1
 
   environment {
     variables = {

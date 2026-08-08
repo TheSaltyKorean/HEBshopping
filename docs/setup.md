@@ -330,7 +330,7 @@ unusable, and there's no screen to fall back on — which is what the app card i
 
 The skill package for the ASK CLI lives in `packages/lambda-api/skill-package/`
 (`skill.json` plus the en-US interaction model). The invocation name is **"heb
-list"**; change it in `interactionModels/custom/en-US.json` if you'd rather say something
+shopper"**; change it in `interactionModels/custom/en-US.json` if you'd rather say something
 else.
 
 Alexa allows **one invocation name per skill** — there is no alias list. To answer to

@@ -54,7 +54,7 @@ export function listId(): string | undefined {
  */
 export function requireSkillIds(): string[] {
   // Comma-separated, because Alexa allows one invocation name per skill: answering to
-  // both "grocery list" and "heb list" means two skills sharing this function.
+  // both "heb shopper" and "house shopper" means two skills sharing this function.
   const ids = required('HEB_SKILL_ID')
     .split(',')
     .map((id) => id.trim())

@@ -322,7 +322,10 @@ describe('weight on a counter line', () => {
     // 2.5 lb" before appending the cap caveat, none of which was this request's doing.
     // `already_present` says what actually happened: the line was already there, unchanged by
     // this call. `weightRequested` still carries the merged total (3) so the caller renders
-    // "H-E-B only sells up to 2.5 lb, could not bring it up to 3".
+    // "H-E-B only sells up to 2.5 lb, could not bring it up to 3". `wrote` must NOT be `false`
+    // here, though: this request's own `HebAddShoppingListItems` call already ran and merged
+    // into the household member's line (that merge is what put it at quantity 2), so a write
+    // did land even though the follow-up weight adjustment then had nothing left to raise.
     const { ops, lines } = scripted([]);
     const client = (ops as unknown as { client: { execute: (d: unknown) => Promise<unknown> } })
       .client;
@@ -339,6 +342,26 @@ describe('weight on a counter line', () => {
     expect(result.status).toBe('already_present');
     expect(result.status === 'already_present' && result.item.weight).toBe(2.5);
     expect(result.status === 'already_present' && result.weightRequested).toBe(3);
+    expect(result.status === 'already_present' && result.wrote).not.toBe(false);
+  });
+
+  it('reports wrote: false for a pre-existing line already at its weight ceiling', async () => {
+    // Unlike the concurrent-merge case above, this line was already on the list — at the
+    // ladder's top rung — before this call. `adjustWeight` sees `target === line.weight` and
+    // makes no HEB call at all, so the result must say `wrote: false` the same way the other
+    // no-write branches in `addItem` do, or a caller like `confirmAdded` defaults `wrote` to
+    // true and fires a screen refresh for a request that changed nothing.
+    const { ops, sent } = scripted([
+      { id: 'line-0', quantity: 1, weight: 2.5, productId: 'p-turkey' },
+    ]);
+
+    const result = await ops.addItem({ productId: 'p-turkey', weight: 0.5 });
+
+    expect(result.status).toBe('already_present');
+    expect(result.status === 'already_present' && result.item.weight).toBe(2.5);
+    expect(result.status === 'already_present' && result.weightRequested).toBe(3);
+    expect(result.status === 'already_present' && result.wrote).toBe(false);
+    expect(weightUpdates(sent)).toHaveLength(0);
   });
 
   it('preserves a definitive refusal instead of reconciling it into a generic error', async () => {

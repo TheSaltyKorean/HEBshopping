@@ -508,8 +508,8 @@ export class HebListOps implements ListOps {
         // reporting bare `already_present` reads identically to a request that never
         // asked for more, so surface the ignored count instead of dropping it quietly.
         return quantity > 1
-          ? { status: 'already_present', item: existing, quantityRequested: quantity }
-          : { status: 'already_present', item: existing };
+          ? { status: 'already_present', item: existing, quantityRequested: quantity, wrote: false }
+          : { status: 'already_present', item: existing, wrote: false };
       }
       // Re-read immediately before computing the target. The absolute write cannot be made
       // atomic, so the best available is to shrink the window between observing the weight
@@ -545,6 +545,9 @@ export class HebListOps implements ListOps {
       return {
         status: 'already_present',
         item: await this.adjustWeight(listId, fresh, target),
+        // Already at the ladder's top rung: `adjustWeight` makes no HEB call, so this must
+        // report the same `wrote: false` as the other no-write branches in this method.
+        ...(target === base ? { wrote: false } : {}),
         ...shortfall,
       };
     }
@@ -568,6 +571,7 @@ export class HebListOps implements ListOps {
         item: existing,
         quantityRequested: existing.quantity + quantity,
         ...(input.weight === undefined ? {} : { weightRequested: input.weight }),
+        wrote: false,
       };
     }
 
@@ -726,6 +730,10 @@ export class HebListOps implements ListOps {
       return {
         status: noContribution ? 'already_present' : status,
         item: await this.adjustWeight(listId, added, target, !wasPresent && !merged),
+        // No `wrote: false` here, unlike the existing-line ladder-ceiling branch above: this
+        // call's own `addShoppingListItemsV2` mutation (see above) already ran and merged into
+        // the concurrently created line, so a write did land even when `adjustWeight` itself
+        // has nothing left to do.
         ...shortfall,
       };
     }

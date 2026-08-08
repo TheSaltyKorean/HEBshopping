@@ -86,6 +86,41 @@ const RULES: Rule[] = [
     pattern: /["']?store(?:Number|Id)["']?\s*:\s*["']?\d{2,5}["']?/gi,
     note: 'store number/id identifies the account’s location — use <storeNumber> placeholder',
   },
+  // Not a secret or PII, unlike everything above — a regression guard riding this same gate
+  // because it is the one that already runs on every commit. "grocery list", "heb list" and
+  // "heb cart" are invocation names measured (docs/deploy.md's table) to collide with an
+  // Alexa built-in feature and silently never reach this skill; "house list" was the second
+  // skill's name from the same family. All were renamed away, and the rename took four
+  // review rounds to fully land — a stale doc or leftover example resurrecting one is the
+  // exact bug this scanner is now cheap insurance against.
+  //
+  // Scoped to how the name actually surfaces — after "ask" or "open" as a spoken example, in
+  // an "invocation name is" declaration, or as the interaction model's own field — rather
+  // than the bare words, which also appear constantly as ordinary prose ("your H-E-B grocery
+  // list") unrelated to the invocation-name bug. "open" is its own invocation form (see
+  // docs/deploy.md's "open heb shopper" row) and routes a retired name to the same Alexa
+  // built-in as "ask" does.
+  {
+    // `\s+` (not a literal space) between each name's two words, matching the "declared" rule
+    // below, so a spoken example Markdown line-wrapped across the gap — e.g. `ask grocery\nlist
+    // to add milk` — still matches instead of sailing through.
+    name: 'retired invocation name (spoken example)',
+    pattern: /\b(?:ask|open)\s+(?:the\s+|my\s+)?(?:grocery\s+list|heb\s+list|heb\s+cart|house\s+list)\b/gi,
+    note: 'renamed away after colliding with an Alexa built-in — see the table in docs/deploy.md',
+  },
+  {
+    // `[\s\S]{0,30}` (not `[^\n]{0,30}`) and `\s+` (not a literal space) so a name that
+    // Markdown line-wrapped across the gap — e.g. `invocation name is **"grocery\nlist"**`,
+    // which is exactly how this line once read — still matches instead of sailing through.
+    name: 'retired invocation name (declared)',
+    pattern: /invocation name[\s\S]{0,30}(?:grocery\s+list|heb\s+list|heb\s+cart|house\s+list)/gi,
+    note: 'renamed away after colliding with an Alexa built-in — see the table in docs/deploy.md',
+  },
+  {
+    name: 'retired invocation name (interaction model)',
+    pattern: /"invocationName"\s*:\s*"(?:grocery list|heb list|heb cart|house list)"/gi,
+    note: 'renamed away after colliding with an Alexa built-in — see the table in docs/deploy.md',
+  },
 ];
 
 /** Paths that legitimately contain hash-like or id-like strings. */

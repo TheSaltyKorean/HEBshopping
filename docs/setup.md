@@ -322,15 +322,16 @@ normal path, not an error case:
 | "no" | offers the next one |
 | "no" again (3rd refusal) | gives up and puts the options on a card in the Alexa app |
 | "yes" | adds exactly the product it just named |
-| "what's on my list" | reads up to 7 items; longer lists get a count plus a card |
+| "what's on my list" | reads up to 7 items; longer lists get a count plus a card — a screen-capable device also renders the list, up to a 120-item, 12,000-byte display cap, past which it shows a "Showing X of Y items" subtitle |
 | "remove tortillas" | same yes/no walk, against your list rather than the catalog |
 
 One candidate is offered at a time on purpose. Three long product names read aloud is
-unusable, and there's no screen to fall back on — which is what the app card is for.
+unusable, and confirmation has no screen equivalent — the app card is what that flow falls
+back to. (Reading the list is different: see "If you have an Echo Show" in `deploy.md`.)
 
 The skill package for the ASK CLI lives in `packages/lambda-api/skill-package/`
-(`skill.json` plus the en-US interaction model). The invocation name is **"grocery
-list"**; change it in `interactionModels/custom/en-US.json` if you'd rather say something
+(`skill.json` plus the en-US interaction model). The invocation name is **"heb
+shopper"**; change it in `interactionModels/custom/en-US.json` if you'd rather say something
 else.
 
 Alexa allows **one invocation name per skill** — there is no alias list. To answer to
@@ -369,7 +370,7 @@ adding the wrong product costs a wasted trip to the store.
 Deli meat and cheese sliced to order, and seafood, are priced per pound, so you can ask for
 an amount:
 
-> "Alexa, ask grocery list to add two pounds of honey smoked turkey breast"
+> "Alexa, ask heb shopper skill to add two pounds of honey smoked turkey breast"
 > "…add half a pound of sliced cheddar"
 > "…add a pound and a half of jumbo shrimp"
 

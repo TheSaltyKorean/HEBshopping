@@ -8,9 +8,9 @@
           "summary": "Add, read, and remove items on a personal H-E-B shopping list.",
           "description": "A private, self-hosted skill for one household's H-E-B shopping list. Not affiliated with or endorsed by H-E-B. Intended to stay in development mode; it is not distributable, because it has no account linking and rides an unofficial API.",
           "examplePhrases": [
-            "Alexa, ask grocery list to add oat milk",
-            "Alexa, ask grocery list what is on my list",
-            "Alexa, ask grocery list to remove tortillas"
+            "Alexa, ask heb shopper skill to add oat milk",
+            "Alexa, ask heb shopper skill what is on my list",
+            "Alexa, ask heb shopper skill to remove tortillas"
           ],
           "keywords": [
             "grocery",
@@ -31,7 +31,12 @@
       "custom": {
         "endpoint": {
           "uri": "arn:aws:lambda:us-east-1:000000000000:function:heb-shopping-list"
-        }
+        },
+        "interfaces": [
+          {
+            "type": "ALEXA_PRESENTATION_APL"
+          }
+        ]
       }
     },
     "privacyAndCompliance": {

@@ -210,7 +210,14 @@ resource "aws_lambda_function" "alexa" {
   # the worst case to four in-flight requests instead of an unbounded fan-out, which is
   # the right trade for a household. Enforcing it exactly needs a shared limiter, which
   # would cost more round trips than the problem is worth here.
-  reserved_concurrent_executions = 2
+  #
+  # Configurable only because a *reservation of any size* is impossible on a brand-new AWS
+  # account: the default account-wide concurrency limit is 10, AWS refuses to let unreserved
+  # concurrency drop below 10, and so every reservation fails until the quota is raised. That
+  # is not an edge case here — this project is distributed as "fork it and run your own copy",
+  # so a fresh account is the normal starting point and hardcoding this made `terraform apply`
+  # fail for everyone following docs/deploy.md. See var.alexa_reserved_concurrency.
+  reserved_concurrent_executions = var.alexa_reserved_concurrency
 
   environment {
     variables = {
@@ -242,6 +249,13 @@ resource "aws_lambda_function" "mcp" {
   # spaces requests *within* an invocation, so N parallel Lambdas would be N independent
   # throttles and the politeness guarantee toward Imperva would quietly become N times
   # weaker. A household's MCP usage is one request at a time anyway.
+  #
+  # Independent of var.alexa_reserved_concurrency on purpose: this endpoint is public and
+  # unauthenticated, so it always keeps its own reservation when enabled rather than
+  # borrowing Alexa's -1 sentinel. On a fresh account (see that variable and
+  # docs/deploy.md) that means enabling this URL keeps failing `terraform apply` until the
+  # account's concurrency quota is raised, instead of silently applying with no reservation
+  # and letting a bogus bearer value exhaust the shared executions and starve Alexa.
   reserved_concurrent_executions = var.enable_mcp_url ? 1 : -1
 
   environment {

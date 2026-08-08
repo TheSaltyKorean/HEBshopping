@@ -65,7 +65,7 @@ function envelope(request: object, sessionAttributes: Attributes): object {
 const intent = (name: string, slots: Record<string, string> = {}): object => ({
   type: 'IntentRequest',
   requestId: 'r',
-  timestamp: new Date(0).toISOString(),
+  timestamp: new Date().toISOString(),
   locale: 'en-US',
   intent: {
     name,
@@ -319,6 +319,621 @@ describe('reading the list', () => {
     expect(turn.speech).toContain('empty');
     expect(turn.card).toBeNull();
   });
+
+  describe('on a device with a screen', () => {
+    const items = Array.from({ length: 20 }, (_, i) => line(`l${i}`, `${i}`, `Product Number ${i}`));
+    const listOf = (n: number) => ({
+      listId: 'L',
+      name: 'Shopping',
+      storeId: '1',
+      items: items.slice(0, n),
+    });
+
+    const readOn = async (device: object | undefined, count: number) => {
+      const skill = createSkill({
+        createListOps: () => fakeOps({ getList: vi.fn(async () => listOf(count)) }) as never,
+        skillIds: ['amzn1.ask.skill.test'],
+      });
+      const response = (await skill.invoke(
+        {
+          version: '1.0',
+          session: {
+            new: true,
+            sessionId: 's',
+            application: { applicationId: 'amzn1.ask.skill.test' },
+            attributes: {},
+            user: { userId: 'u' },
+          },
+          context: {
+            System: {
+              application: { applicationId: 'amzn1.ask.skill.test' },
+              user: { userId: 'u' },
+              ...(device === undefined ? {} : { device }),
+            },
+          },
+          request: intent('ReadListIntent'),
+        } as never,
+        {} as never,
+      )) as { response: { directives?: Array<{ type: string; datasources?: unknown }> } };
+      return response.response.directives ?? [];
+    };
+
+    const showDevice = { supportedInterfaces: { 'Alexa.Presentation.APL': {} } };
+
+    it('sends no directive to a speaker', async () => {
+      // A directive naming an unsupported interface makes Alexa reject the whole response,
+      // so the plain-Echo path has to stay byte-for-byte what it was.
+      expect(await readOn(undefined, 3)).toHaveLength(0);
+    });
+
+    it('renders the list on a Show', async () => {
+      const directives = await readOn(showDevice, 3);
+      expect(directives.map((d) => d.type)).toContain('Alexa.Presentation.APL.RenderDocument');
+    });
+
+    it('renders the list on launch, so opening the skill is enough to see it', async () => {
+      // "Open heb shopper skill" on a Show used to answer with a menu of things you could
+      // ask for, next to a screen that could simply have shown the list.
+      const skill = createSkill({
+        createListOps: () => fakeOps({ getList: vi.fn(async () => listOf(4)) }) as never,
+        skillIds: ['amzn1.ask.skill.test'],
+      });
+      const response = (await skill.invoke(
+        {
+          version: '1.0',
+          session: {
+            new: true,
+            sessionId: 's',
+            application: { applicationId: 'amzn1.ask.skill.test' },
+            attributes: {},
+            user: { userId: 'u' },
+          },
+          context: {
+            System: {
+              application: { applicationId: 'amzn1.ask.skill.test' },
+              user: { userId: 'u' },
+              device: showDevice,
+            },
+          },
+          request: { type: 'LaunchRequest', requestId: 'r', timestamp: new Date().toISOString(), locale: 'en-US' },
+        } as never,
+        {} as never,
+      )) as {
+        response: {
+          outputSpeech?: { ssml?: string };
+          directives?: Array<{ type: string; datasources?: unknown }>;
+        };
+      };
+
+      expect(response.response.directives?.map((d) => d.type)).toContain(
+        'Alexa.Presentation.APL.RenderDocument',
+      );
+      // Says the count, not the contents — the screen is doing the reading.
+      expect(response.response.outputSpeech?.ssml).toContain('4 items');
+    });
+
+    it('leaves a speaker launch instant, with no list fetch at all', async () => {
+      // Fetching to launch would put a network round trip in front of every "open H-E-B
+      // list" and buy nothing audible, since the list still has to be asked for.
+      const getList = vi.fn(async () => listOf(4));
+      const skill = createSkill({
+        createListOps: () => fakeOps({ getList }) as never,
+        skillIds: ['amzn1.ask.skill.test'],
+      });
+      await skill.invoke(
+        {
+          version: '1.0',
+          session: {
+            new: true,
+            sessionId: 's',
+            application: { applicationId: 'amzn1.ask.skill.test' },
+            attributes: {},
+            user: { userId: 'u' },
+          },
+          context: {
+            System: { application: { applicationId: 'amzn1.ask.skill.test' }, user: { userId: 'u' } },
+          },
+          request: { type: 'LaunchRequest', requestId: 'r', timestamp: new Date().toISOString(), locale: 'en-US' },
+        } as never,
+        {} as never,
+      );
+
+      expect(getList).not.toHaveBeenCalled();
+    });
+
+    it('falls back to the instant greeting, not an error, when launch on a Show cannot fetch the list', async () => {
+      // Before this handler touched the network, "open H-E-B list" always succeeded
+      // instantly on every device. A transient HEB failure must not turn that into a spoken
+      // error with the session ended — it should degrade to the same greeting a speaker
+      // gets, so a follow-up question can retry the read.
+      const skill = createSkill({
+        createListOps: () => fakeOps({ getList: vi.fn(async () => { throw new HebError('UPSTREAM_ERROR', 'down'); }) }) as never,
+        skillIds: ['amzn1.ask.skill.test'],
+      });
+      const response = (await skill.invoke(
+        {
+          version: '1.0',
+          session: {
+            new: true,
+            sessionId: 's',
+            application: { applicationId: 'amzn1.ask.skill.test' },
+            attributes: {},
+            user: { userId: 'u' },
+          },
+          context: {
+            System: {
+              application: { applicationId: 'amzn1.ask.skill.test' },
+              user: { userId: 'u' },
+              device: showDevice,
+            },
+          },
+          request: { type: 'LaunchRequest', requestId: 'r', timestamp: new Date().toISOString(), locale: 'en-US' },
+        } as never,
+        {} as never,
+      )) as {
+        response: {
+          outputSpeech?: { ssml?: string };
+          directives?: Array<{ type: string; datasources?: unknown }>;
+          shouldEndSession?: boolean;
+        };
+      };
+
+      expect(response.response.outputSpeech?.ssml).toContain('H-E-B list.');
+      expect(response.response.directives ?? []).toHaveLength(0);
+      expect(response.response.shouldEndSession).not.toBe(true);
+    });
+
+    it('gives the session-expired remedy, not the instant greeting, when launch cannot reach H-E-B at all', async () => {
+      // Unlike a transient upstream hiccup, a dead session is not going to fix itself on a
+      // follow-up question — swallowing it into the generic greeting would leave the listener
+      // with neither a list nor any indication of what is wrong, and skip the log line the
+      // CloudWatch alarm watches for.
+      const skill = createSkill({
+        createListOps: () =>
+          fakeOps({
+            getList: vi.fn(async () => {
+              throw new HebError('SESSION_EXPIRED', 'HEB rejected the stored session.');
+            }),
+          }) as never,
+        skillIds: ['amzn1.ask.skill.test'],
+      });
+      const response = (await skill.invoke(
+        {
+          version: '1.0',
+          session: {
+            new: true,
+            sessionId: 's',
+            application: { applicationId: 'amzn1.ask.skill.test' },
+            attributes: {},
+            user: { userId: 'u' },
+          },
+          context: {
+            System: {
+              application: { applicationId: 'amzn1.ask.skill.test' },
+              user: { userId: 'u' },
+              device: showDevice,
+            },
+          },
+          request: { type: 'LaunchRequest', requestId: 'r', timestamp: new Date().toISOString(), locale: 'en-US' },
+        } as never,
+        {} as never,
+      )) as {
+        response: { outputSpeech?: { ssml?: string }; shouldEndSession?: boolean };
+      };
+
+      expect(response.response.outputSpeech?.ssml).toContain('login has expired');
+      expect(response.response.shouldEndSession).toBe(true);
+    });
+
+    describe('after a write', () => {
+      const invokeOn = async (
+        device: object | undefined,
+        request: object,
+        createListOps: () => unknown,
+      ) => {
+        const skill = createSkill({
+          createListOps: createListOps as never,
+          skillIds: ['amzn1.ask.skill.test'],
+        });
+        return (await skill.invoke(
+          {
+            version: '1.0',
+            session: {
+              new: true,
+              sessionId: 's',
+              application: { applicationId: 'amzn1.ask.skill.test' },
+              attributes: {},
+              user: { userId: 'u' },
+            },
+            context: {
+              System: {
+                application: { applicationId: 'amzn1.ask.skill.test' },
+                user: { userId: 'u' },
+                ...(device === undefined ? {} : { device }),
+              },
+            },
+            request,
+          } as never,
+          {} as never,
+        )) as {
+          response: {
+            outputSpeech?: { ssml?: string };
+            directives?: Array<{ type: string }>;
+          };
+        };
+      };
+
+      /** Adds succeed; each `getList` returns the post-write list. */
+      const opsAfterAdd = (getList: () => Promise<unknown>) => () =>
+        fakeOps({
+          getList: vi.fn(getList),
+          addItem: vi.fn(async () => ({
+            status: 'added',
+            item: line('new', '9', 'Oat Milk'),
+            quantityRequested: 1,
+          })),
+        }) as never;
+
+      it('redraws the screen, so an add is visible without asking again', async () => {
+        const response = await invokeOn(
+          showDevice,
+          intent('AddItemIntent', { item: 'oat milk' }),
+          opsAfterAdd(async () => listOf(5)),
+        );
+        expect(response.response.outputSpeech?.ssml).toContain('Added');
+        expect(response.response.directives?.map((d) => d.type)).toContain(
+          'Alexa.Presentation.APL.RenderDocument',
+        );
+      });
+
+      it('does not redraw on a speaker', async () => {
+        const response = await invokeOn(
+          undefined,
+          intent('AddItemIntent', { item: 'oat milk' }),
+          opsAfterAdd(async () => listOf(5)),
+        );
+        expect(response.response.outputSpeech?.ssml).toContain('Added');
+        expect(response.response.directives ?? []).toHaveLength(0);
+      });
+
+      it('still confirms the add when the redraw fails', async () => {
+        // The write has already committed. Turning a successful add into a spoken error
+        // because a cosmetic refresh failed would be strictly worse than a stale screen.
+        const response = await invokeOn(
+          showDevice,
+          intent('AddItemIntent', { item: 'oat milk' }),
+          opsAfterAdd(async () => {
+            throw new Error('HEB unreachable');
+          }),
+        );
+        expect(response.response.outputSpeech?.ssml).toContain('Added');
+        expect(response.response.directives ?? []).toHaveLength(0);
+      });
+
+      it('does not redraw when the add only asked a question', async () => {
+        // `needs_confirmation` wrote nothing, so a refresh would spend a round trip
+        // redrawing the list exactly as it already is.
+        const response = await invokeOn(
+          showDevice,
+          intent('AddItemIntent', { item: 'tortillas' }),
+          () =>
+            fakeOps({
+              getList: vi.fn(async () => listOf(5)),
+              addItem: vi.fn(async () => ({
+                status: 'needs_confirmation' as const,
+                match: { product: SAUCES[0]!, confidence: 0.55, alternatives: [SAUCES[1]!] },
+              })),
+            }) as never,
+        );
+        expect(response.response.outputSpeech?.ssml).toContain('Did you mean');
+        expect(response.response.directives ?? []).toHaveLength(0);
+      });
+
+      it('does not redraw when already_present wrote nothing', async () => {
+        // `HebListOps` reports `already_present` with `wrote: false` when it never issued a
+        // mutation at all — blocked by the quantity ceiling, or a counter good re-asked with
+        // no weight. A refresh here would spend a round trip redrawing a list that never
+        // changed.
+        const response = await invokeOn(
+          showDevice,
+          intent('AddItemIntent', { item: 'sliced turkey' }),
+          () =>
+            fakeOps({
+              getList: vi.fn(async () => listOf(5)),
+              addItem: vi.fn(async () => ({
+                status: 'already_present' as const,
+                item: line('l1', '1', 'Sliced Turkey', 1),
+                wrote: false,
+              })),
+            }) as never,
+        );
+        expect(response.response.outputSpeech?.ssml).toContain('already on your list');
+        expect(response.response.directives ?? []).toHaveLength(0);
+      });
+
+      it('bounds the refresh by what is left of Alexa\'s deadline, measured from when Alexa sent the request', async () => {
+        // A default `createListOps()` call hands the refresh a whole new budget, which can
+        // run past Alexa's own ~8s deadline and lose the already-built spoken confirmation
+        // along with the screen. Measured from the request's own timestamp — not from
+        // `getRemainingTimeInMillis()`, which only counts down from when this Lambda
+        // invocation itself started and so misses routing delay and cold-start time — 7s
+        // having already elapsed leaves only 1s of Alexa's 8s, minus the safety margin.
+        const createListOps = vi.fn(
+          (): unknown =>
+            fakeOps({
+              addItem: vi.fn(async () => ({
+                status: 'added' as const,
+                item: line('new', '9', 'Oat Milk'),
+                quantityRequested: 1,
+              })),
+              getList: vi.fn(async () => listOf(5)),
+            }),
+        );
+        const skill = createSkill({
+          createListOps: createListOps as never,
+          skillIds: ['amzn1.ask.skill.test'],
+        });
+
+        vi.useFakeTimers();
+        try {
+          const request = intent('AddItemIntent', { item: 'oat milk' });
+          vi.advanceTimersByTime(7_000);
+          await skill.invoke(
+            {
+              version: '1.0',
+              session: {
+                new: true,
+                sessionId: 's',
+                application: { applicationId: 'amzn1.ask.skill.test' },
+                attributes: {},
+                user: { userId: 'u' },
+              },
+              context: {
+                System: {
+                  application: { applicationId: 'amzn1.ask.skill.test' },
+                  user: { userId: 'u' },
+                  device: showDevice,
+                },
+              },
+              request,
+            } as never,
+            {} as never,
+          );
+        } finally {
+          vi.useRealTimers();
+        }
+
+        expect(createListOps).toHaveBeenCalledTimes(2);
+        expect(createListOps).toHaveBeenLastCalledWith(500);
+      });
+
+      it('skips the redraw outright when Alexa\'s deadline has essentially no time left', async () => {
+        const createListOps = vi.fn(
+          (): unknown =>
+            fakeOps({
+              addItem: vi.fn(async () => ({
+                status: 'added' as const,
+                item: line('new', '9', 'Oat Milk'),
+                quantityRequested: 1,
+              })),
+              getList: vi.fn(async () => listOf(5)),
+            }),
+        );
+        const skill = createSkill({
+          createListOps: createListOps as never,
+          skillIds: ['amzn1.ask.skill.test'],
+        });
+
+        let response: { response: { outputSpeech?: { ssml?: string }; directives?: unknown[] } };
+        vi.useFakeTimers();
+        try {
+          const request = intent('AddItemIntent', { item: 'oat milk' });
+          vi.advanceTimersByTime(7_900);
+          response = (await skill.invoke(
+            {
+              version: '1.0',
+              session: {
+                new: true,
+                sessionId: 's',
+                application: { applicationId: 'amzn1.ask.skill.test' },
+                attributes: {},
+                user: { userId: 'u' },
+              },
+              context: {
+                System: {
+                  application: { applicationId: 'amzn1.ask.skill.test' },
+                  user: { userId: 'u' },
+                  device: showDevice,
+                },
+              },
+              request,
+            } as never,
+            {} as never,
+          )) as never;
+        } finally {
+          vi.useRealTimers();
+        }
+
+        // The spoken confirmation still comes through — only the cosmetic refresh is
+        // skipped, exactly like the "redraw fails" case above.
+        expect(response.response.outputSpeech?.ssml).toContain('Added');
+        expect(response.response.directives ?? []).toHaveLength(0);
+        expect(createListOps).toHaveBeenCalledTimes(1);
+      });
+
+      it('redraws the screen when a write partially lands before a later step throws', async () => {
+        // ask-sdk's dispatcher never runs response interceptors once a handler has thrown —
+        // it jumps straight to the error handler — so the one error path where a write
+        // really did land (`partialAdd`) has to ask for the redraw itself.
+        const response = await invokeOn(
+          showDevice,
+          intent('AddItemIntent', { item: 'two pounds of ham' }),
+          () =>
+            fakeOps({
+              getList: vi.fn(async () => listOf(5)),
+              addItem: vi.fn(async () => {
+                throw new HebError('UPSTREAM_ERROR', 'HEB rejected the weight update.', {
+                  retryable: false,
+                  details: { partialAdd: true },
+                });
+              }),
+            }) as never,
+        );
+        expect(response.response.outputSpeech?.ssml).toContain('went through only partly');
+        expect(response.response.directives?.map((d) => d.type)).toContain(
+          'Alexa.Presentation.APL.RenderDocument',
+        );
+      });
+
+      it('does not redraw a speaker when a write partially lands before a later step throws', async () => {
+        const response = await invokeOn(
+          undefined,
+          intent('AddItemIntent', { item: 'two pounds of ham' }),
+          () =>
+            fakeOps({
+              getList: vi.fn(async () => listOf(5)),
+              addItem: vi.fn(async () => {
+                throw new HebError('UPSTREAM_ERROR', 'HEB rejected the weight update.', {
+                  retryable: false,
+                  details: { partialAdd: true },
+                });
+              }),
+            }) as never,
+        );
+        expect(response.response.outputSpeech?.ssml).toContain('went through only partly');
+        expect(response.response.directives ?? []).toHaveLength(0);
+      });
+
+      it('redraws the screen when schema drift also carries a partial write', async () => {
+        // The schema-drift error branch has its own `attachRefreshedScreen` call, separate
+        // from the plain `partialAdd` branch above — it needs its own device-aware coverage.
+        const response = await invokeOn(
+          showDevice,
+          intent('AddItemIntent', { item: 'two pounds of ham' }),
+          () =>
+            fakeOps({
+              getList: vi.fn(async () => listOf(5)),
+              addItem: vi.fn(async () => {
+                throw new HebError('UPSTREAM_ERROR', 'HEB rejected the weight update.', {
+                  retryable: false,
+                  details: { schemaDrift: true, partialAdd: true },
+                });
+              }),
+            }) as never,
+        );
+        expect(response.response.outputSpeech?.ssml).toContain('skill is updated');
+        expect(response.response.directives?.map((d) => d.type)).toContain(
+          'Alexa.Presentation.APL.RenderDocument',
+        );
+      });
+
+      it('does not redraw a speaker when schema drift also carries a partial write', async () => {
+        const response = await invokeOn(
+          undefined,
+          intent('AddItemIntent', { item: 'two pounds of ham' }),
+          () =>
+            fakeOps({
+              getList: vi.fn(async () => listOf(5)),
+              addItem: vi.fn(async () => {
+                throw new HebError('UPSTREAM_ERROR', 'HEB rejected the weight update.', {
+                  retryable: false,
+                  details: { schemaDrift: true, partialAdd: true },
+                });
+              }),
+            }) as never,
+        );
+        expect(response.response.outputSpeech?.ssml).toContain('skill is updated');
+        expect(response.response.directives ?? []).toHaveLength(0);
+      });
+
+      describe('removing', () => {
+        const opsAfterRemove = () =>
+          fakeOps({
+            getList: vi.fn(async () => listOf(5)),
+            rankLines: vi.fn(async () => [{ item: line('l1', '1', 'Sliced Turkey'), confident: true }]),
+          }) as never;
+
+        it('redraws the screen after an outright remove', async () => {
+          const response = await invokeOn(showDevice, intent('RemoveItemIntent', { item: 'turkey' }), opsAfterRemove);
+          expect(response.response.outputSpeech?.ssml).toContain('Removed');
+          expect(response.response.directives?.map((d) => d.type)).toContain(
+            'Alexa.Presentation.APL.RenderDocument',
+          );
+        });
+
+        it('does not redraw a speaker after an outright remove', async () => {
+          const response = await invokeOn(undefined, intent('RemoveItemIntent', { item: 'turkey' }), opsAfterRemove);
+          expect(response.response.outputSpeech?.ssml).toContain('Removed');
+          expect(response.response.directives ?? []).toHaveLength(0);
+        });
+
+        it('redraws the screen after a confirmed remove ("yes" to an ambiguous match)', async () => {
+          // A different line than the outright-remove branch above — `yesHandler`'s own
+          // `pending.kind === 'remove'` branch calls `markListChanged` too, and needs its
+          // own coverage since it is reached by a "yes" after an ambiguous match, not
+          // directly by `RemoveItemIntent`.
+          const skill = createSkill({
+            createListOps: () =>
+              fakeOps({
+                getList: vi.fn(async () => listOf(5)),
+                rankLines: vi.fn(async () => [
+                  { item: line('line-1', '1', 'H-E-B Whole Milk, 1 gal'), confident: false },
+                  { item: line('line-2', '2', 'H-E-B 2% Reduced Fat Milk, 1 gal'), confident: false },
+                ]),
+              }) as never,
+            skillIds: ['amzn1.ask.skill.test'],
+          });
+          let attributes: Record<string, unknown> = {};
+          const say = async (request: object) => {
+            const response = (await skill.invoke(
+              {
+                version: '1.0',
+                session: {
+                  new: false,
+                  sessionId: 's',
+                  application: { applicationId: 'amzn1.ask.skill.test' },
+                  attributes,
+                  user: { userId: 'u' },
+                },
+                context: {
+                  System: {
+                    application: { applicationId: 'amzn1.ask.skill.test' },
+                    user: { userId: 'u' },
+                    device: showDevice,
+                  },
+                },
+                request,
+              } as never,
+              {} as never,
+            )) as {
+              sessionAttributes?: Record<string, unknown>;
+              response: { outputSpeech?: { ssml?: string }; directives?: Array<{ type: string }> };
+            };
+            attributes = response.sessionAttributes ?? {};
+            return response;
+          };
+
+          await say(intent('RemoveItemIntent', { item: 'milk' }));
+          const response = await say(intent('AMAZON.YesIntent'));
+
+          expect(response.response.outputSpeech?.ssml).toContain('Removed');
+          expect(response.response.directives?.map((d) => d.type)).toContain(
+            'Alexa.Presentation.APL.RenderDocument',
+          );
+        });
+      });
+    });
+
+    it('shows every item even when speech had to cap at seven', async () => {
+      // The whole point: a Show that says "I've put the whole list in your Alexa app" while
+      // displaying nothing is worse than either surface alone.
+      const [directive] = await readOn(showDevice, 20);
+      const rendered = directive as unknown as {
+        datasources: { hebList: { items: unknown[] } };
+      };
+      expect(rendered.datasources.hebList.items).toHaveLength(20);
+    });
+  });
 });
 
 describe('removing', () => {
@@ -380,7 +995,7 @@ describe('errors speak an action, not a stack trace', () => {
 
 describe('built-in intents', () => {
   it('opens with an orientation rather than silence', async () => {
-    const turn = await conversation(fakeOps())({ type: 'LaunchRequest', requestId: 'r', timestamp: new Date(0).toISOString(), locale: 'en-US' });
+    const turn = await conversation(fakeOps())({ type: 'LaunchRequest', requestId: 'r', timestamp: new Date().toISOString(), locale: 'en-US' });
     expect(turn.speech).toContain('H-E-B list');
     expect(turn.ended).toBe(false);
   });

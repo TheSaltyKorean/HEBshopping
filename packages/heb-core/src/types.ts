@@ -195,8 +195,19 @@ export type AddResult =
   | { status: 'added'; item: ListItem; quantityRequested?: number; weightRequested?: number }
   /** Confidence below threshold. Nothing was written. */
   | { status: 'needs_confirmation'; match: MatchResult }
-  /** Already on the list; quantity was incremented instead of adding a line. */
-  | { status: 'already_present'; item: ListItem; quantityRequested?: number; weightRequested?: number };
+  /**
+   * Already on the list; quantity was incremented instead of adding a line — except when
+   * `wrote` is `false`, meaning nothing was sent to HEB at all: blocked by the quantity
+   * ceiling, or a counter good asked for again with no weight to apply. Absent (or `true`)
+   * for every other case, where a quantity merge or weight adjustment did land.
+   */
+  | {
+      status: 'already_present';
+      item: ListItem;
+      quantityRequested?: number;
+      weightRequested?: number;
+      wrote?: boolean;
+    };
 
 export interface RemoveItemInput {
   listId?: string;

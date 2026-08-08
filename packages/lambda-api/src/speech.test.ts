@@ -197,6 +197,21 @@ describe('free-text lines have no product', () => {
   it('appears on the card', () => {
     expect(cardList([freeText('pico de gallo')])).toContain('pico de gallo');
   });
+
+  it('caps unbounded free text so it cannot blow the response budget on its own', () => {
+    // The MCP `text` input has no length limit, unlike the mobile app's typed notes.
+    const spoken = speakableItem(freeText('x'.repeat(20_000)));
+    expect(spoken.length).toBeLessThan(100);
+    expect(spoken.endsWith('…')).toBe(true);
+  });
+
+  it('does not split a surrogate pair when capping free text', () => {
+    // A code-unit cut point can land between an emoji's two UTF-16 halves, leaving a lone
+    // surrogate that would render as a corrupted glyph.
+    const spoken = speakableItem(freeText(`${'x'.repeat(79)}😀${'y'.repeat(20)}`));
+    expect(spoken.endsWith('…')).toBe(true);
+    expect(spoken.isWellFormed()).toBe(true);
+  });
 });
 
 describe('offers are always distinguishable', () => {
@@ -233,10 +248,57 @@ describe('the card must fit inside Alexa limits', () => {
     expect(card).toMatch(/and \d+ more \(500 items in total\)/);
   });
 
+  it('budgets by UTF-8 bytes, not UTF-16 length, so emoji-heavy names cannot double the wire size', () => {
+    // An emoji is 2 UTF-16 code units but 4 UTF-8 bytes. Budgeting by `.length` would let a
+    // card built from these pass a 7,000-character check while serializing to roughly twice
+    // that on the wire, where Alexa's cap actually applies.
+    const items = Array.from({ length: 500 }, (_, i) => line(`${'😀'.repeat(20)} Product ${i}`));
+    const card = cardList(items);
+
+    expect(Buffer.byteLength(card, 'utf8')).toBeLessThanOrEqual(7_000);
+  });
+
+  it('accounts for JSON-escaping, so quote-heavy names truncate earlier than plain ones of the same length', () => {
+    // The card is JSON-serialized into the response, so a quote or backslash costs an extra
+    // escape byte on the wire that raw UTF-8 byte counting misses entirely — budgeting only
+    // raw bytes would admit exactly as many quote-heavy lines as plain ones of the same
+    // length, then serialize to well past the 7,000-byte cap.
+    const plain = Array.from({ length: 500 }, (_, i) => line(`Product Number ${i} padding padding pad`));
+    const quoted = Array.from({ length: 500 }, (_, i) => line(`"Product\\Number\\${i}" padding padding p`));
+
+    const plainCount = cardList(plain).split('\n').length;
+    const quotedCount = cardList(quoted).split('\n').length;
+
+    expect(quotedCount).toBeLessThan(plainCount);
+    expect(Buffer.byteLength(JSON.stringify(cardList(quoted)), 'utf8')).toBeLessThanOrEqual(8_000);
+  });
+
   it('leaves an ordinary list complete', () => {
     const card = cardList([line('Fresh Bananas'), line('H-E-B Half & Half, 32 oz')]);
     expect(card.split('\n')).toHaveLength(2);
     expect(card).not.toContain('more (');
+  });
+
+  it('keeps a truncated first line instead of an empty card, when the first item alone exceeds the budget', () => {
+    // Previously, hitting the budget broke the loop unconditionally and pushed only the
+    // footer, so an oversized first item left the card with zero item names, discarding
+    // every already-scheduled and still-to-come line along with the offending one.
+    const huge: ListItem = { lineId: 'l0', text: 'X'.repeat(50_000), quantity: 1 };
+    const card = cardList([huge, line('Milk')]);
+
+    expect(card.split('\n')[0]).not.toBe('');
+    expect(card.split('\n')[0]).toContain('…');
+    expect(Buffer.byteLength(JSON.stringify(card), 'utf8')).toBeLessThanOrEqual(8_000);
+  });
+
+  it('accounts for the JSON-escaped newline between lines, so many short lines stay under the wire cap', () => {
+    // Once the whole card is embedded in the Lambda's JSON response, each `\n` joining lines
+    // escapes to a 2-byte sequence, not 1 — undercounting it let enough short lines add up to
+    // more encoded bytes than the raw budget check saw.
+    const items = Array.from({ length: 3_000 }, (_, i) => line(`${i}`));
+    const card = cardList(items);
+
+    expect(Buffer.byteLength(JSON.stringify(card), 'utf8')).toBeLessThanOrEqual(8_000);
   });
 });
 

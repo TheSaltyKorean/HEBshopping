@@ -9,13 +9,22 @@
 # Alexa developer console → your skill → Endpoint. Each starts with amzn1.ask.skill.
 #
 # A list, because Alexa allows exactly ONE invocation name per skill. If you want to say
-# both "Alexa, ask grocery list ..." and "Alexa, ask heb list ...", create two skills with
+# both "Alexa, ask heb shopper ..." and "Alexa, ask house shopper ...", create two skills with
 # the same interaction model and the same endpoint ARN, then list both ids here.
 alexa_skill_ids = ["amzn1.ask.skill.PASTE-YOUR-SKILL-ID-HERE"]
 
 # Where "your H-E-B login expired" is sent. Strongly recommended: an expired login is a
 # handled error, so the skill keeps answering politely and nothing else tells you.
 alert_email = "PASTE-YOUR-EMAIL-HERE"
+
+# Uncomment on a NEW AWS account. A fresh account's Lambda "Concurrent executions" quota is
+# 10, and AWS rejects any reservation that would leave unreserved concurrency below 10 — so
+# no reservation can be made at all, whatever its size, and `terraform apply` fails with
+# InvalidParameterValueException. -1 means no reservation; the account limit of 10 is then
+# the ceiling instead of the intended 2. This does not touch the MCP function's own
+# reservation (see main.tf) — if enable_mcp_url is on below, apply keeps failing on that
+# function until the quota is raised. Delete this line to get the reservation back.
+# alexa_reserved_concurrency = -1
 
 # Only if the H-E-B account has several lists.
 # heb_list_id = "PASTE-LIST-ID-HERE"

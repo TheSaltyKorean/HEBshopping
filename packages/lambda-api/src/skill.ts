@@ -17,9 +17,11 @@ import type {
   HandlerInput,
   RequestHandler,
   RequestInterceptor,
+  ResponseInterceptor,
   ErrorHandler,
 } from 'ask-sdk-core';
 import type { Response } from 'ask-sdk-model';
+import { listRenderDirective, supportsApl } from './apl.js';
 import {
   hasCode,
   isHebError,
@@ -60,8 +62,12 @@ export interface CreateSkillOptions {
   /**
    * Built per invocation, never shared. `HebListOps` caches the resolved list, which is
    * correct within one command and wrong across two.
+   *
+   * `budgetMs`, when given, overrides the default invocation budget — used by the
+   * post-write screen refresh to bound itself by the time actually left of Alexa's own
+   * response deadline instead of resetting a fresh one partway through.
    */
-  createListOps: () => HebListOps;
+  createListOps: (budgetMs?: number) => HebListOps;
   /**
    * The skill ids this Lambda will accept. Empty or omitted disables the check (tests only).
    *
@@ -71,7 +77,7 @@ export interface CreateSkillOptions {
    * skill at it, so the skill id is checked and everything else rejected.
    *
    * A *list*, because Alexa allows exactly one invocation name per skill. Answering to
-   * both "grocery list" and "heb list" means two skills, and they share this one Lambda.
+   * both "heb shopper" and "house shopper" means two skills, and they share this one Lambda.
    */
   skillIds?: readonly string[];
 }
@@ -81,6 +87,102 @@ export interface CreateSkillOptions {
 // ---------------------------------------------------------------------------
 
 const REPROMPT = 'You can add something, ask what is on your list, or remove something.';
+
+/**
+ * Request attribute meaning "this turn changed the list, so any screen showing it is stale".
+ *
+ * Set where a write is *confirmed*, not where one is attempted: `addItem` returning
+ * `needs_confirmation` has written nothing, and neither does `already_present` with
+ * `wrote: false` (blocked by the quantity ceiling, or a counter good re-asked with no
+ * weight) — refreshing then would spend a round trip redrawing the list exactly as it
+ * already is.
+ */
+const LIST_CHANGED = 'hebListChanged';
+
+function markListChanged(input: HandlerInput): void {
+  input.attributesManager.setRequestAttributes({
+    ...input.attributesManager.getRequestAttributes(),
+    [LIST_CHANGED]: true,
+  });
+}
+
+/**
+ * Safety margin subtracted from Alexa's own remaining time before handing it to the refresh
+ * as its budget.
+ *
+ * Enough headroom for `HebClient`'s own timeout to fire and this interceptor to return
+ * *before* Alexa stops waiting. Without it, resetting to a fresh budget here risks the whole
+ * response — including the already-built spoken confirmation, not just the screen — arriving
+ * too late to be heard.
+ */
+const REFRESH_SAFETY_MARGIN_MS = 500;
+
+/**
+ * Alexa's real end-to-end response deadline (see `infra/main.tf` and `INVOCATION_BUDGET_MS`
+ * in `config.ts`) — tighter than the Lambda's own 10s timeout, which is only a backstop.
+ *
+ * Measured from the request envelope's own `timestamp` (set by Alexa when it sent the
+ * request), not from `context.getRemainingTimeInMillis()`: that counts down from when *this*
+ * Lambda invocation started, which on a cold start or under routing delay can be a second or
+ * more after Alexa's clock already started running. Bounding the refresh by the Lambda's
+ * countdown instead of Alexa's own elapsed time can then hand it a budget Alexa has already
+ * used up, losing the already-built spoken confirmation along with the screen.
+ */
+const ALEXA_DEADLINE_MS = 8_000;
+
+/**
+ * Redraw the screen after a write, for devices that have one.
+ *
+ * Shared by the response interceptor below (the confirmed-write paths) and by `errorHandler`
+ * (a write that partly landed before a later step threw — the ask-sdk dispatcher never runs
+ * response interceptors once a handler has thrown, so that path has to call this directly).
+ *
+ * Best-effort by construction. The write has already committed by the time this runs, so a
+ * failure here must not turn a successful add into a spoken error — a stale screen is
+ * recoverable ("what is on my list" redraws it), a false failure is not.
+ *
+ * The fresh `ListOps` is load-bearing: the instance that performed the write has the
+ * *pre-write* list cached, and asking it would render precisely the state being replaced.
+ * That freshness must not also reset the invocation's time budget, so it is bounded by
+ * whatever is actually left of Alexa's own deadline, not the Lambda's looser one.
+ */
+async function attachRefreshedScreen(
+  options: CreateSkillOptions,
+  input: HandlerInput,
+  response: Response,
+): Promise<Response> {
+  if (!supportsApl(input.requestEnvelope)) return response;
+
+  const sentAt = Date.parse(input.requestEnvelope.request.timestamp);
+  const alexaRemaining = ALEXA_DEADLINE_MS - (Date.now() - sentAt);
+  if (alexaRemaining <= REFRESH_SAFETY_MARGIN_MS) return response;
+  const budgetMs = alexaRemaining - REFRESH_SAFETY_MARGIN_MS;
+
+  try {
+    const list = await options.createListOps(budgetMs).getList();
+    const directive = listRenderDirective(input.requestEnvelope, list);
+    if (directive !== null) {
+      response.directives = [...(response.directives ?? []), directive as never];
+    }
+  } catch {
+    // Leave the screen as it was. The spoken confirmation is already correct.
+  }
+  return response;
+}
+
+/**
+ * An interceptor rather than a line in each handler: there are four confirmed-write paths
+ * today and any new one would have to remember, whereas this only needs the write marked.
+ */
+function refreshScreenAfterWrite(options: CreateSkillOptions): ResponseInterceptor {
+  return {
+    async process(input, response) {
+      if (response === undefined) return;
+      if (input.attributesManager.getRequestAttributes()[LIST_CHANGED] !== true) return;
+      await attachRefreshedScreen(options, input, response);
+    },
+  };
+}
 
 /**
  * Every candidate, not just the ones we will speak.
@@ -134,6 +236,7 @@ function giveUp(input: HandlerInput, pending: PendingChoice): Response {
  * list would look for a scannable item that is not there.
  */
 function confirmWritten(input: HandlerInput, item: ListItem, wasPresent: boolean): Response {
+  markListChanged(input);
   const name = escapeSsml(item.text);
   const speech = wasPresent
     ? `I could not find that at your H-E-B. It was already written on your list, ` +
@@ -148,7 +251,13 @@ function confirmAdded(
   wasPresent: boolean,
   quantityRequested?: number,
   weightRequested?: number,
+  wrote = true,
 ): Response {
+  // `wrote` is false only for an `already_present` result that HEB was never asked about —
+  // blocked by the quantity ceiling, or a counter good re-asked for with no weight — so the
+  // screen showing this list is not stale and does not need the refresh this triggers.
+  if (wrote) markListChanged(input);
+
   // Confirm with the *resolved* product name, never the spoken text: the whole point of
   // the dialog is that those two can differ, and echoing the request back would hide it.
   const name = escapeSsml(speakableItem(item));
@@ -267,14 +376,51 @@ const isIntent =
     Alexa.getRequestType(input.requestEnvelope) === 'IntentRequest' &&
     names.includes(Alexa.getIntentName(input.requestEnvelope));
 
-function launchHandler(): RequestHandler {
+function launchHandler(options: CreateSkillOptions): RequestHandler {
   return {
     canHandle: (input) => Alexa.getRequestType(input.requestEnvelope) === 'LaunchRequest',
-    handle: (input) =>
-      input.responseBuilder
-        .speak(`H-E-B list. ${REPROMPT}`)
-        .reprompt(REPROMPT)
-        .getResponse(),
+    async handle(input) {
+      // A speaker keeps the instant greeting. Fetching the list to launch would put a
+      // network round trip in front of every "open H-E-B list" and buy nothing audible:
+      // the list still has to be *asked* for, because reading it unprompted on every
+      // launch is the behaviour nobody wants from a twenty-six item list.
+      if (!supportsApl(input.requestEnvelope)) {
+        return input.responseBuilder.speak(`H-E-B list. ${REPROMPT}`).reprompt(REPROMPT).getResponse();
+      }
+
+      // On a screen it is the opposite: the list is the whole reason to open the skill, and
+      // making someone ask a second question to see what the device could already be
+      // showing is the thing this exists to stop. So launch renders it, and says only how
+      // many there are — the screen is doing the reading.
+      //
+      // Best-effort, like the after-write refresh: before this handler ever touched the
+      // network, "open H-E-B list" always succeeded instantly. A transient HEB failure here
+      // must not turn opening the skill into a spoken error and an ended session — fall back
+      // to the same instant greeting a speaker gets, and let a follow-up question retry.
+      //
+      // Only transient failures, though: a non-retryable `HebError` — session expired, no
+      // list, several lists, schema drift — is actionable, and swallowing it here would both
+      // deny the listener the specific remedy `errorHandler` gives and, for SESSION_EXPIRED,
+      // skip the log line the CloudWatch alarm watches for.
+      let list;
+      try {
+        list = await options.createListOps().getList();
+      } catch (error) {
+        if (isHebError(error) && !error.retryable) throw error;
+        return input.responseBuilder.speak(`H-E-B list. ${REPROMPT}`).reprompt(REPROMPT).getResponse();
+      }
+      const spoken =
+        list.items.length === 0
+          ? 'Your H-E-B list is empty.'
+          : `H-E-B list. You have ${list.items.length} item${list.items.length === 1 ? '' : 's'}.`;
+
+      const builder = input.responseBuilder.speak(`${escapeSsml(spoken)} ${REPROMPT}`);
+      const directive = listRenderDirective(input.requestEnvelope, list);
+      if (directive !== null) {
+        builder.addDirective(directive as never);
+      }
+      return builder.reprompt(REPROMPT).getResponse();
+    },
   };
 }
 
@@ -370,7 +516,14 @@ function addItemHandler(options: CreateSkillOptions): RequestHandler {
         return confirmAdded(input, result.item, false, result.quantityRequested, result.weightRequested);
       }
       if (result.status === 'already_present') {
-        return confirmAdded(input, result.item, true, result.quantityRequested, result.weightRequested);
+        return confirmAdded(
+          input,
+          result.item,
+          true,
+          result.quantityRequested,
+          result.weightRequested,
+          result.wrote,
+        );
       }
 
       const pending: PendingChoice = {
@@ -401,6 +554,16 @@ function readListHandler(options: CreateSkillOptions): RequestHandler {
       if (list.items.length > MAX_SPOKEN_ITEMS) {
         builder.withSimpleCard(CARD_TITLE, cardList(list.items));
       }
+
+      // On a screen, show the whole list. The speech still caps at MAX_SPOKEN_ITEMS because
+      // hearing twenty-six products helps nobody, but the screen has no such problem and a
+      // Show reading out "I've put the whole list in your Alexa app" while displaying
+      // nothing is the worst of both.
+      const directive = listRenderDirective(input.requestEnvelope, list);
+      if (directive !== null) {
+        builder.addDirective(directive as never);
+      }
+
       return builder.reprompt(REPROMPT).getResponse();
     },
   };
@@ -431,6 +594,7 @@ function removeItemHandler(options: CreateSkillOptions): RequestHandler {
       const best = ranked[0]!;
       if (best.confident) {
         await listOps.removeItem({ lineId: best.item.lineId });
+        markListChanged(input);
         return input.responseBuilder
           .speak(`Removed ${escapeSsml(speakableItem(best.item))}. Anything else?`)
           .reprompt(REPROMPT)
@@ -474,6 +638,7 @@ function yesHandler(options: CreateSkillOptions): RequestHandler {
 
       if (pending.kind === 'remove') {
         await listOps.removeItem({ lineId: offer.lineId! });
+        markListChanged(input);
         return input.responseBuilder
           .speak(`Removed ${escapeSsml(offer.spoken)}. Anything else?`)
           .reprompt(REPROMPT)
@@ -496,6 +661,7 @@ function yesHandler(options: CreateSkillOptions): RequestHandler {
         result.status === 'already_present',
         result.quantityRequested,
         result.weightRequested,
+        result.status === 'already_present' ? result.wrote : true,
       );
     },
   };
@@ -619,10 +785,10 @@ const SPEECH_BY_CODE: Readonly<Record<HebErrorCode, string>> = {
   UPSTREAM_ERROR: 'H-E-B is not responding right now. Please try again in a moment.',
 };
 
-function errorHandler(): ErrorHandler {
+function errorHandler(options: CreateSkillOptions): ErrorHandler {
   return {
     canHandle: () => true,
-    handle(input, error) {
+    async handle(input, error) {
       if (isHebError(error)) {
         // AMBIGUOUS_LIST covers both "several lists" and "none at all", and the remedies
         // are opposites. Telling someone with no lists to pick one is advice they cannot
@@ -649,18 +815,21 @@ function errorHandler(): ErrorHandler {
         // requested weight on top of the default that is already there.
         if (error.details?.['schemaDrift'] === true) {
           console.error('HebError UPSTREAM_ERROR (schema drift — operations.ts needs updating)');
-          const partialAddNote =
-            error.details?.['partialAdd'] === true
-              ? ' The item is already on your list at H-E-B’s default amount — once it is ' +
-                'fixed, adjust that instead of asking again, or the amount will be added twice.'
-              : '';
-          return input.responseBuilder
+          const partialAdd = error.details?.['partialAdd'] === true;
+          const partialAddNote = partialAdd
+            ? ' The item is already on your list at H-E-B’s default amount — once it is ' +
+              'fixed, adjust that instead of asking again, or the amount will be added twice.'
+            : '';
+          const response = input.responseBuilder
             .speak(
               'H-E-B has changed something on their side, and I cannot reach your list ' +
                 `until this skill is updated. Retrying will not help.${partialAddNote}`,
             )
             .withShouldEndSession(true)
             .getResponse();
+          // A line really was written at H-E-B's default weight, so the screen — if this
+          // request even has one — is stale exactly like any other confirmed write's.
+          return partialAdd ? attachRefreshedScreen(options, input, response) : response;
         }
 
         // Keyed on the specific marker, not on "non-retryable UPSTREAM_ERROR" — plenty of
@@ -677,7 +846,8 @@ function errorHandler(): ErrorHandler {
                 'afterwards — the item is already there; just fix the amount in the app.'
               : 'That went through only partly — the item is on your list, but H-E-B would ' +
                 'not set the amount. Please check the quantity in the H-E-B app.';
-          return input.responseBuilder.speak(speech).withShouldEndSession(true).getResponse();
+          const response = input.responseBuilder.speak(speech).withShouldEndSession(true).getResponse();
+          return attachRefreshedScreen(options, input, response);
         }
 
         // Indeterminate: the write may well have landed and the confirming read failed
@@ -728,7 +898,7 @@ function errorHandler(): ErrorHandler {
 
 export function createSkill(options: CreateSkillOptions) {
   const builder = Alexa.SkillBuilders.custom().addRequestHandlers(
-    launchHandler(),
+    launchHandler(options),
     // Yes/No must precede the generic stop handler, which also claims NoIntent.
     yesHandler(options),
     noHandler(),
@@ -742,7 +912,8 @@ export function createSkill(options: CreateSkillOptions) {
   );
 
   builder.addRequestInterceptors(clearSupersededPending());
-  builder.addErrorHandlers(errorHandler());
+  builder.addResponseInterceptors(refreshScreenAfterWrite(options));
+  builder.addErrorHandlers(errorHandler(options));
   // Not `withSkillId`, which accepts only one. Same check, same failure mode — an
   // unrecognised application id aborts before any handler runs and before the session
   // cookies are touched.

@@ -329,7 +329,7 @@ One candidate is offered at a time on purpose. Three long product names read alo
 unusable, and there's no screen to fall back on — which is what the app card is for.
 
 The skill package for the ASK CLI lives in `packages/lambda-api/skill-package/`
-(`skill.json` plus the en-US interaction model). The invocation name is **"grocery
+(`skill.json` plus the en-US interaction model). The invocation name is **"heb
 list"**; change it in `interactionModels/custom/en-US.json` if you'd rather say something
 else.
 

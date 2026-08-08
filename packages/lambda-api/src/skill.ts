@@ -64,8 +64,8 @@ export interface CreateSkillOptions {
    * correct within one command and wrong across two.
    *
    * `budgetMs`, when given, overrides the default invocation budget — used by the
-   * post-write screen refresh to bound itself by the time actually left in the Lambda
-   * invocation instead of resetting a fresh one partway through.
+   * post-write screen refresh to bound itself by the time actually left of Alexa's own
+   * response deadline instead of resetting a fresh one partway through.
    */
   createListOps: (budgetMs?: number) => HebListOps;
   /**
@@ -118,20 +118,15 @@ function markListChanged(input: HandlerInput): void {
 const REFRESH_SAFETY_MARGIN_MS = 500;
 
 /**
- * This function's own timeout, from `infra/main.tf`'s `timeout = 10` on the Alexa Lambda.
- *
- * `getRemainingTimeInMillis()` counts down from this, not from Alexa's shorter deadline, so
- * it is what lets elapsed time be recovered from the one number the Lambda context exposes.
- */
-const LAMBDA_TIMEOUT_MS = 10_000;
-
-/**
  * Alexa's real end-to-end response deadline (see `infra/main.tf` and `INVOCATION_BUDGET_MS`
  * in `config.ts`) — tighter than the Lambda's own 10s timeout, which is only a backstop.
  *
- * The refresh must be bounded by what is left of *this* deadline, not by what is left of the
- * Lambda's: a write that already spent most of its 6.5s HEB budget can still show several
- * seconds of Lambda time remaining while Alexa itself has already stopped waiting.
+ * Measured from the request envelope's own `timestamp` (set by Alexa when it sent the
+ * request), not from `context.getRemainingTimeInMillis()`: that counts down from when *this*
+ * Lambda invocation started, which on a cold start or under routing delay can be a second or
+ * more after Alexa's clock already started running. Bounding the refresh by the Lambda's
+ * countdown instead of Alexa's own elapsed time can then hand it a budget Alexa has already
+ * used up, losing the already-built spoken confirmation along with the screen.
  */
 const ALEXA_DEADLINE_MS = 8_000;
 
@@ -158,11 +153,10 @@ async function attachRefreshedScreen(
 ): Promise<Response> {
   if (!supportsApl(input.requestEnvelope)) return response;
 
-  const remaining: number | undefined = input.context?.getRemainingTimeInMillis?.();
-  const alexaRemaining =
-    remaining === undefined ? undefined : remaining - (LAMBDA_TIMEOUT_MS - ALEXA_DEADLINE_MS);
-  if (alexaRemaining !== undefined && alexaRemaining <= REFRESH_SAFETY_MARGIN_MS) return response;
-  const budgetMs = alexaRemaining === undefined ? undefined : alexaRemaining - REFRESH_SAFETY_MARGIN_MS;
+  const sentAt = Date.parse(input.requestEnvelope.request.timestamp);
+  const alexaRemaining = ALEXA_DEADLINE_MS - (Date.now() - sentAt);
+  if (alexaRemaining <= REFRESH_SAFETY_MARGIN_MS) return response;
+  const budgetMs = alexaRemaining - REFRESH_SAFETY_MARGIN_MS;
 
   try {
     const list = await options.createListOps(budgetMs).getList();
@@ -403,10 +397,16 @@ function launchHandler(options: CreateSkillOptions): RequestHandler {
       // network, "open H-E-B list" always succeeded instantly. A transient HEB failure here
       // must not turn opening the skill into a spoken error and an ended session — fall back
       // to the same instant greeting a speaker gets, and let a follow-up question retry.
+      //
+      // Only transient failures, though: a non-retryable `HebError` — session expired, no
+      // list, several lists, schema drift — is actionable, and swallowing it here would both
+      // deny the listener the specific remedy `errorHandler` gives and, for SESSION_EXPIRED,
+      // skip the log line the CloudWatch alarm watches for.
       let list;
       try {
         list = await options.createListOps().getList();
-      } catch {
+      } catch (error) {
+        if (isHebError(error) && !error.retryable) throw error;
         return input.responseBuilder.speak(`H-E-B list. ${REPROMPT}`).reprompt(REPROMPT).getResponse();
       }
       const spoken =

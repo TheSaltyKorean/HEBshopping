@@ -252,7 +252,10 @@ export function speakableList(items: readonly ListItem[]): string {
  * whole-response cap (like the APL screen's, see `apl.ts`) is a byte limit — an emoji-heavy
  * item name is a handful of UTF-16 code units but roughly twice as many UTF-8 bytes, so
  * budgeting by `.length` under-counts exactly the free-text names (unbounded via the MCP
- * `text` input) that are most likely to be non-ASCII. Exceeding the cap makes Alexa reject
+ * `text` input) that are most likely to be non-ASCII. Worse, the card is JSON-serialized into
+ * the response, so a quote or backslash in a free-text name costs an extra escape byte on the
+ * wire that raw UTF-8 byte counting misses entirely — the same reason `apl.ts` measures rows
+ * by their serialized form rather than their raw one. Exceeding the cap makes Alexa reject
  * the *entire* response — so an unbounded card fails `ReadListIntent` outright on exactly the
  * long lists the card exists to serve, and the user hears nothing rather than the seven items
  * that were carefully prepared for speech.
@@ -302,7 +305,11 @@ export function cardList(items: readonly ListItem[]): string {
     const remaining = items.length - index;
     // Reserve room for the footer, so the truncation notice itself cannot overflow.
     const footer = `\n… and ${remaining} more (${items.length} items in total).`;
-    const lineBytes = Buffer.byteLength(line, 'utf8');
+    // JSON-encoded, minus the 2 bytes for the wrapping quotes JSON.stringify adds but the
+    // response body only pays once for the whole card, not once per line: a quote or
+    // backslash in a free-text name costs an extra escape byte on the wire that the raw byte
+    // length does not.
+    const lineBytes = Buffer.byteLength(JSON.stringify(line), 'utf8') - 2;
     const footerBytes = Buffer.byteLength(footer, 'utf8');
 
     if (used + lineBytes + 1 + footerBytes > MAX_CARD_CHARS) {

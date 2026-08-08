@@ -258,6 +258,21 @@ describe('the card must fit inside Alexa limits', () => {
     expect(Buffer.byteLength(card, 'utf8')).toBeLessThanOrEqual(7_000);
   });
 
+  it('accounts for JSON-escaping, so quote-heavy names truncate earlier than plain ones of the same length', () => {
+    // The card is JSON-serialized into the response, so a quote or backslash costs an extra
+    // escape byte on the wire that raw UTF-8 byte counting misses entirely — budgeting only
+    // raw bytes would admit exactly as many quote-heavy lines as plain ones of the same
+    // length, then serialize to well past the 7,000-byte cap.
+    const plain = Array.from({ length: 500 }, (_, i) => line(`Product Number ${i} padding padding pad`));
+    const quoted = Array.from({ length: 500 }, (_, i) => line(`"Product\\Number\\${i}" padding padding p`));
+
+    const plainCount = cardList(plain).split('\n').length;
+    const quotedCount = cardList(quoted).split('\n').length;
+
+    expect(quotedCount).toBeLessThan(plainCount);
+    expect(Buffer.byteLength(JSON.stringify(cardList(quoted)), 'utf8')).toBeLessThanOrEqual(8_000);
+  });
+
   it('leaves an ordinary list complete', () => {
     const card = cardList([line('Fresh Bananas'), line('H-E-B Half & Half, 32 oz')]);
     expect(card.split('\n')).toHaveLength(2);

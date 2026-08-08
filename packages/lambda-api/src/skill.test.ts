@@ -65,7 +65,7 @@ function envelope(request: object, sessionAttributes: Attributes): object {
 const intent = (name: string, slots: Record<string, string> = {}): object => ({
   type: 'IntentRequest',
   requestId: 'r',
-  timestamp: new Date(0).toISOString(),
+  timestamp: new Date().toISOString(),
   locale: 'en-US',
   intent: {
     name,
@@ -395,7 +395,7 @@ describe('reading the list', () => {
               device: showDevice,
             },
           },
-          request: { type: 'LaunchRequest', requestId: 'r', timestamp: new Date(0).toISOString(), locale: 'en-US' },
+          request: { type: 'LaunchRequest', requestId: 'r', timestamp: new Date().toISOString(), locale: 'en-US' },
         } as never,
         {} as never,
       )) as {
@@ -433,7 +433,7 @@ describe('reading the list', () => {
           context: {
             System: { application: { applicationId: 'amzn1.ask.skill.test' }, user: { userId: 'u' } },
           },
-          request: { type: 'LaunchRequest', requestId: 'r', timestamp: new Date(0).toISOString(), locale: 'en-US' },
+          request: { type: 'LaunchRequest', requestId: 'r', timestamp: new Date().toISOString(), locale: 'en-US' },
         } as never,
         {} as never,
       );
@@ -467,7 +467,7 @@ describe('reading the list', () => {
               device: showDevice,
             },
           },
-          request: { type: 'LaunchRequest', requestId: 'r', timestamp: new Date(0).toISOString(), locale: 'en-US' },
+          request: { type: 'LaunchRequest', requestId: 'r', timestamp: new Date().toISOString(), locale: 'en-US' },
         } as never,
         {} as never,
       )) as {
@@ -481,6 +481,48 @@ describe('reading the list', () => {
       expect(response.response.outputSpeech?.ssml).toContain('H-E-B list.');
       expect(response.response.directives ?? []).toHaveLength(0);
       expect(response.response.shouldEndSession).not.toBe(true);
+    });
+
+    it('gives the session-expired remedy, not the instant greeting, when launch cannot reach H-E-B at all', async () => {
+      // Unlike a transient upstream hiccup, a dead session is not going to fix itself on a
+      // follow-up question — swallowing it into the generic greeting would leave the listener
+      // with neither a list nor any indication of what is wrong, and skip the log line the
+      // CloudWatch alarm watches for.
+      const skill = createSkill({
+        createListOps: () =>
+          fakeOps({
+            getList: vi.fn(async () => {
+              throw new HebError('SESSION_EXPIRED', 'HEB rejected the stored session.');
+            }),
+          }) as never,
+        skillIds: ['amzn1.ask.skill.test'],
+      });
+      const response = (await skill.invoke(
+        {
+          version: '1.0',
+          session: {
+            new: true,
+            sessionId: 's',
+            application: { applicationId: 'amzn1.ask.skill.test' },
+            attributes: {},
+            user: { userId: 'u' },
+          },
+          context: {
+            System: {
+              application: { applicationId: 'amzn1.ask.skill.test' },
+              user: { userId: 'u' },
+              device: showDevice,
+            },
+          },
+          request: { type: 'LaunchRequest', requestId: 'r', timestamp: new Date().toISOString(), locale: 'en-US' },
+        } as never,
+        {} as never,
+      )) as {
+        response: { outputSpeech?: { ssml?: string }; shouldEndSession?: boolean };
+      };
+
+      expect(response.response.outputSpeech?.ssml).toContain('login has expired');
+      expect(response.response.shouldEndSession).toBe(true);
     });
 
     describe('after a write', () => {
@@ -609,12 +651,13 @@ describe('reading the list', () => {
         expect(response.response.directives ?? []).toHaveLength(0);
       });
 
-      it('bounds the refresh by what is left of Alexa\'s deadline, not the Lambda\'s', async () => {
+      it('bounds the refresh by what is left of Alexa\'s deadline, measured from when Alexa sent the request', async () => {
         // A default `createListOps()` call hands the refresh a whole new budget, which can
         // run past Alexa's own ~8s deadline and lose the already-built spoken confirmation
-        // along with the screen, even while the Lambda's own looser 10s timeout still shows
-        // several seconds left. 3s of Lambda time remaining means 7s has already elapsed
-        // (out of the Lambda's 10s), leaving only 1s of Alexa's 8s — minus the safety margin.
+        // along with the screen. Measured from the request's own timestamp — not from
+        // `getRemainingTimeInMillis()`, which only counts down from when this Lambda
+        // invocation itself started and so misses routing delay and cold-start time — 7s
+        // having already elapsed leaves only 1s of Alexa's 8s, minus the safety margin.
         const createListOps = vi.fn(
           (): unknown =>
             fakeOps({
@@ -631,33 +674,40 @@ describe('reading the list', () => {
           skillIds: ['amzn1.ask.skill.test'],
         });
 
-        await skill.invoke(
-          {
-            version: '1.0',
-            session: {
-              new: true,
-              sessionId: 's',
-              application: { applicationId: 'amzn1.ask.skill.test' },
-              attributes: {},
-              user: { userId: 'u' },
-            },
-            context: {
-              System: {
+        vi.useFakeTimers();
+        try {
+          const request = intent('AddItemIntent', { item: 'oat milk' });
+          vi.advanceTimersByTime(7_000);
+          await skill.invoke(
+            {
+              version: '1.0',
+              session: {
+                new: true,
+                sessionId: 's',
                 application: { applicationId: 'amzn1.ask.skill.test' },
+                attributes: {},
                 user: { userId: 'u' },
-                device: showDevice,
               },
-            },
-            request: intent('AddItemIntent', { item: 'oat milk' }),
-          } as never,
-          { getRemainingTimeInMillis: () => 3_000 } as never,
-        );
+              context: {
+                System: {
+                  application: { applicationId: 'amzn1.ask.skill.test' },
+                  user: { userId: 'u' },
+                  device: showDevice,
+                },
+              },
+              request,
+            } as never,
+            {} as never,
+          );
+        } finally {
+          vi.useRealTimers();
+        }
 
         expect(createListOps).toHaveBeenCalledTimes(2);
         expect(createListOps).toHaveBeenLastCalledWith(500);
       });
 
-      it('skips the redraw outright when the Lambda has essentially no time left', async () => {
+      it('skips the redraw outright when Alexa\'s deadline has essentially no time left', async () => {
         const createListOps = vi.fn(
           (): unknown =>
             fakeOps({
@@ -674,27 +724,35 @@ describe('reading the list', () => {
           skillIds: ['amzn1.ask.skill.test'],
         });
 
-        const response = (await skill.invoke(
-          {
-            version: '1.0',
-            session: {
-              new: true,
-              sessionId: 's',
-              application: { applicationId: 'amzn1.ask.skill.test' },
-              attributes: {},
-              user: { userId: 'u' },
-            },
-            context: {
-              System: {
+        let response: { response: { outputSpeech?: { ssml?: string }; directives?: unknown[] } };
+        vi.useFakeTimers();
+        try {
+          const request = intent('AddItemIntent', { item: 'oat milk' });
+          vi.advanceTimersByTime(7_900);
+          response = (await skill.invoke(
+            {
+              version: '1.0',
+              session: {
+                new: true,
+                sessionId: 's',
                 application: { applicationId: 'amzn1.ask.skill.test' },
+                attributes: {},
                 user: { userId: 'u' },
-                device: showDevice,
               },
-            },
-            request: intent('AddItemIntent', { item: 'oat milk' }),
-          } as never,
-          { getRemainingTimeInMillis: () => 100 } as never,
-        )) as { response: { outputSpeech?: { ssml?: string }; directives?: unknown[] } };
+              context: {
+                System: {
+                  application: { applicationId: 'amzn1.ask.skill.test' },
+                  user: { userId: 'u' },
+                  device: showDevice,
+                },
+              },
+              request,
+            } as never,
+            {} as never,
+          )) as never;
+        } finally {
+          vi.useRealTimers();
+        }
 
         // The spoken confirmation still comes through — only the cosmetic refresh is
         // skipped, exactly like the "redraw fails" case above.
@@ -937,7 +995,7 @@ describe('errors speak an action, not a stack trace', () => {
 
 describe('built-in intents', () => {
   it('opens with an orientation rather than silence', async () => {
-    const turn = await conversation(fakeOps())({ type: 'LaunchRequest', requestId: 'r', timestamp: new Date(0).toISOString(), locale: 'en-US' });
+    const turn = await conversation(fakeOps())({ type: 'LaunchRequest', requestId: 'r', timestamp: new Date().toISOString(), locale: 'en-US' });
     expect(turn.speech).toContain('H-E-B list');
     expect(turn.ended).toBe(false);
   });

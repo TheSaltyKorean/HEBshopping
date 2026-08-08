@@ -68,7 +68,8 @@ stored. They last 30–365 days (see *What discovery changed*), so it's a rare c
 | W3 login tool | ✅ `npm run login` — headed login straight into the `Store` |
 | W5.1 search recovery | ✅ bilingual matching + broadened re-search |
 | W8 Alexa skill | ✅ handler, interaction model, verified against the real list |
-| W10 deploy | ✅ Terraform, DynamoDB store, MCP HTTP endpoint — see `docs/deploy.md` (not applied) |
+| W8.1 screen support | ✅ Echo Show renders the list on launch, on read, and after every write |
+| W10 deploy | ✅ Terraform, DynamoDB store, MCP HTTP endpoint — see `docs/deploy.md`; **applied and running**, verified end to end from a real Echo |
 | W12 free-text lines | ✅ read and write — the same `Add "…" to list` line H-E-B's own UI creates |
 | W13 weight-based items | ✅ "two pounds of sliced turkey", snapped to H-E-B's quarter-pound ladder |
 | W11 harden | not started — needs a deployment (soak, latency, cost) |

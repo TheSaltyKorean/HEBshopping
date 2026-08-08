@@ -333,6 +333,23 @@ Amazon's own documentation describes, and the extra word is harmless there — s
 either way. Amazon has acknowledged that custom skills have "functionality issues" on
 devices running Alexa+ while it is in active development, so expect this to shift.
 
+#### On a device with a screen
+
+With APL enabled (see Step 2), a Show does more than speak:
+
+| You say | Screen |
+|---|---|
+| "open heb shopper skill" | draws the list immediately — no second question needed |
+| "ask heb shopper skill what is on my list" | draws **every** item, not the seven that get spoken |
+| "…to add oat milk" / "…to remove eggs" | redraws with the change applied |
+
+Speech is unchanged throughout: seven items is still the right number to *hear*, and on a
+screen the spoken part shrinks to a count because the display is doing the reading.
+
+A plain Echo behaves exactly as it always did — the directive is only ever sent to a device
+that advertises the interface, because one naming an unsupported interface makes Alexa
+reject the entire response rather than ignore it.
+
 #### The invocation name has to be in the sentence, exactly
 
 A custom skill is only reached by naming it, and the name has to match. Without that, Alexa
@@ -480,6 +497,7 @@ assumption in the project, and deploying is the only way to answer it.
 | Alexa answers about a *different* list, cheerfully | The invocation name was missing, inexact ("ask **my** heb shopper"), or contains a word Alexa owns — *list*, *cart*, *shopping*. Alexa fell through to its own built-in. See Step 2 and Step 9. |
 | Alexa offers to *create* a list named after your skill | Alexa+ read the invocation name as one of its own list names. Add the word "skill": `ask ⟨name⟩ skill ⟨request⟩`. See Step 9. |
 | "An unexpected error occurred" on `open ⟨name⟩` | Same cause — say `open ⟨name⟩ skill`, or use the `ask` form. See Step 9. |
+| The Show speaks but displays nothing | `ALEXA_PRESENTATION_APL` is not enabled on the skill. Build → Interfaces → on, then build again. No Lambda redeploy needed. See Step 2. |
 | Skill never answers, and the Lambda shows zero invocations | The request never left Amazon — routing or naming, not AWS. Work through *Diagnosing "it just doesn't answer"* in Step 9. |
 | `terraform apply` fails with `InvalidParameterValueException … below its minimum value of [10]` | New AWS account, Lambda concurrency quota of 10. Set `alexa_reserved_concurrency = -1`, or raise the quota. See Step 5. |
 | `aws configure` exits with `EOF when reading a line` | It is interactive and had no terminal attached. Run it in a real shell. |

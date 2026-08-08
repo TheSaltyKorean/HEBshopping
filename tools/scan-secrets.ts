@@ -101,8 +101,11 @@ const RULES: Rule[] = [
   // docs/deploy.md's "open heb shopper" row) and routes a retired name to the same Alexa
   // built-in as "ask" does.
   {
+    // `\s+` (not a literal space) between each name's two words, matching the "declared" rule
+    // below, so a spoken example Markdown line-wrapped across the gap — e.g. `ask grocery\nlist
+    // to add milk` — still matches instead of sailing through.
     name: 'retired invocation name (spoken example)',
-    pattern: /\b(?:ask|open)\s+(?:the\s+|my\s+)?(?:grocery list|heb list|heb cart|house list)\b/gi,
+    pattern: /\b(?:ask|open)\s+(?:the\s+|my\s+)?(?:grocery\s+list|heb\s+list|heb\s+cart|house\s+list)\b/gi,
     note: 'renamed away after colliding with an Alexa built-in — see the table in docs/deploy.md',
   },
   {

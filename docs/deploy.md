@@ -149,17 +149,19 @@ Two rules the console enforces when you pick a name:
   "heb" most likely is not.
 - Names are checked when the model builds, so you find out immediately, not at deploy.
 
-#### If you have an Echo Show — enable APL
+#### If you have a screen-capable device — enable APL
 
 **Build → Interfaces → Alexa Presentation Language → on**, then build again.
 
-**Required if you own a Show, not optional — skipping it does not degrade gracefully.** The
-device reports APL support in its own `supportedInterfaces` regardless of this manifest
-toggle, so the Lambda has no way to tell the toggle is still off and sends the render
-directive anyway. A skill whose manifest has not declared the interface rejects that response
-outright, so a Show fails every Launch, Read, Add, and Remove turn — not just the screen —
-until this is turned on. With it on, a read renders the whole list, product names on the left
-and quantity or weight on the right.
+**Required for every APL-capable device — an Echo Show, a Fire TV, or anything else that
+advertises the interface — not just optional for one of them, and skipping it does not
+degrade gracefully.** The device reports APL support in its own `supportedInterfaces`
+regardless of this manifest toggle, so the Lambda has no way to tell the toggle is still off
+and sends the render directive anyway. A skill whose manifest has not declared the interface
+rejects that response outright, so the device fails every Launch, Read, Add, and Remove turn —
+not just the screen — until this is turned on. With it on, a read renders the list — up to a
+120-item, 12,000-byte display cap, past which it shows as many as fit and a "Showing X of Y
+items" subtitle — product names on the left and quantity or weight on the right.
 
 The interface is declared in `skill-package/skill.json`, but that file is a template — the
 console reads its manifest from your skill, not from this repo, so the toggle is manual.

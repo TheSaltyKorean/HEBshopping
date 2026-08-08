@@ -114,6 +114,11 @@ const SMB2_SUPER_MAGIC = 0xfe534d42;
  * at face value under WSL. Report those as not owner-only, which is what the callers'
  * permissionless-mount advice already exists to cover. `statfs` answers this only on Linux;
  * anywhere it can't, the mode stands as before.
+ *
+ * Not checked at all: extended ACLs (e.g. macOS's NFSv4-style ACLs) that can grant another
+ * account access a `chmod`-clean 0600/0700 doesn't show. `stat()` carries no signal that one is
+ * present — seeing it needs shelling out to a platform tool (`ls -le`, `getfacl`) this codebase
+ * has no other dependency on and whose output isn't uniform enough to parse with confidence.
  */
 export async function checkOwnerOnly(path: string): Promise<boolean | null> {
   try {

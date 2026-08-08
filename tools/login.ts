@@ -336,11 +336,18 @@ export async function isDedicatedDirectory(
   // junction the repo was reached through, so comparing it lexically against an already-resolved
   // `dir` makes the default directory look foreign and hard-blocks a plain
   // `--session .session/other.json` — in the very directory docs/setup.md says to lock.
-  const resolvedDefaultDir = await realDir(dirname(resolve(DEFAULT_SESSION_PATH)));
+  //
+  // A failure resolving it (e.g. EACCES — a default directory left behind by a different
+  // account) must not abort a check for a `dir` that may have nothing to do with it: caught and
+  // treated as "not the default", the same safe-when-unverifiable fallback `readdir(dir)`'s own
+  // catch below already uses.
+  const resolvedDefaultDir = await realDir(dirname(resolve(DEFAULT_SESSION_PATH))).catch(() => null);
   const caseInsensitive = shell === 'powershell' || shell === 'wsl-powershell';
-  const sameAsDefaultDir = caseInsensitive
-    ? resolvedDir.toLowerCase() === resolvedDefaultDir.toLowerCase()
-    : resolvedDir === resolvedDefaultDir;
+  const sameAsDefaultDir =
+    resolvedDefaultDir !== null &&
+    (caseInsensitive
+      ? resolvedDir.toLowerCase() === resolvedDefaultDir.toLowerCase()
+      : resolvedDir === resolvedDefaultDir);
 
   // FileStore.putSession writes `<path>.tmp` then renames it onto `<path>` (file-store.ts) —
   // an interrupted write leaves that `.tmp` sibling behind. It's this tool's own leftover,
@@ -441,6 +448,12 @@ export function untrustedProfileNote(
  * rather than leaving it orphaned under its `.clearing-<hex>` name for the next run to find
  * missing and silently recreate under the parent's broader inherited ACL. If something now
  * occupies `dir`, that rename fails instead of silently overwriting or merging into it.
+ *
+ * That `finally` covers the identity check (`lstat`) as well as the `readdir`/`rm` pass after
+ * it, not just the latter — a transient failure there (e.g. antivirus holding `detached`
+ * briefly) is exactly as capable of stranding it. The one path that intentionally leaves
+ * `detached` gone — it turned out to be a symlink, and got removed as itself — skips the
+ * restore via `restore`, since there is nothing left under that name to put back.
  */
 export async function clearDirectoryContents(dir: string): Promise<void> {
   const detached = `${dir}.clearing-${randomBytes(6).toString('hex')}`;
@@ -451,16 +464,18 @@ export async function clearDirectoryContents(dir: string): Promise<void> {
     throw error;
   }
 
-  if ((await lstat(detached)).isSymbolicLink()) {
-    await rm(detached, { force: true });
-    return;
-  }
-
+  let restore = true;
   try {
+    if ((await lstat(detached)).isSymbolicLink()) {
+      restore = false;
+      await rm(detached, { force: true });
+      return;
+    }
+
     const entries = await readdir(detached);
     await Promise.all(entries.map((entry) => rm(join(detached, entry), { recursive: true, force: true })));
   } finally {
-    await rename(detached, dir);
+    if (restore) await rename(detached, dir);
   }
 }
 
@@ -665,8 +680,6 @@ async function main(): Promise<void> {
   // stat() failure here — e.g. AV briefly locking the freshly-renamed file — must not be
   // reported as a failed login; fall back to the plain success line instead.
   const ownerOnly = await checkOwnerOnly(options.sessionPath);
-  const { path: icaclsPath, shell } = windowsPathFor(options.sessionPath);
-  const trusted = ownerOnly !== null && isSessionTrusted(ownerOnly, shell);
   // A --session path under the user's own home profile needs no icacls fix at all — the same
   // "nothing to do" exemption docs/setup.md gives that placement generally applies just as
   // much to the default .session path as to a custom one, so it must not be told afterward to
@@ -674,6 +687,13 @@ async function main(): Promise<void> {
   // custom paths via `sessionAlreadySafe`; the default path skips the preflight entirely, since
   // it can never collide with another file).
   const dir = await realDir(dirname(options.sessionPath));
+  // Classified from that canonical `dir`, not the lexical `options.sessionPath`: a WSL path that
+  // looks native (no /mnt/... prefix) can still traverse a symlink onto a Windows/DrvFS drive,
+  // and windowsPathFor only sees that once the parent has been resolved through realDir first —
+  // the same reason the preflight (ensureCustomSessionParentReady) and isDedicatedDirectory both
+  // classify off a realDir-resolved directory rather than the raw path.
+  const { path: icaclsPath, shell } = windowsPathFor(join(dir, basename(options.sessionPath)));
+  const trusted = ownerOnly !== null && isSessionTrusted(ownerOnly, shell);
   const dirIcaclsPath = windowsPathFor(dir).path;
   const home = shell === null ? null : homeDirFor(shell);
   const alreadySafe = sessionAlreadySafe(shell, dirIcaclsPath, home);

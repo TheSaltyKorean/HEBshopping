@@ -325,6 +325,17 @@ describe('isDedicatedDirectory', () => {
     vi.mocked(readdir).mockResolvedValueOnce(['session.json'] as never);
     await expect(isDedicatedDirectory(realSessionDir, 'second.json', 'powershell')).resolves.toBe(true);
   });
+
+  it('does not let a failure resolving the unrelated default .session directory block a custom one', async () => {
+    // The default .session directory might be unreadable (e.g. left behind by a different
+    // account) even though the caller chose a custom --session directory that has nothing to do
+    // with it — that failure must not abort a check that doesn't need it. realDir only throws
+    // for a non-ENOENT error, so mock realpath (which it wraps) to reject with one.
+    const error = Object.assign(new Error('permission denied'), { code: 'EACCES' });
+    vi.mocked(realpath).mockRejectedValueOnce(error);
+    vi.mocked(readdir).mockResolvedValueOnce(['other.json'] as never);
+    await expect(isDedicatedDirectory('/some/other/dir', 'other.json', 'powershell')).resolves.toBe(true);
+  });
 });
 
 describe('customSessionParentAction', () => {
@@ -476,6 +487,24 @@ describe('clearDirectoryContents', () => {
       vi.mocked(readdir).mockRejectedValueOnce(error);
 
       await expect(clearDirectoryContents(dir)).rejects.toThrow('resource busy or locked');
+
+      await expect(readdir(dir)).resolves.toEqual(['Cookies']); // restored, not left under .clearing-<hex>
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('restores the detached directory when the identity check itself fails, not just readdir/rm', async () => {
+    // The same stranding risk as the readdir/rm case above, but one step earlier: lstat(detached)
+    // ran outside the restoring try/finally, so antivirus transiently locking the just-renamed
+    // entry (or it being removed concurrently) threw before the directory was ever put back.
+    const dir = await mkdtemp(join(tmpdir(), 'heb-profile-'));
+    try {
+      await writeFile(join(dir, 'Cookies'), 'data');
+      const error = Object.assign(new Error('permission denied'), { code: 'EACCES' });
+      vi.mocked(lstat).mockRejectedValueOnce(error);
+
+      await expect(clearDirectoryContents(dir)).rejects.toThrow('permission denied');
 
       await expect(readdir(dir)).resolves.toEqual(['Cookies']); // restored, not left under .clearing-<hex>
     } finally {

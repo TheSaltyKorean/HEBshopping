@@ -275,21 +275,39 @@ uploading, so a failure here means running `npm run login` first.
 
 ### Step 9. Talk to it
 
-> *"Alexa, ask heb shopper what is on my list"*
+> *"Alexa, ask heb shopper **skill** what is on my list"*
+
+On Alexa+ that trailing "skill" is required — see below. It is harmless on classic Alexa,
+so it is the phrasing to learn.
 
 Development-mode skills are enabled automatically on **every Echo registered to the same
 Amazon account** — no installation step, and anyone in the house can use it.
 
-#### Say "ask", not "open"
+#### On Alexa+, say the word "skill"
 
-**On Alexa+, `open ⟨name⟩` does not work.** It fails with a bare *"An unexpected error
-occurred"* and never dispatches to the skill — confirmed through the simulation API, where
-the same skill answers correctly to `ask` in the same session. `ask ⟨name⟩ ⟨what you want⟩`
-is the form to use, and it is the only form documented here for that reason.
+**This is the single most important sentence in this document if your account is on
+Alexa+.** The invocation name alone is not enough:
 
-If your account is on Alexa+, a successful reply opens with *"Here's ⟨skill name⟩. Say
-'Alexa exit' to get back to Alexa plus."* — that sentence is how you know the request
-actually reached your skill rather than a built-in.
+| Said | Reached |
+|---|---|
+| "ask heb shopper what is on my list" | Alexa's built-in Lists |
+| **"ask heb shopper skill what is on my list"** | **this skill** |
+| "ask the heb shopper skill what is on my list" | this skill |
+| "open heb shopper" | built-in Lists — offers to *create* a list called "heb shopper" |
+| "open heb shopper skill" | this skill |
+
+Without the trailing word "skill", Alexa+ reads the invocation name as the name of one of
+*its* lists, and answers about that instead — cheerfully, and with no indication your skill
+was skipped. It will even offer to create a list by that name, which is how you end up with
+a stray "heb shopper" list in the Alexa app.
+
+A successful reply opens with *"Here's ⟨skill name⟩. Say 'Alexa exit' to get back to Alexa
+plus."* That sentence is the proof the request reached your skill.
+
+This applies to Alexa+ specifically. On classic Alexa the bare invocation name works as
+Amazon's own documentation describes, and the extra word is harmless there — so say it
+either way. Amazon has acknowledged that custom skills have "functionality issues" on
+devices running Alexa+ while it is in active development, so expect this to shift.
 
 #### The invocation name has to be in the sentence, exactly
 
@@ -299,9 +317,9 @@ replies, cheerfully, about a completely different list:
 
 | Reaches this skill | Reaches Alexa's own list |
 |---|---|
-| "Alexa, ask heb shopper what is on my list" | "Alexa, what's on my shopping list" |
-| "Alexa, ask heb shopper to add milk" | "Alexa, add milk to my shopping list" |
-| "Alexa, ask heb shopper to remove eggs" | "Alexa, ask **my** heb shopper what is on my list" |
+| "Alexa, ask heb shopper skill what is on my list" | "Alexa, what's on my shopping list" |
+| "Alexa, ask heb shopper skill to add milk" | "Alexa, add milk to my shopping list" |
+| "Alexa, ask heb shopper skill to remove eggs" | "Alexa, ask **my** heb shopper skill what is on my list" |
 
 That last one is the trap: an extra word *inside* the name breaks the match as completely as
 omitting the name would, and the reply sounds fine.
@@ -343,7 +361,7 @@ of the spoken message. In order:
    ask smapi get-skill-enablement-status --skill-id <id> --stage development
    ask smapi get-interaction-model --skill-id <id> --stage development --locale en-US
    ask smapi simulate-skill --skill-id <id> --stage development \
-     --device-locale en-US --input-content "ask heb shopper what is on my list"
+     --device-locale en-US --input-content "ask heb shopper skill what is on my list"
    ```
 
    `get-skill-enablement-status` returns success (204) when enabled and 404 when not.
@@ -432,7 +450,8 @@ assumption in the project, and deploying is the only way to answer it.
 | Symptom | Cause |
 |---|---|
 | Alexa answers about a *different* list, cheerfully | The invocation name was missing, inexact ("ask **my** heb shopper"), or contains a word Alexa owns — *list*, *cart*, *shopping*. Alexa fell through to its own built-in. See Step 2 and Step 9. |
-| "An unexpected error occurred" on `open ⟨name⟩` | Alexa+ does not dispatch bare skill launches. Use `ask ⟨name⟩ ⟨request⟩` instead. See Step 9. |
+| Alexa offers to *create* a list named after your skill | Alexa+ read the invocation name as one of its own list names. Add the word "skill": `ask ⟨name⟩ skill ⟨request⟩`. See Step 9. |
+| "An unexpected error occurred" on `open ⟨name⟩` | Same cause — say `open ⟨name⟩ skill`, or use the `ask` form. See Step 9. |
 | Skill never answers, and the Lambda shows zero invocations | The request never left Amazon — routing or naming, not AWS. Work through *Diagnosing "it just doesn't answer"* in Step 9. |
 | `terraform apply` fails with `InvalidParameterValueException … below its minimum value of [10]` | New AWS account, Lambda concurrency quota of 10. Set `alexa_reserved_concurrency = -1`, or raise the quota. See Step 5. |
 | `aws configure` exits with `EOF when reading a line` | It is interactive and had no terminal attached. Run it in a real shell. |

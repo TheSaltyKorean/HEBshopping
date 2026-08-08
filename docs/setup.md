@@ -369,7 +369,7 @@ adding the wrong product costs a wasted trip to the store.
 Deli meat and cheese sliced to order, and seafood, are priced per pound, so you can ask for
 an amount:
 
-> "Alexa, ask heb shopper to add two pounds of honey smoked turkey breast"
+> "Alexa, ask heb shopper skill to add two pounds of honey smoked turkey breast"
 > "…add half a pound of sliced cheddar"
 > "…add a pound and a half of jumbo shrimp"
 

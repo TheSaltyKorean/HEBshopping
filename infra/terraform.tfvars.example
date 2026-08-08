@@ -17,6 +17,14 @@ alexa_skill_ids = ["amzn1.ask.skill.PASTE-YOUR-SKILL-ID-HERE"]
 # handled error, so the skill keeps answering politely and nothing else tells you.
 alert_email = "PASTE-YOUR-EMAIL-HERE"
 
+# Uncomment on a NEW AWS account. A fresh account's Lambda "Concurrent executions" quota is
+# 10, and AWS rejects any reservation that would leave unreserved concurrency below 10 — so
+# no reservation can be made at all, whatever its size, and `terraform apply` fails with
+# InvalidParameterValueException on the Alexa function. -1 means no reservation; the account
+# limit of 10 is then the ceiling instead of the intended 2. Raise the quota and delete this
+# line to get the reservation back.
+# alexa_reserved_concurrency = -1
+
 # Only if the H-E-B account has several lists.
 # heb_list_id = "PASTE-LIST-ID-HERE"
 

@@ -210,7 +210,14 @@ resource "aws_lambda_function" "alexa" {
   # the worst case to four in-flight requests instead of an unbounded fan-out, which is
   # the right trade for a household. Enforcing it exactly needs a shared limiter, which
   # would cost more round trips than the problem is worth here.
-  reserved_concurrent_executions = 2
+  #
+  # Configurable only because a *reservation of any size* is impossible on a brand-new AWS
+  # account: the default account-wide concurrency limit is 10, AWS refuses to let unreserved
+  # concurrency drop below 10, and so every reservation fails until the quota is raised. That
+  # is not an edge case here — this project is distributed as "fork it and run your own copy",
+  # so a fresh account is the normal starting point and hardcoding this made `terraform apply`
+  # fail for everyone following docs/deploy.md. See var.alexa_reserved_concurrency.
+  reserved_concurrent_executions = var.alexa_reserved_concurrency
 
   environment {
     variables = {

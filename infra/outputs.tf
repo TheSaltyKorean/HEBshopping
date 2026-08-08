@@ -18,6 +18,11 @@ output "mcp_token_parameter" {
   value       = aws_ssm_parameter.mcp_token.name
 }
 
+output "alerts_topic" {
+  description = "SNS topic for expiry alerts. Use it to check the email subscription was confirmed."
+  value       = aws_sns_topic.alerts.arn
+}
+
 output "next_steps" {
   description = "What to do once apply finishes."
   value       = <<-EOT
@@ -28,7 +33,11 @@ output "next_steps" {
     2. Upload the H-E-B session (the Lambda cannot read your laptop):
          npm run push:session -- --table ${aws_dynamodb_table.session.name} --region ${var.region}
 
-    3. Say: "Alexa, ask my grocery list what is on my list"
+    3. Say: "Alexa, ask grocery list what is on my list"
+
+       The invocation name has to be in the sentence, and exactly — "ask MY grocery
+       list" does not match it. Without it Alexa answers from its own built-in
+       shopping list, which reads as this skill returning the wrong list.
 
     Re-run step 2 after every `npm run login` — roughly monthly, when cookies expire.
   EOT

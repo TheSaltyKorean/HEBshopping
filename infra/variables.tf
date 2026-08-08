@@ -44,6 +44,32 @@ variable "alexa_skill_ids" {
   }
 }
 
+variable "alexa_reserved_concurrency" {
+  description = <<-EOT
+    Reserved concurrency for the Alexa Lambda, or -1 for none.
+
+    2 is the intended value and the reason is in main.tf: it bounds the fan-out of parallel
+    invocations without serialising the second person to speak.
+
+    Set -1 on a new AWS account. The default account-wide concurrency limit is 10, and AWS
+    rejects any reservation that would take unreserved concurrency below 10 — so on a fresh
+    account no reservation can be made at all, whatever its size, and the apply fails with
+    InvalidParameterValueException. Raise the "Concurrent executions" quota for Lambda and
+    this can go back to 2. Until then the account limit is itself the ceiling, so -1 means
+    "bounded by 10" rather than genuinely unbounded.
+  EOT
+  type        = number
+  default     = 2
+
+  validation {
+    # -1 is Lambda's own "no reservation" sentinel. 0 is a real value meaning *fully
+    # throttled* — the function would accept no invocations at all and the skill would
+    # answer nothing, which is never what someone setting this wants.
+    condition     = var.alexa_reserved_concurrency == -1 || var.alexa_reserved_concurrency >= 1
+    error_message = "alexa_reserved_concurrency must be -1 (no reservation) or at least 1. 0 would throttle the skill to nothing."
+  }
+}
+
 variable "heb_list_id" {
   description = "Pin one H-E-B list. Leave empty unless the account has several."
   type        = string

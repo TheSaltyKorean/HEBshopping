@@ -32,15 +32,15 @@ const APL_DOCUMENT_VERSION = '2023.3';
 const MAX_DISPLAYED_ITEMS = 120;
 
 /**
- * Character budget for the screen's own share of the response.
+ * UTF-8 byte budget for the screen's own share of the response.
  *
- * Alexa caps the entire response at 24 KB and counts directives toward it, the same trap
- * `MAX_CARD_CHARS` guards against for cards — but unlike a card, a row's `primaryText` and
- * `secondaryText` have no length bound of their own (a long catalog or free-text item name
- * passes straight through), so a fixed row *count* does not bound response *size*. Budgeting
- * the serialized rows directly, with headroom for the rest of the response (speech, and on
- * `ReadListIntent`, a card up to `MAX_CARD_CHARS`), is what actually keeps the whole thing
- * under the cap.
+ * Alexa caps the entire response at 24 KB — a byte limit — and counts directives toward it,
+ * the same trap `MAX_CARD_CHARS` guards against for cards — but unlike a card, a row's
+ * `primaryText` and `secondaryText` have no length bound of their own (a long catalog or
+ * free-text item name passes straight through), so a fixed row *count* does not bound response
+ * *size*. Budgeting the serialized rows' encoded byte size directly, with headroom for the
+ * rest of the response (speech, and on `ReadListIntent`, a card up to `MAX_CARD_CHARS`), is
+ * what actually keeps the whole thing under the cap.
  */
 const MAX_ITEMS_CHARS = 12_000;
 
@@ -89,18 +89,20 @@ function listRow(item: ListItem): Row {
 }
 
 /**
- * How many characters a single Unicode code point occupies once JSON-encoded as part of a
- * string, excluding the surrounding quotes — 1 for a plain character, 2 for one JSON has to
- * escape (`"`, `\`, control characters). Free-text item names are not guaranteed to be free of
- * those, so raw character count cannot stand in for encoded size.
+ * How many UTF-8 bytes a single Unicode code point occupies once JSON-encoded as part of a
+ * string, excluding the surrounding quotes. Alexa's 24 KB response cap is a byte limit, not a
+ * character-count limit, so a code unit is the wrong unit here — an emoji is two UTF-16 code
+ * units but four UTF-8 bytes, and even a plain non-ASCII letter can be two or three bytes.
+ * Free-text item names are not guaranteed to be free of either, so encoded byte length has to
+ * be measured directly rather than approximated from `.length`.
  *
  * `ch` must be a whole code point, not a lone UTF-16 surrogate half — JSON.stringify escapes an
- * unpaired surrogate to a 6-character `\uXXXX` sequence, wildly overcounting an astral character
- * (e.g. an emoji) whose two halves are costed separately instead of as the single 2-character
- * pair they serialize to together.
+ * unpaired surrogate to a 6-byte `\uXXXX` sequence, wildly overcounting an astral character
+ * (e.g. an emoji) whose two halves are costed separately instead of as the single 4-byte
+ * sequence they serialize to together.
  */
-function jsonCharLength(ch: string): number {
-  return JSON.stringify(ch).length - 2;
+function jsonByteLength(ch: string): number {
+  return Buffer.byteLength(JSON.stringify(ch), 'utf8') - 2;
 }
 
 /**
@@ -110,28 +112,28 @@ function jsonCharLength(ch: string): number {
  * always keeps at least one row so the screen is never empty, but "kept" cannot mean
  * "exempt from the budget" — item names are free text with no length bound of their own
  * (reachable through the MCP `text` input), so an oversized first row could otherwise push
- * the directive past Alexa's 24 KB response cap on its own. The text can also contain
- * characters JSON has to escape, which cost two encoded characters apiece, so the cut point is
- * found by walking the encoded cost rather than assuming raw length matches encoded length.
+ * the directive past Alexa's 24 KB response cap on its own. Alexa's cap is a byte limit, so
+ * the cut point is found by walking the encoded UTF-8 byte cost rather than raw character
+ * count, which undercounts both escaped characters and non-ASCII text.
  *
  * Walked by Unicode code point, not UTF-16 code unit: a code unit boundary can fall between
  * the two halves of a surrogate pair (an astral character, e.g. an emoji), leaving a lone
  * surrogate in `primaryText` that renders as a corrupted glyph on the Show.
  */
 function truncateRow(row: Row, maxChars: number): Row {
-  const overhead = JSON.stringify({ ...row, primaryText: '' }).length;
+  const overhead = Buffer.byteLength(JSON.stringify({ ...row, primaryText: '' }), 'utf8');
   const budget = Math.max(1, maxChars - overhead);
   const chars = Array.from(row.primaryText);
 
   let fullCost = 0;
-  for (const ch of chars) fullCost += jsonCharLength(ch);
+  for (const ch of chars) fullCost += jsonByteLength(ch);
   if (fullCost <= budget) return row;
 
-  const ellipsisCost = jsonCharLength('…');
+  const ellipsisCost = jsonByteLength('…');
   let cost = 0;
   let cut = 0;
   while (cut < chars.length) {
-    const chCost = jsonCharLength(chars[cut] as string);
+    const chCost = jsonByteLength(chars[cut] as string);
     if (cost + chCost + ellipsisCost > budget) break;
     cost += chCost;
     cut++;
@@ -187,10 +189,10 @@ export function listRenderDirective(envelope: RequestEnvelope, list: HebList): u
   for (const item of list.items) {
     if (shown.length >= MAX_DISPLAYED_ITEMS) break;
     let row = listRow(item);
-    let rowChars = JSON.stringify(row).length;
+    let rowChars = Buffer.byteLength(JSON.stringify(row), 'utf8');
     if (shown.length === 0 && rowChars > MAX_ITEMS_CHARS) {
       row = truncateRow(row, MAX_ITEMS_CHARS);
-      rowChars = JSON.stringify(row).length;
+      rowChars = Buffer.byteLength(JSON.stringify(row), 'utf8');
     } else if (shown.length > 0 && usedChars + rowChars > MAX_ITEMS_CHARS) {
       break;
     }

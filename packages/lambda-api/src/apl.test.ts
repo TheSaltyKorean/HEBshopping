@@ -216,5 +216,27 @@ describe('listRenderDirective', () => {
       expect(row?.primaryText.isWellFormed()).toBe(true);
       expect(row?.primaryText.endsWith('…')).toBe(true);
     });
+
+    it('measures the first row by UTF-8 byte size, not UTF-16 length, when it is emoji-heavy', () => {
+      // An emoji is 2 UTF-16 units but 4 UTF-8 bytes — the wire format Alexa's 24 KB response
+      // cap actually counts. A length-based budget would pass this row through unshortened at
+      // roughly half its real encoded size.
+      const emojiHeavy = list([item({ text: '😀'.repeat(4_000) })]);
+      const row = render(screen, emojiHeavy).datasources.hebList.items[0];
+      expect(row).toBeDefined();
+      expect(Buffer.byteLength(JSON.stringify(row), 'utf8')).toBeLessThanOrEqual(12_000);
+      expect(row?.primaryText.endsWith('…')).toBe(true);
+    });
+
+    it('stops accumulating rows by UTF-8 byte size, not UTF-16 length, when items are emoji-heavy', () => {
+      const emojiItems = list(
+        Array.from({ length: 10 }, (_, i) => item({ text: `${i}${'😀'.repeat(300)}` })),
+      );
+      const shown = render(screen, emojiItems).datasources.hebList.items;
+      // Each row is ~1,218 encoded bytes; ten of them would total ~12,180 bytes, over budget,
+      // even though their combined UTF-16 length (~6,180) would have looked well within it.
+      expect(shown.length).toBeGreaterThan(0);
+      expect(shown.length).toBeLessThan(10);
+    });
   });
 });

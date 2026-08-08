@@ -730,9 +730,10 @@ export class HebListOps implements ListOps {
       return {
         status: noContribution ? 'already_present' : status,
         item: await this.adjustWeight(listId, added, target, !wasPresent && !merged),
-        // `adjustWeight`'s own `pounds === line.weight` short-circuit means no HEB call ran:
-        // the same no-write signal the existing-line ladder-ceiling branch above reports.
-        ...(noContribution ? { wrote: false } : {}),
+        // No `wrote: false` here, unlike the existing-line ladder-ceiling branch above: this
+        // call's own `addShoppingListItemsV2` mutation (see above) already ran and merged into
+        // the concurrently created line, so a write did land even when `adjustWeight` itself
+        // has nothing left to do.
         ...shortfall,
       };
     }

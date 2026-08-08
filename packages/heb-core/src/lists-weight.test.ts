@@ -322,9 +322,10 @@ describe('weight on a counter line', () => {
     // 2.5 lb" before appending the cap caveat, none of which was this request's doing.
     // `already_present` says what actually happened: the line was already there, unchanged by
     // this call. `weightRequested` still carries the merged total (3) so the caller renders
-    // "H-E-B only sells up to 2.5 lb, could not bring it up to 3". `wrote` must be `false`
-    // too: `adjustWeight`'s own `pounds === line.weight` short-circuit means no HEB call ran,
-    // so a caller like `confirmAdded` must not treat this as a change worth a screen refresh.
+    // "H-E-B only sells up to 2.5 lb, could not bring it up to 3". `wrote` must NOT be `false`
+    // here, though: this request's own `HebAddShoppingListItems` call already ran and merged
+    // into the household member's line (that merge is what put it at quantity 2), so a write
+    // did land even though the follow-up weight adjustment then had nothing left to raise.
     const { ops, lines } = scripted([]);
     const client = (ops as unknown as { client: { execute: (d: unknown) => Promise<unknown> } })
       .client;
@@ -341,7 +342,7 @@ describe('weight on a counter line', () => {
     expect(result.status).toBe('already_present');
     expect(result.status === 'already_present' && result.item.weight).toBe(2.5);
     expect(result.status === 'already_present' && result.weightRequested).toBe(3);
-    expect(result.status === 'already_present' && result.wrote).toBe(false);
+    expect(result.status === 'already_present' && result.wrote).not.toBe(false);
   });
 
   it('reports wrote: false for a pre-existing line already at its weight ceiling', async () => {

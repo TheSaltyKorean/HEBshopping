@@ -746,6 +746,48 @@ describe('reading the list', () => {
         expect(response.response.directives ?? []).toHaveLength(0);
       });
 
+      it('redraws the screen when schema drift also carries a partial write', async () => {
+        // The schema-drift error branch has its own `attachRefreshedScreen` call, separate
+        // from the plain `partialAdd` branch above — it needs its own device-aware coverage.
+        const response = await invokeOn(
+          showDevice,
+          intent('AddItemIntent', { item: 'two pounds of ham' }),
+          () =>
+            fakeOps({
+              getList: vi.fn(async () => listOf(5)),
+              addItem: vi.fn(async () => {
+                throw new HebError('UPSTREAM_ERROR', 'HEB rejected the weight update.', {
+                  retryable: false,
+                  details: { schemaDrift: true, partialAdd: true },
+                });
+              }),
+            }) as never,
+        );
+        expect(response.response.outputSpeech?.ssml).toContain('skill is updated');
+        expect(response.response.directives?.map((d) => d.type)).toContain(
+          'Alexa.Presentation.APL.RenderDocument',
+        );
+      });
+
+      it('does not redraw a speaker when schema drift also carries a partial write', async () => {
+        const response = await invokeOn(
+          undefined,
+          intent('AddItemIntent', { item: 'two pounds of ham' }),
+          () =>
+            fakeOps({
+              getList: vi.fn(async () => listOf(5)),
+              addItem: vi.fn(async () => {
+                throw new HebError('UPSTREAM_ERROR', 'HEB rejected the weight update.', {
+                  retryable: false,
+                  details: { schemaDrift: true, partialAdd: true },
+                });
+              }),
+            }) as never,
+        );
+        expect(response.response.outputSpeech?.ssml).toContain('skill is updated');
+        expect(response.response.directives ?? []).toHaveLength(0);
+      });
+
       describe('removing', () => {
         const opsAfterRemove = () =>
           fakeOps({

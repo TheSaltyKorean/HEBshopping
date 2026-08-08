@@ -239,6 +239,28 @@ export function speakableList(items: readonly ListItem[]): string {
  */
 const MAX_CARD_CHARS = 7_000;
 
+/**
+ * What a line is called on screen or on a card.
+ *
+ * A catalog product carries the store's own name for it, which is what someone scanning a
+ * shelf wants to read. `text` is the free-text fallback for a line H-E-B could not match.
+ */
+export function itemName(item: ListItem): string {
+  return item.product?.name ?? item.text;
+}
+
+/**
+ * The amount, as a standalone label, or undefined when there is nothing worth showing.
+ *
+ * A quantity of one is the default and adding "× 1" to every line is noise. Weight wins
+ * over quantity because a weighed line's quantity is not the thing being bought.
+ */
+export function itemAmountLabel(item: ListItem): string | undefined {
+  if (item.weight !== undefined) return `${item.weight} lb`;
+  if (item.quantity > 1) return `× ${item.quantity}`;
+  return undefined;
+}
+
 /** Plain-text card body, bounded, and explicit about anything it had to drop. */
 export function cardList(items: readonly ListItem[]): string {
   if (items.length === 0) return 'Your H-E-B list is empty.';
@@ -247,13 +269,16 @@ export function cardList(items: readonly ListItem[]): string {
   let used = 0;
 
   for (const [index, item] of items.entries()) {
+    // Kept as a prefix rather than reusing `itemAmountLabel`: a card is one string per line,
+    // so the amount has to read inline, where "2 lb — Turkey" and "3 × Milk" are the
+    // established shapes. The screen has a second column and formats the same data itself.
     const amount =
       item.weight !== undefined
         ? `${item.weight} lb — `
         : item.quantity > 1
           ? `${item.quantity} × `
           : '';
-    const line = `${amount}${item.product?.name ?? item.text}`;
+    const line = `${amount}${itemName(item)}`;
     const remaining = items.length - index;
     // Reserve room for the footer, so the truncation notice itself cannot overflow.
     const footer = `\n… and ${remaining} more (${items.length} items in total).`;

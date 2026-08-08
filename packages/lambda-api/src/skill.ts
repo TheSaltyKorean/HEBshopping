@@ -20,6 +20,7 @@ import type {
   ErrorHandler,
 } from 'ask-sdk-core';
 import type { Response } from 'ask-sdk-model';
+import { listRenderDirective } from './apl.js';
 import {
   hasCode,
   isHebError,
@@ -401,6 +402,16 @@ function readListHandler(options: CreateSkillOptions): RequestHandler {
       if (list.items.length > MAX_SPOKEN_ITEMS) {
         builder.withSimpleCard(CARD_TITLE, cardList(list.items));
       }
+
+      // On a screen, show the whole list. The speech still caps at MAX_SPOKEN_ITEMS because
+      // hearing twenty-six products helps nobody, but the screen has no such problem and a
+      // Show reading out "I've put the whole list in your Alexa app" while displaying
+      // nothing is the worst of both.
+      const directive = listRenderDirective(input.requestEnvelope, list);
+      if (directive !== null) {
+        builder.addDirective(directive as never);
+      }
+
       return builder.reprompt(REPROMPT).getResponse();
     },
   };

@@ -149,6 +149,22 @@ Two rules the console enforces when you pick a name:
   "heb" most likely is not.
 - Names are checked when the model builds, so you find out immediately, not at deploy.
 
+#### If you have an Echo Show — enable APL
+
+**Build → Interfaces → Alexa Presentation Language → on**, then build again.
+
+Without it the skill still works, but a Show only ever speaks: speech caps at seven items
+and then says "I've put the whole list in your Alexa app", while the customer is looking
+straight at a screen that could have shown all of them. With it on, a read renders the whole
+list, product names on the left and quantity or weight on the right.
+
+The interface is declared in `skill-package/skill.json`, but that file is a template — the
+console reads its manifest from your skill, not from this repo, so the toggle is manual.
+`ask smapi update-skill-manifest` can set it instead if you have the ASK CLI configured.
+
+A skill with the interface off ignores the directive harmlessly, so turning it on later is
+safe and needs no redeploy of the Lambda.
+
 ### Step 3. Copy the skill id
 
 **Build → Endpoint**. At the top you will see a skill id like

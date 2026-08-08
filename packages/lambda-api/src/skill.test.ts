@@ -319,6 +319,68 @@ describe('reading the list', () => {
     expect(turn.speech).toContain('empty');
     expect(turn.card).toBeNull();
   });
+
+  describe('on a device with a screen', () => {
+    const items = Array.from({ length: 20 }, (_, i) => line(`l${i}`, `${i}`, `Product Number ${i}`));
+    const listOf = (n: number) => ({
+      listId: 'L',
+      name: 'Shopping',
+      storeId: '1',
+      items: items.slice(0, n),
+    });
+
+    const readOn = async (device: object | undefined, count: number) => {
+      const skill = createSkill({
+        createListOps: () => fakeOps({ getList: vi.fn(async () => listOf(count)) }) as never,
+        skillIds: ['amzn1.ask.skill.test'],
+      });
+      const response = (await skill.invoke(
+        {
+          version: '1.0',
+          session: {
+            new: true,
+            sessionId: 's',
+            application: { applicationId: 'amzn1.ask.skill.test' },
+            attributes: {},
+            user: { userId: 'u' },
+          },
+          context: {
+            System: {
+              application: { applicationId: 'amzn1.ask.skill.test' },
+              user: { userId: 'u' },
+              ...(device === undefined ? {} : { device }),
+            },
+          },
+          request: intent('ReadListIntent'),
+        } as never,
+        {} as never,
+      )) as { response: { directives?: Array<{ type: string; datasources?: unknown }> } };
+      return response.response.directives ?? [];
+    };
+
+    const showDevice = { supportedInterfaces: { 'Alexa.Presentation.APL': {} } };
+
+    it('sends no directive to a speaker', async () => {
+      // A directive naming an unsupported interface makes Alexa reject the whole response,
+      // so the plain-Echo path has to stay byte-for-byte what it was.
+      expect(await readOn(undefined, 3)).toHaveLength(0);
+    });
+
+    it('renders the list on a Show', async () => {
+      const directives = await readOn(showDevice, 3);
+      expect(directives.map((d) => d.type)).toContain('Alexa.Presentation.APL.RenderDocument');
+    });
+
+    it('shows every item even when speech had to cap at seven', async () => {
+      // The whole point: a Show that says "I've put the whole list in your Alexa app" while
+      // displaying nothing is worse than either surface alone.
+      const [directive] = await readOn(showDevice, 20);
+      const rendered = directive as unknown as {
+        datasources: { hebList: { items: unknown[] } };
+      };
+      expect(rendered.datasources.hebList.items).toHaveLength(20);
+    });
+  });
 });
 
 describe('removing', () => {

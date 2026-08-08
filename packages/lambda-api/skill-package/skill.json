@@ -31,7 +31,12 @@
       "custom": {
         "endpoint": {
           "uri": "arn:aws:lambda:us-east-1:000000000000:function:heb-shopping-list"
-        }
+        },
+        "interfaces": [
+          {
+            "type": "ALEXA_PRESENTATION_APL"
+          }
+        ]
       }
     },
     "privacyAndCompliance": {

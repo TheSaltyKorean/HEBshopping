@@ -319,11 +319,12 @@ async function worksAgainstHeb(candidate: SessionState): Promise<boolean> {
  * Windows drive (`'wsl-powershell'`) normally sit on a case-insensitive filesystem, so
  * `.Session` and `.session` are usually the same directory on disk — deriving this from
  * `process.platform` alone missed the WSL case, since WSL reports `linux` even when
- * `windowsPathFor` has already confirmed it's on a DrvFS mount. Entry names inside a non-default
- * directory are verified with `sameFileCaseFolded` rather than assumed case-insensitive
- * outright: NTFS/DrvFS can enable per-directory case sensitivity (a real WSL feature), where
- * `Session.json` and `session.json` are two distinct files despite sitting on an otherwise
- * "case-insensitive" shell.
+ * `windowsPathFor` has already confirmed it's on a DrvFS mount. Neither the default-directory
+ * comparison nor the non-default entry-name comparisons below trust the fold alone, though:
+ * `sameDirectoryCaseFolded`/`sameFileCaseFolded` confirm inode identity too, because NTFS/DrvFS
+ * can enable per-directory case sensitivity (a real WSL feature) — where `.Session` and
+ * `.session`, or `Session.json` and `session.json`, are two distinct directories or files
+ * despite sitting on an otherwise "case-insensitive" shell.
  */
 export async function isDedicatedDirectory(
   dir: string,
@@ -346,7 +347,7 @@ export async function isDedicatedDirectory(
   const sameAsDefaultDir =
     resolvedDefaultDir !== null &&
     (caseInsensitive
-      ? resolvedDir.toLowerCase() === resolvedDefaultDir.toLowerCase()
+      ? await sameDirectoryCaseFolded(resolvedDir, resolvedDefaultDir)
       : resolvedDir === resolvedDefaultDir);
 
   // FileStore.putSession writes `<path>.tmp` then renames it onto `<path>` (file-store.ts) —
@@ -385,6 +386,25 @@ async function sameFileCaseFolded(dir: string, entry: string, allowed: Set<strin
   try {
     const [a, b] = await Promise.all([stat(join(dir, entry)), stat(join(dir, match))]);
     return a.dev === b.dev && a.ino === b.ino;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Whether `a` and `b` are the same on-disk directory once case is folded — confirmed by
+ * comparing inode identity, not just the folded strings, for the same reason
+ * `sameFileCaseFolded` doesn't trust a folded filename match alone: per-directory case
+ * sensitivity is a property of the *parent*, so a custom `--session .SESSION/other.json` can
+ * sit next to, rather than be, the real default `.session` directory. Trusting the fold alone
+ * here would extend the default directory's `*.json` exemption — and the "lock it" advice that
+ * follows — to a directory that may hold a genuinely unrelated file.
+ */
+async function sameDirectoryCaseFolded(a: string, b: string): Promise<boolean> {
+  if (a.toLowerCase() !== b.toLowerCase()) return false;
+  try {
+    const [statA, statB] = await Promise.all([stat(a), stat(b)]);
+    return statA.dev === statB.dev && statA.ino === statB.ino;
   } catch {
     return false;
   }

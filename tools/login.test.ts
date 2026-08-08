@@ -227,6 +227,13 @@ describe('isDedicatedDirectory', () => {
     // directory down before Step 5, and every file this tool itself would ever write there is
     // a *.json (or *.json.tmp) session file, so another one isn't evidence of sharing with
     // something outside this tool's business.
+    //
+    // `stat` is mocked to confirm identity (same dev/ino) since `dir` and the default directory
+    // are the exact same path here — the case-fold pre-check alone would already say "same",
+    // but the identity check runs regardless and must not spuriously fail it.
+    vi.mocked(stat)
+      .mockResolvedValueOnce({ dev: 1, ino: 42 } as never)
+      .mockResolvedValueOnce({ dev: 1, ino: 42 } as never);
     vi.mocked(readdir).mockResolvedValueOnce(['session.json', 'work.json'] as never);
     await expect(isDedicatedDirectory(resolve('.session'), 'second.json', 'powershell')).resolves.toBe(true);
   });
@@ -249,6 +256,31 @@ describe('isDedicatedDirectory', () => {
   it('recognizes the default .session directory case-insensitively on WSL over a Windows drive', async () => {
     vi.mocked(readdir).mockResolvedValueOnce([]);
     await expect(isDedicatedDirectory(resolve('.SESSION'), 'second.json', 'wsl-powershell')).resolves.toBe(true);
+  });
+
+  it('recognizes a differently-cased default .session directory as the same one, via inode identity', async () => {
+    const defaultDir = resolve('.session');
+    vi.mocked(realpath).mockResolvedValueOnce(defaultDir as never);
+    vi.mocked(stat)
+      .mockResolvedValueOnce({ dev: 4, ino: 44 } as never) // resolvedDir (.SESSION)
+      .mockResolvedValueOnce({ dev: 4, ino: 44 } as never); // resolvedDefaultDir (.session) — same directory
+    // A non-expected `.json` entry so the assertion can only pass via the default-directory
+    // relaxation, which is what actually consults the identity-verified comparison.
+    vi.mocked(readdir).mockResolvedValueOnce(['work.json'] as never);
+    await expect(isDedicatedDirectory(resolve('.SESSION'), 'second.json', 'powershell')).resolves.toBe(true);
+  });
+
+  it('does not conflate a differently-cased directory with the default one when per-directory case sensitivity makes them distinct', async () => {
+    // Per-directory case sensitivity is a property of the *parent*, so `.SESSION` and `.session`
+    // can be two separate directories despite an otherwise case-insensitive shell — the same
+    // real feature `sameFileCaseFolded`'s tests below cover for file entries, one level up.
+    const defaultDir = resolve('.session');
+    vi.mocked(realpath).mockResolvedValueOnce(defaultDir as never);
+    vi.mocked(stat)
+      .mockResolvedValueOnce({ dev: 4, ino: 44 } as never) // resolvedDir (.SESSION)
+      .mockResolvedValueOnce({ dev: 4, ino: 55 } as never); // resolvedDefaultDir (.session) — a distinct directory
+    vi.mocked(readdir).mockResolvedValueOnce(['work.json'] as never);
+    await expect(isDedicatedDirectory(resolve('.SESSION'), 'second.json', 'powershell')).resolves.toBe(false);
   });
 
   it('does not case-fold the default-directory comparison on native POSIX', async () => {
@@ -321,8 +353,13 @@ describe('isDedicatedDirectory', () => {
     // only pass via the default-directory relaxation loop, which is what actually consults the
     // junction-resolved comparison — a synthetic directory with no entries would return `true`
     // from the earlier "doesn't exist yet" branch regardless of whether that comparison ran.
+    // `stat` is mocked to confirm identity (same dev/ino), since both sides resolve to the same
+    // path here and the identity check runs regardless of the case-fold pre-check's outcome.
     const realSessionDir = resolve('/real-target/HEBshopping/.session');
     vi.mocked(realpath).mockResolvedValueOnce(realSessionDir as never);
+    vi.mocked(stat)
+      .mockResolvedValueOnce({ dev: 9, ino: 99 } as never)
+      .mockResolvedValueOnce({ dev: 9, ino: 99 } as never);
     vi.mocked(readdir).mockResolvedValueOnce(['session.json'] as never);
     await expect(isDedicatedDirectory(realSessionDir, 'second.json', 'powershell')).resolves.toBe(true);
   });

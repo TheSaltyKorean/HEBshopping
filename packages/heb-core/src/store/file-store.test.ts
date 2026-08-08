@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { chmod, mkdtemp, rm, stat, writeFile } from 'node:fs/promises';
+import { chmod, mkdir, mkdtemp, rm, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { FileStore } from './file-store.js';
@@ -73,6 +73,24 @@ describe('FileStore specifics', () => {
       await store.putSession(sampleSession());
       const mode = (await stat(join(directory, 'nested'))).mode & 0o777;
       expect(mode).toBe(0o700);
+    } finally {
+      await cleanup();
+    }
+  });
+
+  it.skipIf(!honorsOwnerOnlyMode)('leaves an already-existing parent directory alone', async () => {
+    // `--session`/`HEB_SESSION_PATH` can point into a directory that already exists and isn't
+    // dedicated to the session file (e.g. a shared directory, or the repo root). Locking that
+    // down would strip other accounts' access to more than the session file, so only a
+    // directory this call itself creates should be chmod'd.
+    const { cleanup, directory } = await harness();
+    try {
+      const existing = join(directory, 'existing');
+      await mkdir(existing);
+      await chmod(existing, 0o755);
+      await new FileStore(join(existing, 'session.json')).putSession(sampleSession());
+      const mode = (await stat(existing)).mode & 0o777;
+      expect(mode).toBe(0o755);
     } finally {
       await cleanup();
     }

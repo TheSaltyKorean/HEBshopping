@@ -60,8 +60,15 @@ export class FileStore implements Store {
 
   async putSession(session: SessionState): Promise<void> {
     const directory = dirname(this.path);
-    await mkdir(directory, { recursive: true });
-    await chmod(directory, OWNER_ONLY_DIR_MODE);
+    // Only lock down a directory this call created. `--session`/`HEB_SESSION_PATH` can point
+    // at an existing, possibly shared directory (e.g. the repo root) — chmod-ing that would
+    // strip other accounts' access to more than the session file, or fail closed with EPERM
+    // on a directory this account doesn't own. `mkdir` resolves `undefined` when the target
+    // already existed, so that's the signal to leave its permissions alone.
+    const created = await mkdir(directory, { recursive: true });
+    if (created !== undefined) {
+      await chmod(directory, OWNER_ONLY_DIR_MODE);
+    }
 
     // Write-then-rename so a crash mid-write can't leave a half-written session behind.
     // Reacquiring one costs a human login, so it is worth protecting properly.

@@ -40,8 +40,9 @@ here creates a wide spread of resource types — DynamoDB, Lambda, IAM, CloudWat
 — and hand-scoping a policy to exactly that set is a fiddly job that tends to end in a
 series of `AccessDenied` round trips. For a personal account it is the usual trade; scope it
 down afterwards if you like, since `terraform state list` then tells you the exact set.
-**Do not create root access keys** — unlike an IAM user's, they cannot be revoked without
-disrupting the whole account.
+**Do not create root access keys** — the root user's permissions can't be scoped down with an
+IAM policy, so a leaked root key hands over the whole account instead of the limited set an
+IAM user's key would.
 
 `aws configure` is interactive, so it needs a real terminal. Running it somewhere without an
 attached stdin fails immediately with `EOF when reading a line` and writes nothing.

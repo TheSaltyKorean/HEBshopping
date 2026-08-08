@@ -441,6 +441,48 @@ describe('reading the list', () => {
       expect(getList).not.toHaveBeenCalled();
     });
 
+    it('falls back to the instant greeting, not an error, when launch on a Show cannot fetch the list', async () => {
+      // Before this handler touched the network, "open H-E-B list" always succeeded
+      // instantly on every device. A transient HEB failure must not turn that into a spoken
+      // error with the session ended — it should degrade to the same greeting a speaker
+      // gets, so a follow-up question can retry the read.
+      const skill = createSkill({
+        createListOps: () => fakeOps({ getList: vi.fn(async () => { throw new HebError('UPSTREAM_ERROR', 'down'); }) }) as never,
+        skillIds: ['amzn1.ask.skill.test'],
+      });
+      const response = (await skill.invoke(
+        {
+          version: '1.0',
+          session: {
+            new: true,
+            sessionId: 's',
+            application: { applicationId: 'amzn1.ask.skill.test' },
+            attributes: {},
+            user: { userId: 'u' },
+          },
+          context: {
+            System: {
+              application: { applicationId: 'amzn1.ask.skill.test' },
+              user: { userId: 'u' },
+              device: showDevice,
+            },
+          },
+          request: { type: 'LaunchRequest', requestId: 'r', timestamp: new Date(0).toISOString(), locale: 'en-US' },
+        } as never,
+        {} as never,
+      )) as {
+        response: {
+          outputSpeech?: { ssml?: string };
+          directives?: Array<{ type: string; datasources?: unknown }>;
+          shouldEndSession?: boolean;
+        };
+      };
+
+      expect(response.response.outputSpeech?.ssml).toContain('H-E-B list.');
+      expect(response.response.directives ?? []).toHaveLength(0);
+      expect(response.response.shouldEndSession).not.toBe(true);
+    });
+
     describe('after a write', () => {
       const invokeOn = async (
         device: object | undefined,

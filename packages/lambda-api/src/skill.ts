@@ -364,7 +364,17 @@ function launchHandler(options: CreateSkillOptions): RequestHandler {
       // making someone ask a second question to see what the device could already be
       // showing is the thing this exists to stop. So launch renders it, and says only how
       // many there are — the screen is doing the reading.
-      const list = await options.createListOps().getList();
+      //
+      // Best-effort, like the after-write refresh: before this handler ever touched the
+      // network, "open H-E-B list" always succeeded instantly. A transient HEB failure here
+      // must not turn opening the skill into a spoken error and an ended session — fall back
+      // to the same instant greeting a speaker gets, and let a follow-up question retry.
+      let list;
+      try {
+        list = await options.createListOps().getList();
+      } catch {
+        return input.responseBuilder.speak(`H-E-B list. ${REPROMPT}`).reprompt(REPROMPT).getResponse();
+      }
       const spoken =
         list.items.length === 0
           ? 'Your H-E-B list is empty.'

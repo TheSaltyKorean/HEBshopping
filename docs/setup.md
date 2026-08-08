@@ -327,7 +327,7 @@ normal path, not an error case:
 
 One candidate is offered at a time on purpose. Three long product names read aloud is
 unusable, and confirmation has no screen equivalent — the app card is what that flow falls
-back to. (Reading the list is different: see "If you have an Echo Show" in `deploy.md`.)
+back to. (Reading the list is different: see "On a device with a screen" in `deploy.md`.)
 
 The skill package for the ASK CLI lives in `packages/lambda-api/skill-package/`
 (`skill.json` plus the en-US interaction model). The invocation name is **"heb

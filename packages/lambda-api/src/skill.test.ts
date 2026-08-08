@@ -371,6 +371,76 @@ describe('reading the list', () => {
       expect(directives.map((d) => d.type)).toContain('Alexa.Presentation.APL.RenderDocument');
     });
 
+    it('renders the list on launch, so opening the skill is enough to see it', async () => {
+      // "Open heb shopper skill" on a Show used to answer with a menu of things you could
+      // ask for, next to a screen that could simply have shown the list.
+      const skill = createSkill({
+        createListOps: () => fakeOps({ getList: vi.fn(async () => listOf(4)) }) as never,
+        skillIds: ['amzn1.ask.skill.test'],
+      });
+      const response = (await skill.invoke(
+        {
+          version: '1.0',
+          session: {
+            new: true,
+            sessionId: 's',
+            application: { applicationId: 'amzn1.ask.skill.test' },
+            attributes: {},
+            user: { userId: 'u' },
+          },
+          context: {
+            System: {
+              application: { applicationId: 'amzn1.ask.skill.test' },
+              user: { userId: 'u' },
+              device: showDevice,
+            },
+          },
+          request: { type: 'LaunchRequest', requestId: 'r', timestamp: new Date(0).toISOString(), locale: 'en-US' },
+        } as never,
+        {} as never,
+      )) as {
+        response: {
+          outputSpeech?: { ssml?: string };
+          directives?: Array<{ type: string; datasources?: unknown }>;
+        };
+      };
+
+      expect(response.response.directives?.map((d) => d.type)).toContain(
+        'Alexa.Presentation.APL.RenderDocument',
+      );
+      // Says the count, not the contents — the screen is doing the reading.
+      expect(response.response.outputSpeech?.ssml).toContain('4 items');
+    });
+
+    it('leaves a speaker launch instant, with no list fetch at all', async () => {
+      // Fetching to launch would put a network round trip in front of every "open H-E-B
+      // list" and buy nothing audible, since the list still has to be asked for.
+      const getList = vi.fn(async () => listOf(4));
+      const skill = createSkill({
+        createListOps: () => fakeOps({ getList }) as never,
+        skillIds: ['amzn1.ask.skill.test'],
+      });
+      await skill.invoke(
+        {
+          version: '1.0',
+          session: {
+            new: true,
+            sessionId: 's',
+            application: { applicationId: 'amzn1.ask.skill.test' },
+            attributes: {},
+            user: { userId: 'u' },
+          },
+          context: {
+            System: { application: { applicationId: 'amzn1.ask.skill.test' }, user: { userId: 'u' } },
+          },
+          request: { type: 'LaunchRequest', requestId: 'r', timestamp: new Date(0).toISOString(), locale: 'en-US' },
+        } as never,
+        {} as never,
+      );
+
+      expect(getList).not.toHaveBeenCalled();
+    });
+
     it('shows every item even when speech had to cap at seven', async () => {
       // The whole point: a Show that says "I've put the whole list in your Alexa app" while
       // displaying nothing is worse than either surface alone.

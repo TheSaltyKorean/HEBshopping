@@ -20,7 +20,7 @@ import type {
   ErrorHandler,
 } from 'ask-sdk-core';
 import type { Response } from 'ask-sdk-model';
-import { listRenderDirective } from './apl.js';
+import { listRenderDirective, supportsApl } from './apl.js';
 import {
   hasCode,
   isHebError,
@@ -268,14 +268,35 @@ const isIntent =
     Alexa.getRequestType(input.requestEnvelope) === 'IntentRequest' &&
     names.includes(Alexa.getIntentName(input.requestEnvelope));
 
-function launchHandler(): RequestHandler {
+function launchHandler(options: CreateSkillOptions): RequestHandler {
   return {
     canHandle: (input) => Alexa.getRequestType(input.requestEnvelope) === 'LaunchRequest',
-    handle: (input) =>
-      input.responseBuilder
-        .speak(`H-E-B list. ${REPROMPT}`)
-        .reprompt(REPROMPT)
-        .getResponse(),
+    async handle(input) {
+      // A speaker keeps the instant greeting. Fetching the list to launch would put a
+      // network round trip in front of every "open H-E-B list" and buy nothing audible:
+      // the list still has to be *asked* for, because reading it unprompted on every
+      // launch is the behaviour nobody wants from a twenty-six item list.
+      if (!supportsApl(input.requestEnvelope)) {
+        return input.responseBuilder.speak(`H-E-B list. ${REPROMPT}`).reprompt(REPROMPT).getResponse();
+      }
+
+      // On a screen it is the opposite: the list is the whole reason to open the skill, and
+      // making someone ask a second question to see what the device could already be
+      // showing is the thing this exists to stop. So launch renders it, and says only how
+      // many there are — the screen is doing the reading.
+      const list = await options.createListOps().getList();
+      const spoken =
+        list.items.length === 0
+          ? 'Your H-E-B list is empty.'
+          : `H-E-B list. You have ${list.items.length} item${list.items.length === 1 ? '' : 's'}.`;
+
+      const builder = input.responseBuilder.speak(`${escapeSsml(spoken)} ${REPROMPT}`);
+      const directive = listRenderDirective(input.requestEnvelope, list);
+      if (directive !== null) {
+        builder.addDirective(directive as never);
+      }
+      return builder.reprompt(REPROMPT).getResponse();
+    },
   };
 }
 
@@ -739,7 +760,7 @@ function errorHandler(): ErrorHandler {
 
 export function createSkill(options: CreateSkillOptions) {
   const builder = Alexa.SkillBuilders.custom().addRequestHandlers(
-    launchHandler(),
+    launchHandler(options),
     // Yes/No must precede the generic stop handler, which also claims NoIntent.
     yesHandler(options),
     noHandler(),
